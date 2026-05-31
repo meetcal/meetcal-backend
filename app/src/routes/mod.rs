@@ -1,4 +1,3 @@
-pub mod athletes;
 pub mod intl_rankings;
 pub mod meets;
 pub mod nat_rankings;

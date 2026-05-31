@@ -18,10 +18,16 @@ When you add or materially change a Rust API route, **always** finish by running
 1. Implement the Rust route and register it in `main.rs`.
 2. Add `meetcal-app/scripts/performance/bench-<route>.ts` (full RN client path, not Convex-only).
 3. Add a `case` in `performance/scripts/run-benchmarks.sh` (route id, HTTP path, RN script).
-4. Run:
+4. Run (Rust side always uses a **release** build — the script runs `cargo run --release`):
 
    ```bash
    cd meetcal-backend/app && bash performance/scripts/run-benchmarks.sh '<route-id>'
+   ```
+
+   Re-benchmark every route after a batch of changes:
+
+   ```bash
+   cd meetcal-backend/app && bash performance/scripts/run-benchmarks.sh all
    ```
 
 5. Confirm `performance/results.md` has the route row and an updated **`Total (avg)`** row at the bottom.
@@ -36,17 +42,17 @@ Re-run the same command when you change handler logic for an existing route so t
 | Layer | Measure |
 | --- | --- |
 | **Rust** | End-to-end `GET` (or write route) via HTTP: Convex call + Rust logic + JSON response. |
-| **RN** | Full client path for the same feature: network check (if applicable), Convex query, row mapping, AsyncStorage write (mocked in Node), hooks/filters the screen uses. |
+| **RN** | Same processing as the Rust handler for that route (Convex query + filter/sort/map the API does). **Not** Convex-only. **Not** local UI filter/sort changes after load. |
 
-Do **not** record Convex-only time as the RN number unless the route has no extra client work.
+Each `bench-<route>.ts` must mirror the matching `src/routes/` handler logic step-for-step (read handlers; do not edit them).
 
 ## Workflow for a new route
 
 1. Implement or confirm the Rust route in `src/routes/`.
 2. Add `meetcal-app/scripts/performance/bench-<route>.ts` mirroring the full RN client path.
 3. Extend the `case` in `performance/scripts/run-benchmarks.sh` for the route id, path, and RN script.
-4. Start Rust server if needed: `cd meetcal-backend/app && cargo run` (`meetcal-backend/.env` → `CONVEX_URL`). The script can start it automatically if port 3000 is down.
-5. **Run** `performance/scripts/run-benchmarks.sh <route-id>` — required on every new or changed route.
+4. **Run** `performance/scripts/run-benchmarks.sh <route-id>` (or `all`) — required on every new or changed route. The script kills port 3000, starts `cargo run --release`, runs the bench, then stops the server (`meetcal-backend/.env` → `CONVEX_URL`).
+5. Set `BENCH_MANAGE_SERVER=0` only if you already have a release server on port 3000 and do not want the script to restart it.
 6. Verify `performance/results.md`: new route row + recalculated **`Total (avg)`**.
 7. Commit updated `results.md` when requested.
 8. **Clean up** (see below).
@@ -58,8 +64,9 @@ Do **not** record Convex-only time as the RN number unless the route has no extr
 | `meets` | `GET /meets` | `bench-meets.ts` |
 | `meets/:name` | `GET /meets/{encoded-name}` | `bench-meet-details.ts` |
 | `meets/schedule/:name` | `GET /meets/schedule/{encoded-name}` | `bench-meet-schedule.ts` |
+| `meets/athletes/:name` | `GET /meets/athletes/{encoded-name}` | `bench-meet-athletes.ts` |
 
-Use `BENCH_MEET_NAME` for `meets/:name` and `meets/schedule/:name` when the default meet name is wrong.
+Use `BENCH_MEET_NAME` (`meets/:name`), `BENCH_SCHEDULE_MEET_NAME`, or `BENCH_ATHLETES_MEET_NAME` when defaults are wrong.
 
 ## Scripts (keep only these)
 
@@ -81,8 +88,11 @@ Do **not** add separate Rust curl scripts, one-off runners, or duplicate orchest
 ## Environment
 
 - Rust: `meetcal-backend/.env` → `CONVEX_URL`
+- Rust HTTP: **`cargo run --release`** only (never debug for recorded numbers)
+- Rust curl: **`Accept-Encoding: gzip, br`** + `--compressed` (same as real `fetch` clients)
 - RN bench: same URL via `CONVEX_URL` or `EXPO_PUBLIC_CONVEX_URL`
-- Default: 10 iterations, 1 warmup; report **median** ms
+- Default: 25 iterations, 1 warmup; report **median** ms
+- `all` — runs every route in one session on one release server
 
 ## Table columns
 

@@ -1,46 +1,6 @@
 # Meets & live meet data
 
-Used by meet picker, schedule tab, start list, attempt estimator, saved sessions, and meet prefetch/offline cache.
-
----
-
-## `GET /meets/:meet/athletes`
-
-**Why:** Start list athlete list when session join data is unavailable.
-
-**App usage:** `fetchAthletes`, `StartListContent` fallback
-
-**Auth:** None
-
-**Convex:** `athletes.getByMeet` · `query` · `{ meet }`
-
-**Response:** `200`
-
-```json
-{
-  "athletes": [
-    {
-      "memberId": "12345",
-      "name": "Jane Doe",
-      "age": 28,
-      "club": "ABC Weightlifting",
-      "wso": "Mountain South",
-      "gender": "Women",
-      "weightClass": "71kg",
-      "entryTotal": 180,
-      "adaptive": false,
-      "sessionNumber": 3,
-      "sessionPlatform": "Red"
-    }
-  ]
-}
-```
-
-**Steps:**
-
-1. Call Convex query; return athlete rows.
-
----
+## Used by meet picker, schedule tab, start list, attempt estimator, saved sessions, and meet prefetch/offline cache
 
 ## `GET /meets/:meet/athletes/with-session`
 

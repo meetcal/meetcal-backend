@@ -45,7 +45,16 @@ pub async fn get_meet_schedule(
     let mut response: Vec<MeetSchedule> =
         get_convex_response(&state.convex, "schedule:getByMeet", args).await?;
 
-    response.sort_by_key(|r| r.session_id as u32);
+    response.sort_by(|a, b| {
+        a.date
+            .cmp(&b.date)
+            .then_with(|| {
+                a.session_id
+                    .partial_cmp(&b.session_id)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| a.platform.cmp(&b.platform))
+    });
 
     Ok(Json(response))
 }

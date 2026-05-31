@@ -25,3 +25,18 @@ pub struct MeetSchedule {
     pub weigh_in_time: String,
     pub weight_class: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Athlete {
+    pub adaptive: bool,
+    pub age: f64,
+    pub club: String,
+    pub entry_total: f64,
+    pub gender: String,
+    pub name: String,
+    pub session_number: Option<f64>,
+    pub session_platform: Option<String>,
+    pub weight_class: String,
+    pub wso: Option<String>,
+}
