@@ -54,6 +54,13 @@ case "${ROUTE_ID}" in
     RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-meet-details.ts"
     export BENCH_MEET_NAME="${MEET_NAME}"
     ;;
+  meets/schedule/:name)
+    SCHEDULE_MEET_NAME="${BENCH_MEET_NAME:-2026 USA Weightlifting National Championships, Powered by Rogue Fitness}"
+    SCHEDULE_PATH_ENCODED=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "${SCHEDULE_MEET_NAME}")
+    RUST_PATH="/meets/schedule/${SCHEDULE_PATH_ENCODED}"
+    RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-meet-schedule.ts"
+    export BENCH_MEET_NAME="${SCHEDULE_MEET_NAME}"
+    ;;
   *)
     echo "unknown route id: ${ROUTE_ID}" >&2
     exit 1
@@ -102,7 +109,7 @@ rust_f = float(rust_ms)
 rn_f = float(rn_ms)
 pct_f = float(pct.rstrip("%"))
 delta = abs(rust_f - rn_f)
-noticeable = "Yes" if delta >= 100 or abs(pct_f) >= 25 else "No"
+noticeable = "Yes" if delta >= 100 and abs(pct_f) >= 25 else "No"
 
 TOTAL_LABEL = "**Total** (avg)"
 ROUTE_ROW_RE = re.compile(
@@ -112,7 +119,19 @@ ROUTE_ROW_RE = re.compile(
 
 def noticeable_for(rust: float, rn: float, pct: float) -> str:
     delta = abs(rust - rn)
-    return "Yes" if delta >= 100 or abs(pct) >= 25 else "No"
+    return "Yes" if delta >= 100 and abs(pct) >= 25 else "No"
+
+
+def refresh_route_row_noticeable(line: str) -> str:
+    match = ROUTE_ROW_RE.match(line)
+    if not match:
+        return line
+    route = line.split("|")[1].strip()
+    rust = float(match.group(1))
+    rn = float(match.group(2))
+    pct = float(match.group(3))
+    notice = noticeable_for(rust, rn, pct)
+    return f"| {route} | {match.group(1)} | {match.group(2)} | {pct}% | {notice} |"
 
 
 def is_route_row(line: str) -> bool:
@@ -166,6 +185,8 @@ else:
             break
     if not replaced:
         data_lines.append(row)
+
+    data_lines = [refresh_route_row_noticeable(line) for line in data_lines]
 
 parsed = [parsed for line in data_lines if (parsed := parse_route_row(line))]
 if parsed:

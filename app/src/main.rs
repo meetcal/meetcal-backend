@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use app::{
     AppState,
-    routes::meets::{get_all_meets::list_meets_next_3months, get_meet_details::get_meet_details},
+    routes::meets::{
+        get_all_meets::list_meets_next_3months, get_meet_details::get_meet_details,
+        get_meet_schedule::get_meet_schedule,
+    },
 };
 use axum::{Router, routing::get};
 use convex::ConvexClient;
@@ -27,6 +30,7 @@ async fn main() {
     let app = Router::new()
         .route("/meets", get(list_meets_next_3months))
         .route("/meets/{name}", get(get_meet_details))
+        .route("/meets/schedule/{name}", get(get_meet_schedule))
         .with_state(AppState { convex });
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();

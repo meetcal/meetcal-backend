@@ -13,3 +13,15 @@ pub struct Meets {
     pub venue_street: String,
     pub venue_zip: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetSchedule {
+    pub date: String,
+    pub meet: String,
+    pub platform: String,
+    pub session_id: f64,
+    pub start_time: String,
+    pub weigh_in_time: String,
+    pub weight_class: String,
+}

@@ -4,43 +4,6 @@ Used by meet picker, schedule tab, start list, attempt estimator, saved sessions
 
 ---
 
-## `GET /meets/:meet/schedule`
-
-**Why:** Session/platform schedule for schedule tab, saved-session notifications, offline sync.
-
-**App usage:** `lib/database/queries.ts` → `fetchSchedule`, `SyncManager`
-
-**Auth:** None
-
-**Convex:** `schedule.getByMeet` · `query` · `{ meet }`
-
-**Response:** `200`
-
-```json
-{
-  "rows": [
-    {
-      "date": "2025-05-31",
-      "sessionId": 3,
-      "startTime": "10:00",
-      "weighInTime": "08:00",
-      "platform": "Red",
-      "weightClass": "73kg",
-      "meet": "2025 Nationals"
-    }
-  ]
-}
-```
-
-**Steps:**
-
-1. Call Convex query.
-2. Sort by date, sessionId, platform in Rust if needed.
-
-**Notes:** App times out after 4s and falls back to empty/cached schedule.
-
----
-
 ## `GET /meets/:meet/athletes`
 
 **Why:** Start list athlete list when session join data is unavailable.

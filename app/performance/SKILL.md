@@ -57,8 +57,9 @@ Do **not** record Convex-only time as the RN number unless the route has no extr
 | --- | --- | --- |
 | `meets` | `GET /meets` | `bench-meets.ts` |
 | `meets/:name` | `GET /meets/{encoded-name}` | `bench-meet-details.ts` |
+| `meets/schedule/:name` | `GET /meets/schedule/{encoded-name}` | `bench-meet-schedule.ts` |
 
-Use `BENCH_MEET_NAME` for `meets/:name` when the default meet name is wrong.
+Use `BENCH_MEET_NAME` for `meets/:name` and `meets/schedule/:name` when the default meet name is wrong.
 
 ## Scripts (keep only these)
 
@@ -106,7 +107,7 @@ Small per-route wins still matter for product speed; the total row tracks aggreg
 
 Set automatically by `run-benchmarks.sh`:
 
-- **No** — absolute delta `< 100 ms` **and** `|rust vs rn %| < 25`
-- **Yes** — otherwise (≥100 ms slower/faster, or ≥25% relative change)
+- **No** — absolute delta `< 100 ms` **or** `|rust vs rn %| < 25` (either alone is fine)
+- **Yes** — **both** ≥100 ms slower/faster **and** ≥25% relative change (avoids flagging tiny ms gaps on fast endpoints)
 
 Tune thresholds here if product expectations change; re-run all route ids after changing thresholds so route rows and the total stay in sync.
