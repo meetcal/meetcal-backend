@@ -1,14 +1,16 @@
-use std::path::PathBuf;
-
 use app::{
     AppState,
-    routes::meets::{
-        get_all_meets::list_meets_next_3months, get_athletes_by_meet::get_athletes_by_meet,
-        get_meet_details::get_meet_details, get_meet_schedule::get_meet_schedule,
+    routes::{
+        clubs::get_all_clubs::get_all_clubs,
+        meets::{
+            get_all_meets::list_meets_next_3months, get_athletes_by_meet::get_athletes_by_meet,
+            get_meet_details::get_meet_details, get_meet_schedule::get_meet_schedule,
+        },
     },
 };
 use axum::{Router, routing::get};
 use convex::ConvexClient;
+use std::path::PathBuf;
 use tokio::net::TcpListener;
 use tower_http::compression::CompressionLayer;
 
@@ -33,6 +35,7 @@ async fn main() {
         .route("/meets/{name}", get(get_meet_details))
         .route("/meets/schedule/{name}", get(get_meet_schedule))
         .route("/meets/athletes/{name}", get(get_athletes_by_meet))
+        .route("/clubs", get(get_all_clubs))
         .layer(CompressionLayer::new())
         .with_state(AppState { convex });
 

@@ -6,27 +6,6 @@ Aggregated endpoints that batch multiple Convex queries today.
 
 ---
 
-## `GET /clubs`
-
-**Why:** List all club names for club picker.
-
-**App usage:** `fetchAllClubs`
-
-**Auth:** None
-
-**Convex:** `athletes.listClubs` · `query` · `{}`
-
-**Response:** `200`
-
-```json
-{ "clubs": ["ABC Weightlifting", "XYZ Barbell Club"] }
-```
-
-**Steps:**
-1. Call Convex query.
-
----
-
 ## `GET /clubs/:club/athletes`
 
 **Why:** Show club roster limited to athletes from **completed** meets.
@@ -36,6 +15,7 @@ Aggregated endpoints that batch multiple Convex queries today.
 **Auth:** None
 
 **Convex:**
+
 1. `athletes.getByClub` · `query` · `{ club }`
 2. `meets.getByName` · `query` · `{ name }` — once per unique meet from step 1 (Rust filters to `status === "completed"`)
 
@@ -57,6 +37,7 @@ Aggregated endpoints that batch multiple Convex queries today.
 ```
 
 **Steps:**
+
 1. Call `athletes.getByClub`.
 2. For each unique meet name, call `meets.getByName`.
 3. Filter athletes to completed meets only.
@@ -72,6 +53,7 @@ Aggregated endpoints that batch multiple Convex queries today.
 **Auth:** None
 
 **Convex:**
+
 1. `athletes.getByClubAndMeet` · `query` · `{ club, meet }`
 2. `liftingResults.getByMeet` · `query` · `{ meet }`
 3. `athletes.getByMeet` · `query` · `{ meet }`
@@ -104,6 +86,7 @@ Aggregated endpoints that batch multiple Convex queries today.
 ```
 
 **Steps:**
+
 1. Call Convex queries above.
 2. Filter historical results: exclude `federation === "BWL"`, dates before meet's first result date.
 3. Aggregate medals, PRs, perfect lifts in Rust (mirrors `fetch-club-stats.ts`).
