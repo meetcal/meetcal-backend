@@ -1,6 +1,6 @@
 pub mod athletes;
 pub mod intl_rankings;
-pub mod meet;
+pub mod meets;
 pub mod nat_rankings;
 pub mod qual_totals;
 pub mod records;

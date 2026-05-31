@@ -1,14 +1,35 @@
 ---
 name: api-performance-benchmark
 description: >-
-  Benchmark MeetCal Rust API routes against the React Native app client path
-  (full query + mapping + cache + filters, not Convex-only). Update
-  performance/results.md when adding routes. Clean up one-off scripts after each run.
+  Benchmark MeetCal Rust API routes vs the full meetcal-app client path. Use when adding or
+  changing routes in meetcal-backend/app, running performance/scripts/run-benchmarks.sh,
+  updating performance/results.md, or the user mentions API latency, benchmarks, or Rust vs RN
+  speed. Run on every new route; Total (avg) row recalculates each run.
 ---
 
 # API performance benchmarking
 
-Compare **Rust `meetcal-backend/app`** HTTP handlers to the **meetcal-app** code path the UI actually runs before adding or changing routes.
+Compare **Rust `meetcal-backend/app`** HTTP handlers to the **meetcal-app** code path the UI actually runs.
+
+## Agent: run this on every new route
+
+When you add or materially change a Rust API route, **always** finish by running the benchmark for that route. Do not skip because the delta looks small — the goal is a fast app and a complete `results.md` table.
+
+1. Implement the Rust route and register it in `main.rs`.
+2. Add `meetcal-app/scripts/performance/bench-<route>.ts` (full RN client path, not Convex-only).
+3. Add a `case` in `performance/scripts/run-benchmarks.sh` (route id, HTTP path, RN script).
+4. Run:
+
+   ```bash
+   cd meetcal-backend/app && bash performance/scripts/run-benchmarks.sh '<route-id>'
+   ```
+
+5. Confirm `performance/results.md` has the route row and an updated **`Total (avg)`** row at the bottom.
+6. **Clean up** scratch scripts (see below). Commit `results.md` when the user asks for a commit.
+
+Re-run the same command when you change handler logic for an existing route so that row and the total stay current.
+
+**Do not** hand-edit per-route numbers or the total row — `run-benchmarks.sh` writes them. You may add a placeholder route row before the first run; the script replaces it and refreshes the total.
 
 ## What to measure
 
@@ -21,20 +42,29 @@ Do **not** record Convex-only time as the RN number unless the route has no extr
 
 ## Workflow for a new route
 
-1. Add a row to the table in `performance/results.md` (table only — no prose sections).
-2. Implement or confirm the Rust route in `src/routes/`.
-3. Add `meetcal-app/scripts/performance/bench-<route>.ts` mirroring the full RN client path for that route.
-4. Extend the `case` in `performance/scripts/run-benchmarks.sh` for the route id, path, and RN script.
-5. Start Rust server if needed: `cd meetcal-backend/app && cargo run` (`meetcal-backend/.env` → `CONVEX_URL`).
-6. Run `performance/scripts/run-benchmarks.sh <route-id>`.
-7. Commit updated `results.md`.
+1. Implement or confirm the Rust route in `src/routes/`.
+2. Add `meetcal-app/scripts/performance/bench-<route>.ts` mirroring the full RN client path.
+3. Extend the `case` in `performance/scripts/run-benchmarks.sh` for the route id, path, and RN script.
+4. Start Rust server if needed: `cd meetcal-backend/app && cargo run` (`meetcal-backend/.env` → `CONVEX_URL`). The script can start it automatically if port 3000 is down.
+5. **Run** `performance/scripts/run-benchmarks.sh <route-id>` — required on every new or changed route.
+6. Verify `performance/results.md`: new route row + recalculated **`Total (avg)`**.
+7. Commit updated `results.md` when requested.
 8. **Clean up** (see below).
+
+### Route ids in use
+
+| Route id | HTTP | RN bench |
+| --- | --- | --- |
+| `meets` | `GET /meets` | `bench-meets.ts` |
+| `meets/:name` | `GET /meets/{encoded-name}` | `bench-meet-details.ts` |
+
+Use `BENCH_MEET_NAME` for `meets/:name` when the default meet name is wrong.
 
 ## Scripts (keep only these)
 
 | Script | Purpose |
 | --- | --- |
-| `performance/scripts/run-benchmarks.sh` | Single entry point: Rust HTTP median + RN bench + updates `results.md` |
+| `performance/scripts/run-benchmarks.sh` | Single entry point: Rust HTTP median + RN bench + updates `results.md` + **Total (avg)** |
 | `meetcal-app/scripts/performance/bench-<route>.ts` | One RN bench file per route |
 
 Do **not** add separate Rust curl scripts, one-off runners, or duplicate orchestrators. Rust timing lives inside `run-benchmarks.sh`.
@@ -44,7 +74,7 @@ Do **not** add separate Rust curl scripts, one-off runners, or duplicate orchest
 - **Delete** any temporary bench scripts you created only to debug a single run (scratch files, copied `bench-*.ts`, extra shell wrappers).
 - **Do not** leave standalone `bench-rust.sh`-style helpers; use `run-benchmarks.sh` only.
 - **Keep** `bench-<route>.ts` files that are registered in `run-benchmarks.sh` and have a row in `results.md`.
-- **Remove** `bench-<route>.ts` when the route is removed or renamed (and drop the `case` + table row).
+- **Remove** `bench-<route>.ts` when the route is removed or renamed (and drop the `case` + table row; re-run any remaining route so the total recalculates).
 - **Do not** commit server logs, `.env` copies, or raw curl output under `performance/`.
 
 ## Environment
@@ -62,6 +92,16 @@ Do **not** add separate Rust curl scripts, one-off runners, or duplicate orchest
 | **Rust vs RN %** | `((rust_ms - rn_ms) / rn_ms) * 100` — negative = Rust faster |
 | **User noticeable** | Whether the delta is likely perceptible in the app (see below) |
 
+### Total (avg) row
+
+On **every** `run-benchmarks.sh` invocation, the script:
+
+- Updates the benchmarked route row (insert or replace).
+- Recomputes **`Total (avg)`** at the bottom: arithmetic mean of Rust (ms), RN client path (ms), and Rust vs RN % over all route rows (excluding the total).
+- Applies the same noticeable rules to the averaged values.
+
+Small per-route wins still matter for product speed; the total row tracks aggregate Rust vs RN across all benchmarked endpoints.
+
 ## User noticeable column
 
 Set automatically by `run-benchmarks.sh`:
@@ -69,4 +109,4 @@ Set automatically by `run-benchmarks.sh`:
 - **No** — absolute delta `< 100 ms` **and** `|rust vs rn %| < 25`
 - **Yes** — otherwise (≥100 ms slower/faster, or ≥25% relative change)
 
-Tune thresholds here if product expectations change; keep `results.md` rows in sync after re-running benchmarks.
+Tune thresholds here if product expectations change; re-run all route ids after changing thresholds so route rows and the total stay in sync.

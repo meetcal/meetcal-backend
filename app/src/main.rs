@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use app::{AppState, routes::meet::list_meets};
+use app::{
+    AppState,
+    routes::meets::{get_all_meets::list_meets_next_3months, get_meet_details::get_meet_details},
+};
 use axum::{Router, routing::get};
 use convex::ConvexClient;
 use tokio::net::TcpListener;
@@ -22,7 +25,8 @@ async fn main() {
         .expect("failed to connect to Convex");
 
     let app = Router::new()
-        .route("/meets", get(list_meets))
+        .route("/meets", get(list_meets_next_3months))
+        .route("/meets/{name}", get(get_meet_details))
         .with_state(AppState { convex });
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();

@@ -8,12 +8,12 @@ pub async fn get_convex_response<T: DeserializeOwned>(
     client: &ConvexClient,
     convex_func_name: &str,
     query_args: BTreeMap<String, Value>,
-) -> Result<Vec<T>, Error> {
+) -> Result<T, Error> {
     let mut client = client.clone();
 
     let convex_result = client.query(convex_func_name, query_args).await?;
 
-    let parsed_result: Vec<T> = match convex_result {
+    let parsed_result: T = match convex_result {
         // convex returns value not string so use serde to parse
         FunctionResult::Value(val) => {
             let json_value = val.export();

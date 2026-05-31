@@ -4,54 +4,6 @@ Used by meet picker, schedule tab, start list, attempt estimator, saved sessions
 
 ---
 
-## `GET /meets`
-
-**Why:** Populate meet list for the schedule tab picker.
-
-**App usage:** `fetchMeetsFresh` → `useUpcomingMeets` → `MeetSelectionModal`
-
-**Auth:** None (public read)
-
-**Convex:** `meets.listActive` · `query` · `{}` — filter to ±3 month window in Rust (same as `useUpcomingMeets` default)
-
-**Response:** `200`
-
-```json
-{
-  "names": ["2025 Nationals", "2025 Local Championships"]
-}
-```
-
-**Steps:**
-1. Call `meets.listActive`.
-2. Filter to meets overlapping the date window.
-3. Sort by start date ascending.
-4. Return names (or thin `{ name, start, end, timeZone }[]` if client still needs dates without `GET /meets/:name`).
-
-**Notes:**
-- Completed meets are never shown; Convex cron runs `meetStatusJob.run` → `meets.markCompletedMeets`.
-- `GET /meets/:name` covers one-off lookups (e.g. club stats on a finished meet).
-
----
-
-## `GET /meets/:name`
-
-**Why:** Resolve meet metadata (timezone, dates, venue) on select or cache miss.
-
-**App usage:** `fetchMeetByName`, club stats meet status lookup
-
-**Auth:** None
-
-**Convex:** `meets.getByName` · `query` · `{ name }`
-
-**Response:** `200` — full meet object mapped to app `Meet` shape, or `404`
-
-**Steps:**
-1. URL-decode `:name`.
-2. Call Convex query; map fields or return 404.
-
----
-
 ## `GET /meets/:meet/schedule`
 
 **Why:** Session/platform schedule for schedule tab, saved-session notifications, offline sync.
@@ -81,6 +33,7 @@ Used by meet picker, schedule tab, start list, attempt estimator, saved sessions
 ```
 
 **Steps:**
+
 1. Call Convex query.
 2. Sort by date, sessionId, platform in Rust if needed.
 
@@ -121,6 +74,7 @@ Used by meet picker, schedule tab, start list, attempt estimator, saved sessions
 ```
 
 **Steps:**
+
 1. Call Convex query; return athlete rows.
 
 ---
@@ -164,6 +118,7 @@ Used by meet picker, schedule tab, start list, attempt estimator, saved sessions
 ```
 
 **Steps:**
+
 1. Call Convex query (join of athletes + session_schedule is done in Convex).
 2. Map to app `LiftResult` shape client-side or in Rust.
 
@@ -182,6 +137,7 @@ Used by meet picker, schedule tab, start list, attempt estimator, saved sessions
 **Response:** `200` — `{ "results": [...] }`
 
 **Steps:**
+
 1. Call Convex query; map camelCase → app snake_case if needed.
 
 ---
@@ -201,6 +157,7 @@ Used by meet picker, schedule tab, start list, attempt estimator, saved sessions
 **Response:** `200` — `{ "results": [...] }`
 
 **Steps:**
+
 1. Parse name list; return `[]` if empty.
 2. Call Convex query (sort by date desc is done in Convex).
 
@@ -217,12 +174,14 @@ Used by meet picker, schedule tab, start list, attempt estimator, saved sessions
 **Convex:** `liftingResults.getByNamesSince` · `query` · `{ names: string[], cutoffDate: string }`
 
 **Query params:**
+
 - `names` — athlete names
 - `cutoffDate` — ISO date `YYYY-MM-DD`
 
 **Response:** `200` — `{ "results": [...] }`
 
 **Steps:**
+
 1. Call Convex query with parsed params.
 
 ---
@@ -238,12 +197,14 @@ Used by meet picker, schedule tab, start list, attempt estimator, saved sessions
 **Convex:** `liftingResults.getYearBestsByName` · `query` · `{ name: string, cutoffDate: string }`
 
 **Query params:**
+
 - `name` — athlete name
 - `cutoffDate` — ISO date one year ago
 
 **Response:** `200` — `{ "results": [...] }`
 
 **Steps:**
+
 1. Call Convex query.
 2. App derives max snatch/CJ/total client-side.
 
@@ -268,5 +229,6 @@ Used by meet picker, schedule tab, start list, attempt estimator, saved sessions
 ```
 
 **Steps:**
+
 1. Call Convex query with `q` as `query` arg.
 2. App applies additional word-filter client-side.

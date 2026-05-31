@@ -1,17 +1,11 @@
 use crate::query_convex::get_convex_response;
+use crate::routes::meets::types::Meets;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::State;
 use chrono::{Local, Months, NaiveDate};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::BTreeMap;
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MeetsConvex {
-    name: String,
-    start_date: String,
-}
 
 #[derive(Debug, Serialize)]
 pub struct MeetsList3Months {
@@ -20,11 +14,24 @@ pub struct MeetsList3Months {
 
 const MONTHS_RANGE: u32 = 3;
 
-pub async fn list_meets(State(state): State<AppState>) -> Result<Json<MeetsList3Months>, AppError> {
-    let response: Vec<MeetsConvex> =
+/// /meets endpoint
+///
+/// curl 'localhost:3000/meets' | jq .
+///
+/// This endpoint takes no input and returns a list of meets in the db in the next 3 months sorted
+/// by earlist to latest
+///
+/// "names": [
+///   "2026 USA Weightlifting National Championships, Powered by Rogue Fitness",
+///   "2026 Mountain North WSO Championships",
+///   "2026 Ohio WSO Championships"
+/// ]
+pub async fn list_meets_next_3months(
+    State(state): State<AppState>,
+) -> Result<Json<MeetsList3Months>, AppError> {
+    let response: Vec<Meets> =
         get_convex_response(&state.convex, "meets:listActive", BTreeMap::new()).await?;
-
-    let mut within_3months: Vec<MeetsConvex> = response
+    let mut within_3months: Vec<Meets> = response
         .into_iter()
         .filter(|meet| is_within_next_3_months(meet.start_date.as_str()).unwrap_or(false))
         .collect();
