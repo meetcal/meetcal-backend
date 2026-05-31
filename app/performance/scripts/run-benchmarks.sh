@@ -14,7 +14,7 @@ WARMUP="${WARMUP:-1}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:3000}"
 BENCH_MANAGE_SERVER="${BENCH_MANAGE_SERVER:-1}"
 
-ALL_ROUTES=(meets "meets/:name" "meets/schedule/:name" "meets/athletes/:name")
+ALL_ROUTES=(meets "meets/:name" "meets/schedule/:name" "meets/athletes/:name" clubs records)
 
 SERVER_PID=""
 RUST_PATH=""
@@ -82,6 +82,20 @@ configure_route() {
       RUST_PATH="/meets/athletes/${athletes_path_encoded}"
       RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-meet-athletes.ts"
       export BENCH_MEET_NAME="${athletes_meet_name}"
+      ;;
+    clubs)
+      RUST_PATH="/clubs"
+      RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-clubs.ts"
+      ;;
+    records)
+      local record_type="${BENCH_RECORD_TYPE:-USAW}"
+      local gender="${BENCH_RECORD_GENDER:-men}"
+      local age_category="${BENCH_RECORD_AGE_CATEGORY:-senior}"
+      RUST_PATH="/records?recordType=${record_type}&gender=${gender}&ageCategory=${age_category}"
+      RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-records.ts"
+      export BENCH_RECORD_TYPE="${record_type}"
+      export BENCH_RECORD_GENDER="${gender}"
+      export BENCH_RECORD_AGE_CATEGORY="${age_category}"
       ;;
     *)
       echo "unknown route id: ${id}" >&2

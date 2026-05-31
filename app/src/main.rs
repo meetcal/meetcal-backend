@@ -2,6 +2,7 @@ use app::{
     AppState,
     routes::{
         clubs::get_all_clubs::get_all_clubs,
+        comp_data::get_records::get_records,
         meets::{
             get_all_meets::list_meets_next_3months, get_athletes_by_meet::get_athletes_by_meet,
             get_meet_details::get_meet_details, get_meet_schedule::get_meet_schedule,
@@ -36,6 +37,7 @@ async fn main() {
         .route("/meets/schedule/{name}", get(get_meet_schedule))
         .route("/meets/athletes/{name}", get(get_athletes_by_meet))
         .route("/clubs", get(get_all_clubs))
+        .route("/records", get(get_records))
         .layer(CompressionLayer::new())
         .with_state(AppState { convex });
 

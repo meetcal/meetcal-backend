@@ -14,8 +14,7 @@ pub struct Clubs {
 ///
 /// curl 'localhost:3000/clubs' | jq .
 ///
-/// This endpoint takes no input and returns a list of meets in the db in the next 3 months sorted
-/// by earlist to latest
+/// This endpoint takes no input and returns a list of clubs in the db
 ///
 /// "names": [
 ///    "12 Labours Barbell",

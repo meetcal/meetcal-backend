@@ -6,65 +6,6 @@ Most responses are cached client-side in AsyncStorage; routes should stay fast a
 
 ---
 
-## `GET /records/federations`
-
-**Why:** Federation picker on records screen.
-
-**App usage:** `fetch-records.ts` → `fetchFederations`
-
-**Auth:** None
-
-**Convex:** `records.listFederations` · `query` · `{}`
-
-**Response:** `200`
-
-```json
-{ "federations": ["IWF", "USAW", "USAMW"] }
-```
-
-**Steps:**
-1. Call Convex query; return sorted federation names.
-
----
-
-## `GET /records`
-
-**Why:** Age/gender/weight-class record tables per federation.
-
-**App usage:** `fetch-records.ts` → `fetchRecords`, `app/comp-data/records.tsx`
-
-**Auth:** None
-
-**Convex:** `records.getByFederation` · `query` · `{ recordType, ageCategory?, gender? }` — `recordType` = query param `federation`
-
-**Query params:**
-- `federation` (required) — maps to `recordType`
-- `ageCategory` (optional)
-- `gender` (optional) — `men` | `women`
-
-**Response:** `200`
-
-```json
-{
-  "records": [
-    {
-      "ageCategory": "senior",
-      "gender": "men",
-      "weightClass": "89kg",
-      "snatchRecord": 150,
-      "cjRecord": 190,
-      "totalRecord": 340
-    }
-  ]
-}
-```
-
-**Steps:**
-1. Call Convex query with mapped args.
-2. App groups into nested `RecordsData` and sorts weight classes.
-
----
-
 ## `GET /wso-records/wsos`
 
 **Why:** WSO picker on WSO records screen.
@@ -82,6 +23,7 @@ Most responses are cached client-side in AsyncStorage; routes should stay fast a
 ```
 
 **Steps:**
+
 1. Call Convex query.
 
 ---
@@ -101,6 +43,7 @@ Most responses are cached client-side in AsyncStorage; routes should stay fast a
 **Response:** `200` — same row shape as `/records`
 
 **Steps:**
+
 1. Call Convex query.
 2. App nests into `RecordsData`.
 
@@ -117,6 +60,7 @@ Most responses are cached client-side in AsyncStorage; routes should stay fast a
 **Convex:** `standards.getFiltered` · `query` · `{ ageCategory?, gender? }`
 
 **Query params:**
+
 - `ageCategory` (optional) — `u15`, `youth`, `junior`, `senior`
 - `gender` (optional) — `men` | `women`
 
@@ -137,6 +81,7 @@ Most responses are cached client-side in AsyncStorage; routes should stay fast a
 ```
 
 **Steps:**
+
 1. Call Convex query.
 2. App nests into `StandardsData`.
 
@@ -169,6 +114,7 @@ Most responses are cached client-side in AsyncStorage; routes should stay fast a
 ```
 
 **Steps:**
+
 1. Call Convex query.
 2. App nests and filters client-side.
 
@@ -204,6 +150,7 @@ Most responses are cached client-side in AsyncStorage; routes should stay fast a
 ```
 
 **Steps:**
+
 1. Call Convex query.
 2. App filters/groups client-side.
 
@@ -220,6 +167,7 @@ Most responses are cached client-side in AsyncStorage; routes should stay fast a
 **Convex:** `liftingResults.getNationalRankings` · `query` · `{ federation, ageCategory }` — app defaults `federation` to `"USAW"`
 
 **Query params:**
+
 - `ageCategory` (required) — e.g. `"Open Men's 89kg"` (stored in lifting result `age` field)
 - `federation` (optional, default `USAW`)
 
@@ -227,13 +175,12 @@ Most responses are cached client-side in AsyncStorage; routes should stay fast a
 
 ```json
 {
-  "rankings": [
-    { "id": 0, "name": "Jane Doe", "total": 285 }
-  ]
+  "rankings": [{ "id": 0, "name": "Jane Doe", "total": 285 }]
 }
 ```
 
 **Steps:**
+
 1. Call Convex query.
 2. App deduplicates by name and assigns display ids.
 
@@ -254,6 +201,7 @@ Most responses are cached client-side in AsyncStorage; routes should stay fast a
 **Response:** `200` — `{ "results": [...] }`
 
 **Steps:**
+
 1. Call Convex query.
 2. App extracts weight class from `age` string and keeps best total per class/gender.
 
@@ -270,6 +218,7 @@ Most responses are cached client-side in AsyncStorage; routes should stay fast a
 **Convex:** `liftingResults.searchByNameAndYear` · `query` · `{ query: string, startDate?: string, endDate?: string }`
 
 **Query params:**
+
 - `q` — partial name (maps to `query`)
 - `startDate` — `YYYY-MM-DD` inclusive
 - `endDate` — `YYYY-MM-DD` exclusive
@@ -277,5 +226,6 @@ Most responses are cached client-side in AsyncStorage; routes should stay fast a
 **Response:** `200` — `{ "results": [...] }`
 
 **Steps:**
+
 1. Call Convex query.
 2. App caps at 600 rows and applies word matching.

@@ -1,11 +1,3 @@
 pub mod clubs;
-pub mod intl_rankings;
+pub mod comp_data;
 pub mod meets;
-pub mod nat_rankings;
-pub mod qual_totals;
-pub mod records;
-pub mod results;
-pub mod saved_session;
-pub mod schedule;
-pub mod standards;
-pub mod wso_records;
