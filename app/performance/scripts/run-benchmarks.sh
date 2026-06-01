@@ -14,7 +14,7 @@ WARMUP="${WARMUP:-1}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:3000}"
 BENCH_MANAGE_SERVER="${BENCH_MANAGE_SERVER:-1}"
 
-ALL_ROUTES=(meets "meets/:name" "meets/schedule/:name" "meets/athletes/:name" clubs records)
+ALL_ROUTES=(meets "meets/:name" "meets/schedule/:name" "meets/athletes/:name" clubs records wso wso-records standards)
 
 SERVER_PID=""
 RUST_PATH=""
@@ -96,6 +96,28 @@ configure_route() {
       export BENCH_RECORD_TYPE="${record_type}"
       export BENCH_RECORD_GENDER="${gender}"
       export BENCH_RECORD_AGE_CATEGORY="${age_category}"
+      ;;
+    wso)
+      RUST_PATH="/wso"
+      RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-wso.ts"
+      ;;
+    wso-records)
+      local wso="${BENCH_WSO:-Carolina}"
+      local wso_gender="${BENCH_WSO_GENDER:-Men}"
+      local wso_age_category="${BENCH_WSO_AGE_CATEGORY:-Senior}"
+      RUST_PATH="/wso-records?wso=${wso}&gender=${wso_gender}&ageCategory=${wso_age_category}"
+      RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-wso-records.ts"
+      export BENCH_WSO="${wso}"
+      export BENCH_WSO_GENDER="${wso_gender}"
+      export BENCH_WSO_AGE_CATEGORY="${wso_age_category}"
+      ;;
+    standards)
+      local standards_gender="${BENCH_STANDARDS_GENDER:-men}"
+      local standards_age_category="${BENCH_STANDARDS_AGE_CATEGORY:-senior}"
+      RUST_PATH="/standards?gender=${standards_gender}&ageCategory=${standards_age_category}"
+      RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-standards.ts"
+      export BENCH_STANDARDS_GENDER="${standards_gender}"
+      export BENCH_STANDARDS_AGE_CATEGORY="${standards_age_category}"
       ;;
     *)
       echo "unknown route id: ${id}" >&2
