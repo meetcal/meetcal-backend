@@ -15,8 +15,30 @@ pub struct WsoNames {
 ///
 /// curl 'http://localhost:3000/wso' | jq .
 ///
-/// This endpoint takes nothing and returns wso
+/// This endpoint takes nothing and returns a list of wsos
 ///
+/// {
+///  "wsos": [
+///    "California North",
+///    "Carolina",
+///    "DMV",
+///    "Florida",
+///    "Georgia",
+///    "Illinois",
+///    "Michigan",
+///    "Minnesota-Dakotas",
+///    "Mountain South",
+///    "New England",
+///    "New Jersey",
+///    "New York",
+///    "Ohio",
+///    "Pacific Northwest",
+///    "Pennsylvania-West Virginia",
+///    "Tennessee-Kentucky",
+///    "Texas-Oklahoma",
+///    "Wisconsin"
+///  ]
+/// }
 pub async fn get_wso_list(State(state): State<AppState>) -> Result<Json<WsoNames>, AppError> {
     let mut response: Vec<String> =
         get_convex_response(&state.convex, "wsoRecords:listWsos", BTreeMap::new()).await?;
