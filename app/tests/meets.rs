@@ -38,7 +38,7 @@ async fn success_get_meet_details() {
 
     let body: Meets = response.json().await.unwrap();
 
-    assert!(!body.name.is_empty());
+    assert_eq!(body.name, "2026 Ohio WSO Championships");
 }
 
 #[tokio::test]
@@ -53,6 +53,7 @@ async fn fail_get_meet_details() {
 #[tokio::test]
 async fn success_get_athletes_by_meet() {
     let app = spawn_server::spawn_app().await;
+    let meet = "2026 USA Weightlifting National Championships, Powered by Rogue Fitness";
     let url = format!(
         "{}/meets/athletes/2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness",
         app.address
@@ -64,6 +65,7 @@ async fn success_get_athletes_by_meet() {
     let body: Vec<Athlete> = response.json().await.unwrap();
 
     assert!(!body.is_empty());
+    assert!(body.iter().all(|row| row.meet == meet));
 }
 
 #[tokio::test]
@@ -78,6 +80,7 @@ async fn fail_get_athletes_by_meet() {
 #[tokio::test]
 async fn success_get_meet_schedule() {
     let app = spawn_server::spawn_app().await;
+    let meet = "2026 USA Weightlifting National Championships, Powered by Rogue Fitness";
     let url = format!(
         "{}/meets/schedule/2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness",
         app.address
@@ -89,6 +92,7 @@ async fn success_get_meet_schedule() {
     let body: Vec<MeetSchedule> = response.json().await.unwrap();
 
     assert!(!body.is_empty());
+    assert!(body.iter().all(|row| row.meet == meet));
 }
 
 #[tokio::test]

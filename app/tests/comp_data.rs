@@ -1,6 +1,7 @@
 use app::{
     common::spawn_server,
     routes::comp_data::{
+        get_intl_rankings::IntlRanking, get_qualifying_totals::QualifyingTotal,
         get_records::Record, get_standards::Standard, get_wso_list::WsoNames,
         get_wso_records::WsoRecord,
     },
@@ -20,6 +21,9 @@ async fn success_get_records() {
     let body: Vec<Record> = response.json().await.unwrap();
 
     assert!(!body.is_empty());
+    assert!(body.iter().all(|row| {
+        row.record_type == "USAW" && row.gender == "men" && row.age_category == "senior"
+    }));
 }
 
 #[tokio::test]
@@ -42,6 +46,9 @@ async fn success_get_standards() {
     let body: Vec<Standard> = response.json().await.unwrap();
 
     assert!(!body.is_empty());
+    assert!(body
+        .iter()
+        .all(|row| row.gender == "men" && row.age_category == "senior"));
 }
 
 #[tokio::test]
@@ -89,12 +96,71 @@ async fn success_get_wso_records() {
     let body: Vec<WsoRecord> = response.json().await.unwrap();
 
     assert!(!body.is_empty());
+    assert!(body.iter().all(|row| {
+        row.wso == "Carolina" && row.gender == "Men" && row.age_category == "Senior"
+    }));
 }
 
 #[tokio::test]
 async fn fail_get_wso_records() {
     let app = spawn_server::spawn_app().await;
     let url = format!("{}/wso-records", app.address);
+    let response = reqwest::get(&url).await.unwrap();
+
+    assert_ne!(response.status(), 200);
+}
+
+#[tokio::test]
+async fn success_get_qualifying_totals() {
+    let app = spawn_server::spawn_app().await;
+    let url = format!(
+        "{}/qualifying-totals?eventName=Virus%20Finals&gender=Women&ageCategory=U11",
+        app.address
+    );
+    let response = reqwest::get(&url).await.unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: Vec<QualifyingTotal> = response.json().await.unwrap();
+
+    assert!(!body.is_empty());
+    assert!(body.iter().all(|row| {
+        row.event_name == "Virus Finals" && row.gender == "Women" && row.age_category == "U11"
+    }));
+}
+
+#[tokio::test]
+async fn fail_get_qualifying_totals() {
+    let app = spawn_server::spawn_app().await;
+    let url = format!("{}/qualifying-totals", app.address);
+    let response = reqwest::get(&url).await.unwrap();
+
+    assert_ne!(response.status(), 200);
+}
+
+#[tokio::test]
+async fn success_get_intl_rankings() {
+    let app = spawn_server::spawn_app().await;
+    let url = format!(
+        "{}/intl-rankings?meet=Worlds&gender=Women&ageCategory=Junior",
+        app.address
+    );
+    let response = reqwest::get(&url).await.unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: Vec<IntlRanking> = response.json().await.unwrap();
+
+    assert!(!body.is_empty());
+    assert!(body.iter().all(|row| {
+        row.meet == "Worlds" && row.gender == "Women" && row.age_category == "Junior"
+    }));
+}
+
+#[tokio::test]
+async fn fail_get_intl_rankings() {
+    let app = spawn_server::spawn_app().await;
+    let url = format!("{}/intl-rankings", app.address);
     let response = reqwest::get(&url).await.unwrap();
 
     assert_ne!(response.status(), 200);

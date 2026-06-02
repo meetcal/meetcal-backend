@@ -1,3 +1,5 @@
+pub mod get_intl_rankings;
+pub mod get_qualifying_totals;
 pub mod get_records;
 pub mod get_standards;
 pub mod get_wso_list;

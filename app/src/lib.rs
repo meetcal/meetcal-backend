@@ -8,6 +8,7 @@ pub use error::AppError;
 use routes::{
     clubs::get_all_clubs::get_all_clubs,
     comp_data::{
+        get_intl_rankings::get_intl_rankings, get_qualifying_totals::get_qualifying_totals,
         get_records::get_records, get_standards::get_standards, get_wso_list::get_wso_list,
         get_wso_records::get_wso_records,
     },
@@ -48,6 +49,8 @@ pub async fn run(listener: TcpListener) {
         .route("/wso", get(get_wso_list))
         .route("/wso-records", get(get_wso_records))
         .route("/standards", get(get_standards))
+        .route("/qualifying-totals", get(get_qualifying_totals))
+        .route("/intl-rankings", get(get_intl_rankings))
         .layer(CompressionLayer::new())
         .with_state(AppState { convex });
 

@@ -34,6 +34,7 @@ pub struct Athlete {
     pub club: String,
     pub entry_total: f64,
     pub gender: String,
+    pub meet: String,
     pub name: String,
     pub session_number: Option<f64>,
     pub session_platform: Option<String>,
