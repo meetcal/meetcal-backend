@@ -1,5 +1,5 @@
-use crate::query_convex::get_convex_response;
-use crate::sort::sort_by_class;
+use crate::common::query_convex::get_convex_response;
+use crate::common::sort::sort_by_class;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::{Query, State};
@@ -7,7 +7,7 @@ use convex::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordParams {
     pub age_category: String,
@@ -42,15 +42,6 @@ pub struct Record {
 ///    "snatchRecord": 147.0,
 ///    "totalRecord": 339.0,
 ///    "weightClass": "71kg"
-///  },
-///  {
-///    "ageCategory": "senior",
-///    "cjRecord": 195.0,
-///    "gender": "men",
-///    "recordType": "USAW",
-///    "snatchRecord": 165.0,
-///    "totalRecord": 362.0,
-///    "weightClass": "94kg"
 ///  },
 /// ]
 pub async fn get_records(

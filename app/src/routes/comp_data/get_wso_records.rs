@@ -1,5 +1,5 @@
-use crate::query_convex::get_convex_response;
-use crate::sort::sort_by_class;
+use crate::common::query_convex::get_convex_response;
+use crate::common::sort::sort_by_class;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::{Query, State};
@@ -40,15 +40,6 @@ pub struct WsoRecord {
 ///    "snatchRecord": 101.0,
 ///    "totalRecord": 225.0,
 ///    "weightClass": "60",
-///    "wso": "Florida"
-///  },
-///  {
-///    "ageCategory": "Senior",
-///    "cjRecord": 147.0,
-///    "gender": "Men",
-///    "snatchRecord": 121.0,
-///    "totalRecord": 264.0,
-///    "weightClass": "65",
 ///    "wso": "Florida"
 ///  },
 /// ]

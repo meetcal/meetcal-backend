@@ -1,5 +1,5 @@
-use crate::query_convex::get_convex_response;
-use crate::sort::sort_by_class;
+use crate::common::query_convex::get_convex_response;
+use crate::common::sort::sort_by_class;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::{Query, State};
@@ -7,7 +7,7 @@ use convex::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StandardParams {
     pub age_category: String,
@@ -37,13 +37,6 @@ pub struct Standard {
 ///    "standardA": 281.0,
 ///    "standardB": 267.0,
 ///    "weightClass": "60kg"
-///  },
-///  {
-///    "ageCategory": "senior",
-///    "gender": "men",
-///    "standardA": 304.0,
-///    "standardB": 289.0,
-///    "weightClass": "65kg"
 ///  },
 /// ]
 pub async fn get_standards(

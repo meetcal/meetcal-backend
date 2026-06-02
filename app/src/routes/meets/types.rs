@@ -26,7 +26,7 @@ pub struct MeetSchedule {
     pub weight_class: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Athlete {
     pub adaptive: bool,

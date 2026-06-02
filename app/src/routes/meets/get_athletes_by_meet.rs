@@ -1,4 +1,6 @@
-use crate::{AppError, AppState, query_convex::get_convex_response, routes::meets::types::Athlete};
+use crate::{
+    AppError, AppState, common::query_convex::get_convex_response, routes::meets::types::Athlete,
+};
 use axum::{
     Json,
     extract::{Path, State},
@@ -28,20 +30,6 @@ use std::collections::BTreeMap;
 ///    "weightClass": "+110",
 ///    "wso": null
 ///  },
-///  {
-///    "adaptive": false,
-///    "age": 31.0,
-///    "club": "Unaffiliated",
-///    "entryTotal": 390.0,
-///    "gender": "Male",
-///    "meet": "2026 USA Weightlifting National Championships, Powered by Rogue Fitness",
-///    "memberId": "1009887",
-///    "name": "Keiser Witte",
-///    "sessionNumber": 45.0,
-///    "sessionPlatform": "Red",
-///    "weightClass": "+110",
-///    "wso": null
-///  }
 ///]
 pub async fn get_athletes_by_meet(
     State(state): State<AppState>,

@@ -1,4 +1,4 @@
-use crate::query_convex::get_convex_response;
+use crate::common::query_convex::get_convex_response;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::State;

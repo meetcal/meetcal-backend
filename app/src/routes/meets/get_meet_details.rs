@@ -1,4 +1,6 @@
-use crate::{AppError, AppState, query_convex::get_convex_response, routes::meets::types::Meets};
+use crate::{
+    AppError, AppState, common::query_convex::get_convex_response, routes::meets::types::Meets,
+};
 use axum::{
     Json,
     extract::{Path, State},

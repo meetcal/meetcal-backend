@@ -1,13 +1,13 @@
-use crate::query_convex::get_convex_response;
+use crate::common::query_convex::get_convex_response;
 use crate::routes::meets::types::Meets;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::State;
 use chrono::{Local, Months, NaiveDate};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MeetsList3Months {
     pub names: Vec<String>,
 }

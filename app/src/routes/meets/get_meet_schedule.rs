@@ -1,5 +1,6 @@
 use crate::{
-    AppError, AppState, query_convex::get_convex_response, routes::meets::types::MeetSchedule,
+    AppError, AppState, common::query_convex::get_convex_response,
+    routes::meets::types::MeetSchedule,
 };
 use axum::{
     Json,
@@ -24,15 +25,6 @@ use std::collections::BTreeMap;
 ///    "startTime": "08:00:00",
 ///    "weighInTime": "06:00:00",
 ///    "weightClass": "40kg B"
-///  },
-///  {
-///    "date": "2026-06-20",
-///    "meet": "2026 USA Weightlifting National Championships, Powered by Rogue Fitness",
-///    "platform": "White",
-///    "sessionId": 1.0,
-///    "startTime": "08:00:00",
-///    "weighInTime": "06:00:00",
-///    "weightClass": "44kg B"
 ///  },
 ///]
 pub async fn get_meet_schedule(
