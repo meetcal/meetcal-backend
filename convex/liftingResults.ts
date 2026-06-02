@@ -121,6 +121,32 @@ export const getNationalRankings = query({
   },
 });
 
+export const getNatRankings = query({
+  args: {
+    federation: v.string(),
+    ageCategory: v.string(),
+  },
+  handler: async (ctx, { federation, ageCategory }) => {
+    const rows = await ctx.db
+      .query("lifting_results")
+      .withIndex("by_federation_and_age", (q) =>
+        q.eq("federation", federation).eq("age", ageCategory)
+      )
+      .filter((q) =>
+        q.and(
+          q.neq(q.field("name"), undefined),
+          q.neq(q.field("total"), undefined),
+          q.neq(q.field("total"), 0)
+        )
+      )
+      .collect();
+
+    // Sort by total descending (highest first, matching Supabase behaviour)
+    rows.sort((a, b) => (b.total ?? 0) - (a.total ?? 0));
+    return rows;
+  },
+});
+
 // Search lifting results by athlete name (partial match) with optional year range
 export const searchByNameAndYear = query({
   args: {

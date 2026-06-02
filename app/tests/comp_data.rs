@@ -1,9 +1,9 @@
 use app::{
     common::spawn_server,
     routes::comp_data::{
-        get_intl_rankings::IntlRanking, get_qualifying_totals::QualifyingTotal,
-        get_records::Record, get_standards::Standard, get_wso_list::WsoNames,
-        get_wso_records::WsoRecord,
+        get_intl_rankings::IntlRanking, get_national_rankings::NatRankings,
+        get_qualifying_totals::QualifyingTotal, get_records::Record, get_standards::Standard,
+        get_wso_list::WsoNames, get_wso_records::WsoRecord,
     },
 };
 
@@ -46,9 +46,10 @@ async fn success_get_standards() {
     let body: Vec<Standard> = response.json().await.unwrap();
 
     assert!(!body.is_empty());
-    assert!(body
-        .iter()
-        .all(|row| row.gender == "men" && row.age_category == "senior"));
+    assert!(
+        body.iter()
+            .all(|row| row.gender == "men" && row.age_category == "senior")
+    );
 }
 
 #[tokio::test]
@@ -161,6 +162,31 @@ async fn success_get_intl_rankings() {
 async fn fail_get_intl_rankings() {
     let app = spawn_server::spawn_app().await;
     let url = format!("{}/intl-rankings", app.address);
+    let response = reqwest::get(&url).await.unwrap();
+
+    assert_ne!(response.status(), 200);
+}
+
+#[tokio::test]
+async fn success_get_nat_rankings() {
+    let app = spawn_server::spawn_app().await;
+    let url = format!(
+        "{}/nat-rankings?ageCategory=Open%20Men%27s%2060kg&federation=USAW",
+        app.address
+    );
+    let response = reqwest::get(&url).await.unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: Vec<NatRankings> = response.json().await.unwrap();
+
+    assert!(!body.is_empty());
+}
+
+#[tokio::test]
+async fn fail_get_nat_rankings() {
+    let app = spawn_server::spawn_app().await;
+    let url = format!("{}/nat-rankings", app.address);
     let response = reqwest::get(&url).await.unwrap();
 
     assert_ne!(response.status(), 200);

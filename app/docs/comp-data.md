@@ -1,33 +1,3 @@
-## `GET /lifting-results/national-rankings`
-
-**Why:** USAW national ranking list by weight-class-age string.
-
-**App usage:** `fetch-national-rankings.ts`
-
-**Auth:** None
-
-**Convex:** `liftingResults.getNationalRankings` · `query` · `{ federation, ageCategory }` — app defaults `federation` to `"USAW"`
-
-**Query params:**
-
-- `ageCategory` (required) — e.g. `"Open Men's 89kg"` (stored in lifting result `age` field)
-- `federation` (optional, default `USAW`)
-
-**Response:** `200`
-
-```json
-{
-  "rankings": [{ "id": 0, "name": "Jane Doe", "total": 285 }]
-}
-```
-
-**Steps:**
-
-1. Call Convex query.
-2. App deduplicates by name and assigns display ids.
-
----
-
 ## `GET /lifting-results/adaptive`
 
 **Why:** Adaptive division record-style view derived from best adaptive meet totals.

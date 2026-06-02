@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    env:
+      CONVEX_URL: ${{ secrets.CONVEX_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require CONVEX_URL secret
+        run: |
+          if [ -z "${CONVEX_URL}" ]; then
+            echo "::error::Add CONVEX_URL to repository secrets (integration tests call live Convex)."
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Write .env for integration tests
+        run: echo "CONVEX_URL=${CONVEX_URL}" > ../.env
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --all-targets
