@@ -14,7 +14,7 @@ WARMUP="${WARMUP:-1}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:3000}"
 BENCH_MANAGE_SERVER="${BENCH_MANAGE_SERVER:-1}"
 
-ALL_ROUTES=(meets "meets/:name" "meets/schedule/:name" "meets/athletes/:name" clubs records wso wso-records standards)
+ALL_ROUTES=(meets "meets/:name" "meets/schedule/:name" "meets/athletes/:name" clubs records wso wso-records standards qualifying-totals intl-rankings)
 
 SERVER_PID=""
 RUST_PATH=""
@@ -118,6 +118,28 @@ configure_route() {
       RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-standards.ts"
       export BENCH_STANDARDS_GENDER="${standards_gender}"
       export BENCH_STANDARDS_AGE_CATEGORY="${standards_age_category}"
+      ;;
+    qualifying-totals)
+      local event_name="${BENCH_QUALIFYING_EVENT_NAME:-Virus Finals}"
+      local qualifying_gender="${BENCH_QUALIFYING_GENDER:-Women}"
+      local qualifying_age_category="${BENCH_QUALIFYING_AGE_CATEGORY:-U11}"
+      local event_name_encoded
+      event_name_encoded=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "${event_name}")
+      RUST_PATH="/qualifying-totals?eventName=${event_name_encoded}&gender=${qualifying_gender}&ageCategory=${qualifying_age_category}"
+      RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-qualifying-totals.ts"
+      export BENCH_QUALIFYING_EVENT_NAME="${event_name}"
+      export BENCH_QUALIFYING_GENDER="${qualifying_gender}"
+      export BENCH_QUALIFYING_AGE_CATEGORY="${qualifying_age_category}"
+      ;;
+    intl-rankings)
+      local intl_meet="${BENCH_INTL_MEET:-Worlds}"
+      local intl_gender="${BENCH_INTL_GENDER:-Women}"
+      local intl_age_category="${BENCH_INTL_AGE_CATEGORY:-Junior}"
+      RUST_PATH="/intl-rankings?meet=${intl_meet}&gender=${intl_gender}&ageCategory=${intl_age_category}"
+      RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-intl-rankings.ts"
+      export BENCH_INTL_MEET="${intl_meet}"
+      export BENCH_INTL_GENDER="${intl_gender}"
+      export BENCH_INTL_AGE_CATEGORY="${intl_age_category}"
       ;;
     *)
       echo "unknown route id: ${id}" >&2

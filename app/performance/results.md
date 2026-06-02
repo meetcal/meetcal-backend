@@ -9,4 +9,6 @@
 | `GET /wso` | 26.42 | 27.69 | -4.6% | No |
 | `GET /wso-records` | 27.17 | 26.25 | 3.5% | No |
 | `GET /standards` | 24.48 | 25.11 | -2.5% | No |
-| **Total** (avg) | 31.86 | 27.59 | 13.5% | No |
+| `GET /qualifying-totals` | 31.08 | 29.11 | 6.8% | No |
+| `GET /intl-rankings` | 23.77 | 27.83 | -14.6% | No |
+| **Total** (avg) | 31.06 | 27.75 | 10.3% | No |

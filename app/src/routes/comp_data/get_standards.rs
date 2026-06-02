@@ -30,6 +30,10 @@ pub struct Standard {
 ///
 /// This endpoint takes gender and age category and returns standards
 ///
+/// TODO:
+/// Genders: men, women
+/// Age Categories:
+///
 /// [
 ///  {
 ///    "ageCategory": "senior",

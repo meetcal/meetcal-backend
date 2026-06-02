@@ -33,6 +33,11 @@ pub struct Record {
 ///
 /// This endpoint takes federation, gender, and age category and returns records
 ///
+/// TODO:
+/// Federations: USAW, USAMW, IWF, UMWF
+/// Genders: men, women
+/// Age Categories:
+///
 /// [
 ///  {
 ///    "ageCategory": "senior",

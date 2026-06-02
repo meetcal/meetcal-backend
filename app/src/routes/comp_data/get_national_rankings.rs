@@ -25,28 +25,16 @@ pub struct QualifyingTotal {
     pub qualifying_total: f64,
 }
 
-/// /qualifying-totals endpoint
+/// /nat-rankings endpoint
 ///
-/// curl 'http://localhost:3000/qualifying-totals?eventName=Nationals&gender=Men&ageCategory=Senior' | jq .
-///
-/// This endpoint takes event name, gender, and age category and returns qualifying totals
+/// curl 'http://localhost:3000/nat-rankings?ageCategory=Open%20Men%27s%2089kg&federation=USAW | jq .
 ///
 /// TODO:
-/// Names:
-/// Genders: Men, Women
 /// Age Categories:
+/// Federations: USAW, USAMW
 ///
-/// {
-///   "rows": [
-///     {
-///       "eventName": "Virus Finals",
-///       "gender": "Women",
-///       "ageCategory": "U11",
-///       "weightClass": "30kg",
-///       "qualifyingTotal": 30.0
-///     }
-///   ]
-/// }
+/// This endpoint takes federation and age category and returns national rankings for a weight_class
+///
 pub async fn get_qualifying_totals(
     State(state): State<AppState>,
     Query(params): Query<QualifyingTotalsParams>,

@@ -33,6 +33,11 @@ pub struct IntlRanking {
 ///
 /// This endpoint takes meet, gender, and age category and returns international rankings
 ///
+/// TODO:
+/// Meets:
+/// Genders: Men, Women
+/// Age Categories:
+///
 /// {
 ///   "rankings": [
 ///     {

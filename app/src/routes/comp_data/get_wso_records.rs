@@ -32,6 +32,11 @@ pub struct WsoRecord {
 ///
 /// This endpoint takes gender, wso, and age category and returns wso records
 ///
+/// TODO:
+/// WSOs:
+/// Age Categories:
+/// Gender: Men, Women
+///
 /// [
 ///  {
 ///    "ageCategory": "Senior",

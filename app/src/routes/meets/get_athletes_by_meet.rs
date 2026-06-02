@@ -15,6 +15,8 @@ use std::collections::BTreeMap;
 /// This endpoint takes the name of the meet exactly as it shows in BARS and returns the athletes in
 /// the meet
 ///
+/// Get meet names as they are listed by copying exact case-sensitive names from BARS
+///
 /// [
 ///  {
 ///    "adaptive": false,

@@ -17,6 +17,9 @@ pub struct WsoNames {
 ///
 /// This endpoint takes nothing and returns a list of wsos
 ///
+/// Below is a list of all wsos that are in the db
+/// Unlisted wsos do not follow USAW guidelines of having public records hosted online
+///
 /// {
 ///  "wsos": [
 ///    "California North",
