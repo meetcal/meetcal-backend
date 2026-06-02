@@ -29,6 +29,7 @@ pub struct NatRankings {
 /// Federations: USAW, USAMW
 ///
 /// This endpoint takes federation and age category and returns national rankings for a weight_class
+///
 /// [
 ///  {
 ///    "name": "gabe chhum",
