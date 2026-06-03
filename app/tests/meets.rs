@@ -31,7 +31,10 @@ async fn fail_get_all_meets() {
 #[tokio::test]
 async fn success_get_meet_details() {
     let app = spawn_server::spawn_app().await;
-    let url = format!("{}/meets/2026%20Ohio%20WSO%20Championships", app.address);
+    let url = format!(
+        "{}/meet-details?meet=2026%20Ohio%20WSO%20Championships",
+        app.address
+    );
     let response = reqwest::get(&url).await.unwrap();
 
     assert_eq!(response.status(), 200);
@@ -55,7 +58,7 @@ async fn success_get_athletes_by_meet() {
     let app = spawn_server::spawn_app().await;
     let meet = "2026 USA Weightlifting National Championships, Powered by Rogue Fitness";
     let url = format!(
-        "{}/meets/athletes/2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness",
+        "{}/meets/athletes?meet=2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness",
         app.address
     );
     let response = reqwest::get(&url).await.unwrap();
@@ -82,7 +85,7 @@ async fn success_get_meet_schedule() {
     let app = spawn_server::spawn_app().await;
     let meet = "2026 USA Weightlifting National Championships, Powered by Rogue Fitness";
     let url = format!(
-        "{}/meets/schedule/2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness",
+        "{}/meets/schedule?meet=2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness",
         app.address
     );
     let response = reqwest::get(&url).await.unwrap();

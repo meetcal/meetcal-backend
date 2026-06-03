@@ -47,9 +47,9 @@ pub async fn run(listener: TcpListener) {
 
     let app = Router::new()
         .route("/meets", get(list_meets_next_3months))
-        .route("/meets/{name}", get(get_meet_details))
-        .route("/meets/schedule/{name}", get(get_meet_schedule))
-        .route("/meets/athletes/{name}", get(get_athletes_by_meet))
+        .route("/meet-details", get(get_meet_details))
+        .route("/meets/schedule", get(get_meet_schedule))
+        .route("/meets/athletes", get(get_athletes_by_meet))
         .route("/clubs", get(get_all_clubs))
         .route("/records", get(get_records))
         .route("/wso", get(get_wso_list))

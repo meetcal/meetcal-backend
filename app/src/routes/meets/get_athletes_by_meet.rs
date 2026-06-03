@@ -1,16 +1,18 @@
 use crate::{
-    AppError, AppState, common::query_convex::get_convex_response, routes::meets::types::Athlete,
+    AppError, AppState,
+    common::query_convex::get_convex_response,
+    routes::meets::types::{Athlete, MeetsParams},
 };
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Query, State},
 };
 use convex::Value;
 use std::collections::BTreeMap;
 
 /// /meets/athletes/{name} endpoint
 ///
-/// curl 'localhost:3000/meets/athletes/2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness' | jq .
+/// curl 'localhost:3000/meets/athletes?meet=2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness' | jq .
 ///
 /// This endpoint takes the name of the meet exactly as it shows in BARS and returns the athletes in
 /// the meet
@@ -35,10 +37,10 @@ use std::collections::BTreeMap;
 ///]
 pub async fn get_athletes_by_meet(
     State(state): State<AppState>,
-    Path(meet_name): Path<String>,
+    Query(params): Query<MeetsParams>,
 ) -> Result<Json<Vec<Athlete>>, AppError> {
     let mut args = BTreeMap::new();
-    args.insert("meet".to_string(), Value::from(meet_name));
+    args.insert("meet".to_string(), Value::from(params.meet));
 
     let mut response: Vec<Athlete> =
         get_convex_response(&state.convex, "athletes:getByMeet", args).await?;

@@ -1,16 +1,18 @@
 use crate::{
-    AppError, AppState, common::query_convex::get_convex_response, routes::meets::types::Meets,
+    AppError, AppState,
+    common::query_convex::get_convex_response,
+    routes::meets::types::{Meets, MeetsParams},
 };
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Query, State},
 };
 use convex::Value;
 use std::collections::BTreeMap;
 
 /// /meets/{name} endpoint
 ///
-/// curl 'localhost:3000/meets/2026%20Ohio%20WSO%20Championships' | jq .
+/// curl 'localhost:3000/meet-details?meet=2026%20Ohio%20WSO%20Championships' | jq .
 ///
 /// This endpoint takes the name of the meet exactly as it shows in BARS and returns the details of
 /// the meet
@@ -30,10 +32,10 @@ use std::collections::BTreeMap;
 /// }
 pub async fn get_meet_details(
     State(state): State<AppState>,
-    Path(meet_name): Path<String>,
+    Query(params): Query<MeetsParams>,
 ) -> Result<Json<Meets>, AppError> {
     let mut args = BTreeMap::new();
-    args.insert("name".to_string(), Value::from(meet_name));
+    args.insert("name".to_string(), Value::from(params.meet));
 
     let response: Meets = get_convex_response(&state.convex, "meets:getByName", args).await?;
 

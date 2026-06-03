@@ -14,7 +14,11 @@ WARMUP="${WARMUP:-1}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:3000}"
 BENCH_MANAGE_SERVER="${BENCH_MANAGE_SERVER:-1}"
 
-ALL_ROUTES=(meets "meets/:name" "meets/schedule/:name" "meets/athletes/:name" clubs records wso wso-records standards qualifying-totals intl-rankings)
+ALL_ROUTES=(
+  meets meet-details "meets/schedule" "meets/athletes"
+  clubs records wso wso-records standards qualifying-totals intl-rankings
+  nat-rankings adaptive search
+)
 
 SERVER_PID=""
 RUST_PATH=""
@@ -62,24 +66,24 @@ configure_route() {
       RUST_PATH="/meets"
       RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-meets.ts"
       ;;
-    meets/:name)
-      RUST_PATH="/meets/${meet_path_encoded}"
+    meet-details)
+      RUST_PATH="/meet-details?meet=${meet_path_encoded}"
       RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-meet-details.ts"
       export BENCH_MEET_NAME="${meet_name}"
       ;;
-    meets/schedule/:name)
+    meets/schedule)
       local schedule_meet_name="${BENCH_SCHEDULE_MEET_NAME:-2026 USA Weightlifting National Championships, Powered by Rogue Fitness}"
       local schedule_path_encoded
       schedule_path_encoded=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "${schedule_meet_name}")
-      RUST_PATH="/meets/schedule/${schedule_path_encoded}"
+      RUST_PATH="/meets/schedule?meet=${schedule_path_encoded}"
       RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-meet-schedule.ts"
       export BENCH_MEET_NAME="${schedule_meet_name}"
       ;;
-    meets/athletes/:name)
+    meets/athletes)
       local athletes_meet_name="${BENCH_ATHLETES_MEET_NAME:-2026 USA Weightlifting National Championships, Powered by Rogue Fitness}"
       local athletes_path_encoded
       athletes_path_encoded=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "${athletes_meet_name}")
-      RUST_PATH="/meets/athletes/${athletes_path_encoded}"
+      RUST_PATH="/meets/athletes?meet=${athletes_path_encoded}"
       RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-meet-athletes.ts"
       export BENCH_MEET_NAME="${athletes_meet_name}"
       ;;
@@ -140,6 +144,41 @@ configure_route() {
       export BENCH_INTL_MEET="${intl_meet}"
       export BENCH_INTL_GENDER="${intl_gender}"
       export BENCH_INTL_AGE_CATEGORY="${intl_age_category}"
+      ;;
+    nat-rankings)
+      local nat_federation="${BENCH_NAT_FEDERATION:-USAW}"
+      local nat_age_category='Open Men'"'"'s 60kg'
+      if [[ -n "${BENCH_NAT_AGE_CATEGORY:-}" ]]; then
+        nat_age_category="${BENCH_NAT_AGE_CATEGORY}"
+      fi
+      local nat_age_encoded
+      nat_age_encoded=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "${nat_age_category}")
+      RUST_PATH="/nat-rankings?federation=${nat_federation}&ageCategory=${nat_age_encoded}"
+      RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-nat-rankings.ts"
+      export BENCH_NAT_FEDERATION="${nat_federation}"
+      export BENCH_NAT_AGE_CATEGORY="${nat_age_category}"
+      ;;
+    adaptive)
+      local adaptive_exclude="${BENCH_ADAPTIVE_EXCLUDE:-BWL}"
+      local adaptive_gender="${BENCH_ADAPTIVE_GENDER:-Men}"
+      RUST_PATH="/adaptive?excludeFederation=${adaptive_exclude}&gender=${adaptive_gender}"
+      RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-adaptive.ts"
+      export BENCH_ADAPTIVE_EXCLUDE="${adaptive_exclude}"
+      export BENCH_ADAPTIVE_GENDER="${adaptive_gender}"
+      ;;
+    search)
+      local search_query="${BENCH_SEARCH_QUERY:-Alexander Nordstrom}"
+      local search_start="${BENCH_SEARCH_START_DATE:-2025-01-01}"
+      local search_end="${BENCH_SEARCH_END_DATE:-2026-01-01}"
+      local search_query_encoded search_start_encoded search_end_encoded
+      search_query_encoded=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "${search_query}")
+      search_start_encoded=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "${search_start}")
+      search_end_encoded=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "${search_end}")
+      RUST_PATH="/search?query=${search_query_encoded}&startDate=${search_start_encoded}&endDate=${search_end_encoded}"
+      RN_SCRIPT="${REPO_ROOT}/meetcal-app/scripts/performance/bench-search.ts"
+      export BENCH_SEARCH_QUERY="${search_query}"
+      export BENCH_SEARCH_START_DATE="${search_start}"
+      export BENCH_SEARCH_END_DATE="${search_end}"
       ;;
     *)
       echo "unknown route id: ${id}" >&2
