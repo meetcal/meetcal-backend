@@ -2,8 +2,11 @@ pub mod common;
 pub mod error;
 pub mod routes;
 
-use crate::routes::comp_data::{
-    get_adaptive_records::get_adaptive_records, get_national_rankings::get_national_rankings,
+use crate::routes::{
+    comp_data::{
+        get_adaptive_records::get_adaptive_records, get_national_rankings::get_national_rankings,
+    },
+    results::search::search_wrapped,
 };
 use axum::{Router, routing::get};
 use convex::ConvexClient;
@@ -56,6 +59,7 @@ pub async fn run(listener: TcpListener) {
         .route("/intl-rankings", get(get_intl_rankings))
         .route("/nat-rankings", get(get_national_rankings))
         .route("/adaptive", get(get_adaptive_records))
+        .route("/search", get(search_wrapped))
         .layer(CompressionLayer::new())
         .with_state(AppState { convex });
 
