@@ -32,9 +32,26 @@ pub struct WsoRecord {
 ///
 /// This endpoint takes gender, wso, and age category and returns wso records
 ///
-/// TODO:
 /// WSOs:
-/// Age Categories:
+///    "California North",
+///    "Carolina",
+///    "DMV",
+///    "Florida",
+///    "Georgia",
+///    "Illinois",
+///    "Michigan",
+///    "Minnesota-Dakotas",
+///    "Mountain South",
+///    "New England",
+///    "New Jersey",
+///    "New York",
+///    "Ohio",
+///    "Pacific Northwest",
+///    "Pennsylvania-West Virginia",
+///    "Tennessee-Kentucky",
+///    "Texas-Oklahoma",
+///    "Wisconsin"
+/// Age Categories: U11, U13, U15, U17, Youth, Junior, Senior, Masters 35, Masters 40, ..., Masters 90
 /// Gender: Men, Women
 ///
 /// [

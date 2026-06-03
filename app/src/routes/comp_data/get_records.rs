@@ -33,10 +33,9 @@ pub struct Record {
 ///
 /// This endpoint takes federation, gender, and age category and returns records
 ///
-/// TODO:
 /// Federations: USAW, USAMW, IWF, UMWF
 /// Genders: men, women
-/// Age Categories:
+/// Age Categories: u13, u15, u17, youth, junior, university, senior, Masters 35, Masters 40, ..., Masters 90
 ///
 /// [
 ///  {

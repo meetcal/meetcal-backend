@@ -9,115 +9,161 @@ description: >-
 
 # API performance benchmarking
 
-Compare **Rust `meetcal-backend/app`** HTTP handlers to the **meetcal-app** code path the UI actually runs.
+Compare **Rust `meetcal-backend/app`** HTTP handlers to the **meetcal-app code path the UI actually runs** — from Convex fetch through transforms to the data shape the screen displays.
+
+**Not** a single Convex call. **Not** Rust-handler-only unless the app truly does nothing else.
+
+See also: `meetcal-backend/app/performance/BENCHMARK-RN-PATH.md`.
 
 ## Agent: run this on every new route
 
-When you add or materially change a Rust API route, **always** finish by running the benchmark for that route. Do not skip because the delta looks small — the goal is a fast app and a complete `results.md` table.
+When you add or materially change a Rust API route, **always** finish by running the benchmark for that route.
 
-1. Implement the Rust route and register it in `main.rs`.
-2. Add `meetcal-app/scripts/performance/bench-<route>.ts` (full RN client path, not Convex-only).
-3. Add a `case` in `performance/scripts/run-benchmarks.sh` (route id, HTTP path, RN script).
-4. Run (Rust side always uses a **release** build — the script runs `cargo run --release`):
+1. Implement the Rust route and register it in `lib.rs`.
+2. Add `meetcal-app/scripts/performance/client-paths/<route>.ts` with the **full** RN path (see below).
+3. Add thin `meetcal-app/scripts/performance/bench-<route>.ts` (preload + `runMedianBench`).
+4. Add route id to `ALL_ROUTES` and a `case` in `performance/scripts/run-benchmarks.sh`.
+5. Run:
 
    ```bash
    cd meetcal-backend/app && bash performance/scripts/run-benchmarks.sh '<route-id>'
    ```
 
-   Re-benchmark every route after a batch of changes:
+   Or after a batch:
 
    ```bash
    cd meetcal-backend/app && bash performance/scripts/run-benchmarks.sh all
    ```
 
-5. Confirm `performance/results.md` has the route row and an updated **`Total (avg)`** row at the bottom.
-6. **Clean up** scratch scripts (see below). Commit `results.md` when the user asks for a commit.
+6. Confirm `performance/results.md` has the route row and updated **`Total (avg)`**.
+7. Commit `results.md` only when the user asks.
 
-Re-run the same command when you change handler logic for an existing route so that row and the total stay current.
+Re-run when Rust handler **or** RN client-path logic changes.
 
-**Do not** hand-edit per-route numbers or the total row — `run-benchmarks.sh` writes them. You may add a placeholder route row before the first run; the script replaces it and refreshes the total.
+**Do not** hand-edit per-route ms or the total row — `run-benchmarks.sh` writes them.
 
 ## What to measure
 
 | Layer | Measure |
 | --- | --- |
-| **Rust** | End-to-end `GET` (or write route) via HTTP: Convex call + Rust logic + JSON response. |
-| **RN** | Same processing as the Rust handler for that route (Convex query + filter/sort/map the API does). **Not** Convex-only. **Not** local UI filter/sort changes after load. |
+| **Rust** | End-to-end HTTP (`GET`): Convex + Rust handler + JSON (release build, compressed). |
+| **RN** | Full client path in `client-paths/<route>.ts`: all Convex calls the screen triggers, plus map/filter/dedupe/sort, screen slice (`useMemo` equivalent), and final display payload (e.g. Wrapped stats, table rows). |
 
-Each `bench-<route>.ts` must mirror the matching `src/routes/` handler logic step-for-step (read handlers; do not edit them).
+### Out of scope (do not time these in RN bench)
+
+- React render / reconciliation
+- `useMutableResource` hook bookkeeping (unless you explicitly add a bench for it later)
+- Navigation, alerts, loading spinners
+
+### In scope (required when the app does them)
+
+- Multiple Convex queries (exact + fallback, `getAll` + client filter, etc.)
+- Mapping Convex rows to app types
+- Client-side filter/dedupe/sort the screen relies on
+- Final aggregation (e.g. `calculateWrappedStats` for Wrapped)
+
+## File layout (keep only this)
+
+```
+meetcal-app/scripts/performance/
+  lib/
+    bench-preload.ts      # import "./convex-http" only
+    convex-http.ts        # ConvexHttpClient + loadEnv (no React)
+    bench-runner.ts       # median loop (ITERATIONS, WARMUP)
+  client-paths/
+    <route>.ts            # full RN path — source of truth for RN column
+  bench-<route>.ts        # thin wrapper per route
+
+meetcal-backend/app/performance/
+  scripts/run-benchmarks.sh
+  results.md
+  BENCHMARK-RN-PATH.md
+```
+
+Do **not** add duplicate runners, `bench-rust.sh`, or Convex-only benches.
+
+### Thin `bench-<route>.ts` template
+
+```ts
+import "./lib/bench-preload";
+import { runXxxClientPath } from "./client-paths/<route>";
+import { runMedianBench } from "./lib/bench-runner";
+
+await runMedianBench(runXxxClientPath);
+```
+
+### `client-paths/<route>.ts` rules
+
+1. Read the **screen** (e.g. `app/comp-data/*.tsx`) and **`lib/database/fetch-*.ts`** the screen uses.
+2. Copy the logic the app runs **before** data is shown — not the Rust handler unless they match.
+3. Use `convexQuery` from `../lib/convex-http` and `api` from `../../../convex/_generated/api`.
+4. End with the variable the UI consumes (`void` it so the compiler keeps the work).
+5. Add a one-line comment at top: `// Mirrors: <screen> + <fetch module>`.
+
+**Never** import `@/lib/convex` in benches — it pulls `ConvexReactClient` and breaks Bun.
+
+## Route ids (current)
+
+| Route id | HTTP (query params) | Client path file | App source to mirror |
+| --- | --- | --- | --- |
+| `meets` | `GET /meets` | `meets.ts` | `listActive` + 3-month filter + sort |
+| `meet-details` | `GET /meet-details?meet=` | `meet-details.ts` | `meets.getByName` + response map |
+| `meets/schedule` | `GET /meets/schedule?meet=` | `meet-schedule.ts` | `schedule.getByMeet` + Rust sort |
+| `meets/athletes` | `GET /meets/athletes?meet=` | `meet-athletes.ts` | `athletes.getByMeet` + map + name sort |
+| `clubs` | `GET /clubs` | `clubs.ts` | `athletes.listClubs` |
+| `records` | `GET /records?recordType&gender&ageCategory` | `records.ts` | `fetch-records`: full federation `getByFederation` + `mapRowsToRecordsData` + screen slice |
+| `wso` | `GET /wso` | `wso.ts` | `wsoRecords.listWsos` |
+| `wso-records` | `GET /wso-records?wso&gender&ageCategory` | `wso-records.ts` | `fetch-wso-records`: `getByWso` + group/sort + screen slice |
+| `standards` | `GET /standards?gender&ageCategory` | `standards.ts` | `fetch-standards`: `getFiltered` {} + map + screen slice |
+| `qualifying-totals` | `GET /qualifying-totals?eventName&...` | `qualifying-totals.ts` | `qualifyingTotals.getAll` + build tree + slice |
+| `intl-rankings` | `GET /intl-rankings?meet&gender&ageCategory` | `intl-rankings.ts` | `intlRankings.getAll` + screen filter/sort (**not** `getFiltered` alone) |
+| `nat-rankings` | `GET /nat-rankings?federation&ageCategory` | `nat-rankings.ts` | `getNationalRankings` + `mapRankings` (**not** Rust max-total dedupe) |
+| `adaptive` | `GET /adaptive?excludeFederation&gender` | `adaptive.ts` | `fetch-adaptive-records` gender path (**not** Rust regex/year filter) |
+| `search` | `GET /search?query&startDate&endDate` | `search.ts` | `weightlifting-wrapped` `searchAthlete`: exact → fallback → word filter → map → **`calculateWrappedStats`** |
+
+Env overrides: `BENCH_MEET_NAME`, `BENCH_SEARCH_QUERY`, `BENCH_NAT_AGE_CATEGORY`, `BENCH_ADAPTIVE_GENDER`, etc. (see `configure_route` in `run-benchmarks.sh`).
 
 ## Workflow for a new route
 
-1. Implement or confirm the Rust route in `src/routes/`.
-2. Add `meetcal-app/scripts/performance/bench-<route>.ts` mirroring the full RN client path.
-3. Extend the `case` in `performance/scripts/run-benchmarks.sh` for the route id, path, and RN script.
-4. **Run** `performance/scripts/run-benchmarks.sh <route-id>` (or `all`) — required on every new or changed route. The script kills port 3000, starts `cargo run --release`, runs the bench, then stops the server (`meetcal-backend/.env` → `CONVEX_URL`).
-5. Set `BENCH_MANAGE_SERVER=0` only if you already have a release server on port 3000 and do not want the script to restart it.
-6. Verify `performance/results.md`: new route row + recalculated **`Total (avg)`**.
-7. Commit updated `results.md` when requested.
-8. **Clean up** (see below).
+1. Rust handler in `src/routes/`.
+2. `client-paths/<route>.ts` — implement full RN path (steps above).
+3. `bench-<route>.ts` — thin wrapper.
+4. `ALL_ROUTES` + `case` in `run-benchmarks.sh` (URL-encode query values; watch apostrophes in bash defaults).
+5. `bash performance/scripts/run-benchmarks.sh <route-id>` (release server managed by script).
+6. Verify `results.md`.
 
-### Route ids in use
+### Checklist before claiming RN bench is done
 
-| Route id | HTTP | RN bench |
-| --- | --- | --- |
-| `meets` | `GET /meets` | `bench-meets.ts` |
-| `meets/:name` | `GET /meets/{encoded-name}` | `bench-meet-details.ts` |
-| `meets/schedule/:name` | `GET /meets/schedule/{encoded-name}` | `bench-meet-schedule.ts` |
-| `meets/athletes/:name` | `GET /meets/athletes/{encoded-name}` | `bench-meet-athletes.ts` |
-
-Use `BENCH_MEET_NAME` (`meets/:name`), `BENCH_SCHEDULE_MEET_NAME`, or `BENCH_ATHLETES_MEET_NAME` when defaults are wrong.
-
-## Scripts (keep only these)
-
-| Script | Purpose |
-| --- | --- |
-| `performance/scripts/run-benchmarks.sh` | Single entry point: Rust HTTP median + RN bench + updates `results.md` + **Total (avg)** |
-| `meetcal-app/scripts/performance/bench-<route>.ts` | One RN bench file per route |
-
-Do **not** add separate Rust curl scripts, one-off runners, or duplicate orchestrators. Rust timing lives inside `run-benchmarks.sh`.
-
-## Clean up after each benchmark run
-
-- **Delete** any temporary bench scripts you created only to debug a single run (scratch files, copied `bench-*.ts`, extra shell wrappers).
-- **Do not** leave standalone `bench-rust.sh`-style helpers; use `run-benchmarks.sh` only.
-- **Keep** `bench-<route>.ts` files that are registered in `run-benchmarks.sh` and have a row in `results.md`.
-- **Remove** `bench-<route>.ts` when the route is removed or renamed (and drop the `case` + table row; re-run any remaining route so the total recalculates).
-- **Do not** commit server logs, `.env` copies, or raw curl output under `performance/`.
+- [ ] Traced screen → fetch module → any inline screen logic (`useMemo`, stats helpers)
+- [ ] RN bench uses **same** Convex function(s) as the app (not the Rust function if they differ)
+- [ ] Includes client transforms after fetch
+- [ ] Includes final display shape (stats object, table rows, name list)
+- [ ] Runs under Bun: `cd meetcal-app && bun scripts/performance/bench-<route>.ts` prints one median number
 
 ## Environment
 
-- Rust: `meetcal-backend/.env` → `CONVEX_URL`
-- Rust HTTP: **`cargo run --release`** only (never debug for recorded numbers)
-- Rust curl: **`Accept-Encoding: gzip, br`** + `--compressed` (same as real `fetch` clients)
-- RN bench: same URL via `CONVEX_URL` or `EXPO_PUBLIC_CONVEX_URL`
-- Default: 25 iterations, 1 warmup; report **median** ms
-- `all` — runs every route in one session on one release server
+- `meetcal-backend/.env` → `CONVEX_URL` (loaded by `convex-http.ts` and Rust)
+- Rust: **`cargo run --release`** only; curl uses `Accept-Encoding: gzip, br`
+- RN: `bun scripts/performance/bench-*.ts` from `meetcal-app`
+- Defaults: `ITERATIONS=25`, `WARMUP=1`, median ms
+- `BENCH_MANAGE_SERVER=0` if release server already on port 3000
 
-## Table columns
+## `results.md` columns
 
 | Column | Meaning |
 | --- | --- |
-| **Rust (ms)** | Median HTTP latency for the Rust route |
-| **RN client path (ms)** | Median full in-app path (not Convex-only) |
-| **Rust vs RN %** | `((rust_ms - rn_ms) / rn_ms) * 100` — negative = Rust faster |
-| **User noticeable** | Whether the delta is likely perceptible in the app (see below) |
+| **Rust (ms)** | Median HTTP latency |
+| **RN client path (ms)** | Median full `client-paths` work |
+| **Rust vs RN %** | `((rust - rn) / rn) * 100` — negative = Rust faster |
+| **User noticeable** | Auto: Yes only if **both** ≥100 ms delta **and** ≥25% relative |
 
-### Total (avg) row
+**Total (avg)** — mean across all route rows; recomputed every `run-benchmarks.sh` run.
 
-On **every** `run-benchmarks.sh` invocation, the script:
+Remove stale route rows (old path-style ids like `meets/:name`) when URLs change; re-run `all` so the total stays correct.
 
-- Updates the benchmarked route row (insert or replace).
-- Recomputes **`Total (avg)`** at the bottom: arithmetic mean of Rust (ms), RN client path (ms), and Rust vs RN % over all route rows (excluding the total).
-- Applies the same noticeable rules to the averaged values.
+## Clean up
 
-Small per-route wins still matter for product speed; the total row tracks aggregate Rust vs RN across all benchmarked endpoints.
-
-## User noticeable column
-
-Set automatically by `run-benchmarks.sh`:
-
-- **No** — absolute delta `< 100 ms` **or** `|rust vs rn %| < 25` (either alone is fine)
-- **Yes** — **both** ≥100 ms slower/faster **and** ≥25% relative change (avoids flagging tiny ms gaps on fast endpoints)
-
-Tune thresholds here if product expectations change; re-run all route ids after changing thresholds so route rows and the total stay in sync.
+- Delete scratch/debug scripts after a run
+- Keep registered `bench-*.ts` + matching `client-paths/*.ts`
+- Remove both when a route is deleted; re-run `all` for total
+- Do not commit logs or raw curl output under `performance/`

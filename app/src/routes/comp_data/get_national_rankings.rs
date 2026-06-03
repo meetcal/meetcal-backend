@@ -24,8 +24,25 @@ pub struct NatRankings {
 ///
 /// curl 'http://localhost:3000/nat-rankings?ageCategory=Open%20Men%27s%2060kg&federation=USAW' | jq .
 ///
-/// TODO:
 /// Age Categories:
+///  "Men's 11 Under Age Group 32kg",
+///  "Women's 11 Under Age Group 30kg",
+///  "Men's 13 Under Age Group 32kg",
+///  "Women's 13 Under Age Group 30kg",
+///  "Men's 14-15 Age Group 48kg",
+///  "Women's 14-15 Age Group 40kg",
+///  "Men's 16-17 Age Group 56kg",
+///  "Junior Men's 110+kg",
+///  "Junior Women's 48kg",
+///  "Open Men's 110+kg",
+///  "Open Women's 48kg",
+///  "Men's Masters (35-39) 110+kg",
+///  "Women's Masters (35-39) 53kg",
+///  "Men's Masters (40-44) 110+kg",
+///  "Men's Masters (45-49) 110+kg",
+///  "Men's Masters (50-54) 110+kg",
+///  ...
+///  "Men's Masters (80-84) 94kg",
 /// Federations: USAW, USAMW
 ///
 /// This endpoint takes federation and age category and returns national rankings for a weight_class

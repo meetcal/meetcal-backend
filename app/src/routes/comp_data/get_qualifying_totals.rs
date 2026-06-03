@@ -31,10 +31,9 @@ pub struct QualifyingTotal {
 ///
 /// This endpoint takes event name, gender, and age category and returns qualifying totals
 ///
-/// TODO:
-/// Names:
+/// Names: Virus Series, Virus Finals, Nationals, Master's Pan Ams, IMWA Worlds
 /// Genders: Men, Women
-/// Age Categories:
+/// Age Categories: U11, U13, U15, U17, Youth, Junior, University, U25, Senior, Masters 35, Masters 40, ..., Masters 90
 ///
 /// {
 ///   "rows": [

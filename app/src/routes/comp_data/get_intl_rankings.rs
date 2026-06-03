@@ -33,10 +33,9 @@ pub struct IntlRanking {
 ///
 /// This endpoint takes meet, gender, and age category and returns international rankings
 ///
-/// TODO:
-/// Meets:
+/// Meets: Pan Ams, Worlds
 /// Genders: Men, Women
-/// Age Categories:
+/// Age Categories: U15, U17, Youth, Junior, University, Senior
 ///
 /// {
 ///   "rankings": [

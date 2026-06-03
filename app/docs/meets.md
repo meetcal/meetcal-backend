@@ -130,28 +130,3 @@
 
 1. Call Convex query.
 2. App derives max snatch/CJ/total client-side.
-
----
-
-## `GET /athletes/search`
-
-**Why:** Autocomplete athlete names (Wrapped search, 4+ chars).
-
-**App usage:** `searchAthletesByName`, `weightlifting-wrapped.tsx`
-
-**Auth:** None
-
-**Convex:** `athletes.searchByName` · `query` · `{ query: string }`
-
-**Query params:** `q` — search string (min 4 chars in app)
-
-**Response:** `200`
-
-```json
-{ "names": ["Jane Doe", "Jane Smith"] }
-```
-
-**Steps:**
-
-1. Call Convex query with `q` as `query` arg.
-2. App applies additional word-filter client-side.
