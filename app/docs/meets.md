@@ -18,21 +18,21 @@
 {
   "athletes": [
     {
-      "memberId": "12345",
+      "member_id": "12345",
       "name": "Jane Doe",
       "age": 28,
       "club": "ABC Weightlifting",
       "wso": "Mountain South",
       "gender": "Women",
-      "weightClass": "71kg",
-      "entryTotal": 180,
+      "weight_class": "71kg",
+      "entry_total": 180,
       "adaptive": false,
-      "sessionNumber": 3,
-      "sessionPlatform": "Red",
-      "scheduleRow": {
+      "session_number": 3,
+      "session_platform": "Red",
+      "schedule_row": {
         "date": "2025-05-31",
-        "startTime": "10:00",
-        "weighInTime": "08:00",
+        "start_time": "10:00",
+        "weigh_in_time": "08:00",
         "platform": "Red"
       }
     }
@@ -61,7 +61,7 @@
 
 **Steps:**
 
-1. Call Convex query; map camelCase → app snake_case if needed.
+1. Call Convex query; map Convex fields to API snake_case if needed.
 
 ---
 

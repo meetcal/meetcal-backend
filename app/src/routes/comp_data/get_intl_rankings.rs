@@ -1,21 +1,17 @@
-use crate::common::query_convex::get_convex_response;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::{Query, State};
-use convex::Value;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use sqlx::prelude::FromRow;
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct IntlRankingsParams {
     pub meet: String,
     pub gender: String,
     pub age_category: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct IntlRanking {
     pub meet: String,
     pub ranking: f64,
@@ -29,7 +25,7 @@ pub struct IntlRanking {
 
 /// /intl-rankings endpoint
 ///
-/// curl 'http://localhost:3000/intl-rankings?meet=Worlds&gender=Women&ageCategory=Junior' | jq .
+/// curl 'http://localhost:3000/intl-rankings?meet=Worlds&gender=Women&age_category=Junior' | jq .
 ///
 /// This endpoint takes meet, gender, and age category and returns international rankings
 ///
@@ -37,31 +33,37 @@ pub struct IntlRanking {
 /// Genders: Men, Women
 /// Age Categories: U15, U17, Youth, Junior, University, Senior
 ///
-/// {
-///   "rankings": [
-///     {
-///       "meet": "Worlds",
-///       "ranking": 1.0,
-///       "name": "Ella Nicholson",
-///       "weightClass": "77",
-///       "total": 245.0,
-///       "percentA": 114.49,
-///       "gender": "Women",
-///       "ageCategory": "Junior"
-///     }
-///   ]
-/// }
+/// [
+///   {
+///     "meet": "Worlds",
+///     "ranking": 1.0,
+///     "name": "Ella Nicholson",
+///     "weight_class": "77",
+///     "total": 245.0,
+///     "percent_a": 114.49,
+///     "gender": "Women",
+///     "age_category": "Junior"
+///   }
+/// ]
 pub async fn get_intl_rankings(
     State(state): State<AppState>,
     Query(params): Query<IntlRankingsParams>,
 ) -> Result<Json<Vec<IntlRanking>>, AppError> {
-    let mut args = BTreeMap::new();
-    args.insert("meet".to_string(), Value::from(params.meet));
-    args.insert("gender".to_string(), Value::from(params.gender));
-    args.insert("ageCategory".to_string(), Value::from(params.age_category));
+    let rows = sqlx::query_as::<_, IntlRanking>(
+        r#"
+        SELECT meet, ranking, name, weight_class, total, percent_a, gender, age_category
+        FROM intl_rankings
+        WHERE meet = $1
+            AND gender = $2
+            AND age_category = $3
+        ORDER BY ranking desc
+        "#,
+    )
+    .bind(params.meet)
+    .bind(params.gender)
+    .bind(params.age_category)
+    .fetch_all(&state.db)
+    .await?;
 
-    let response: Vec<IntlRanking> =
-        get_convex_response(&state.convex, "intlRankings:getFiltered", args).await?;
-
-    Ok(Json(response))
+    Ok(Json(rows))
 }

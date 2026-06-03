@@ -1,12 +1,9 @@
-use crate::common::query_convex::get_convex_response;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct WsoNames {
     pub wsos: Vec<String>,
 }
@@ -43,10 +40,17 @@ pub struct WsoNames {
 ///  ]
 /// }
 pub async fn get_wso_list(State(state): State<AppState>) -> Result<Json<WsoNames>, AppError> {
-    let mut response: Vec<String> =
-        get_convex_response(&state.convex, "wsoRecords:listWsos", BTreeMap::new()).await?;
+    let rows: Vec<(String,)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT wso
+        FROM wso_records
+        ORDER BY wso
+        "#,
+    )
+    .fetch_all(&state.db)
+    .await?;
 
-    response.sort();
-
-    Ok(Json(WsoNames { wsos: response }))
+    Ok(Json(WsoNames {
+        wsos: rows.into_iter().map(|(wso,)| wso).collect(),
+    }))
 }

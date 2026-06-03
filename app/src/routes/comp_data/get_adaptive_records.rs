@@ -1,35 +1,20 @@
-use crate::common::query_convex::get_convex_response;
 use crate::common::sort::sort_by_class;
-use crate::routes::comp_data::types::LiftingResults;
+use crate::routes::results::types::LiftingResults;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::{Query, State};
-use convex::Value;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AdaptiveRecordsParams {
     pub exclude_federation: String,
     pub gender: String,
 }
 
-// #[derive(Debug, Deserialize, Serialize)]
-// #[serde(rename_all = "camelCase")]
-// pub struct AdaptiveRecords {
-//     pub body_weight: f64,
-//     pub age: String,
-//     pub date: String,
-//     pub snatch_best: f64,
-//     pub cj_best: f64,
-//     pub total: f64,
-// }
-
 #[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct AdaptiveRecords {
     pub weight_class: String,
     pub snatch: f64,
@@ -44,7 +29,7 @@ static WEIGHT_CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(\d+\
 
 /// /adaptive endpoint
 ///
-/// curl 'http://localhost:3000/adaptive?excludeFederation=BWL&gender=Men' | jq .
+/// curl 'http://localhost:3000/adaptive?exclude_federation=BWL&gender=Men' | jq .
 ///
 /// Params:
 /// Federations: USAW, USAMW, BWL
@@ -54,7 +39,7 @@ static WEIGHT_CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(\d+\
 ///
 /// [
 ///  {
-///    "weightClass": "85",
+///    "weight_class": "85",
 ///    "snatch": 40.0,
 ///    "cj": 50.0,
 ///    "total": 90.0
@@ -64,20 +49,38 @@ pub async fn get_adaptive_records(
     State(state): State<AppState>,
     Query(params): Query<AdaptiveRecordsParams>,
 ) -> Result<Json<Vec<AdaptiveRecords>>, AppError> {
-    let mut args = BTreeMap::new();
-    args.insert(
-        "excludeFederation".to_string(),
-        Value::from(params.exclude_federation),
-    );
+    let rows = sqlx::query_as::<_, LiftingResults>(
+        r#"
+        SELECT
+            COALESCE(federation, '') AS federation,
+            meet,
+            date,
+            name,
+            COALESCE(age, '') AS age,
+            COALESCE(body_weight, 0) AS body_weight,
+            COALESCE(snatch1, 0) AS snatch1,
+            COALESCE(snatch2, 0) AS snatch2,
+            COALESCE(snatch3, 0) AS snatch3,
+            COALESCE(snatch_best, 0) AS snatch_best,
+            COALESCE(cj1, 0) AS cj1,
+            COALESCE(cj2, 0) AS cj2,
+            COALESCE(cj3, 0) AS cj3,
+            COALESCE(cj_best, 0) AS cj_best,
+            COALESCE(total, 0) AS total,
+            adaptive
+        FROM lifting_results
+        WHERE adaptive = true
+            AND (federation IS NULL OR federation <> $1)
+        "#,
+    )
+    .bind(&params.exclude_federation)
+    .fetch_all(&state.db)
+    .await?;
 
     let gender = params.gender;
-
-    let response: Vec<LiftingResults> =
-        get_convex_response(&state.convex, "liftingResults:getAdaptive", args).await?;
-
     let mut records: HashMap<String, AdaptiveRecords> = HashMap::new();
 
-    let filtered = response
+    let filtered = rows
         .iter()
         .filter(|g| extract_gender(g.age.as_str(), gender.as_str()))
         .filter(|y| extract_year(y.date.as_str()) >= 2026);

@@ -1,9 +1,7 @@
-use crate::common::query_convex::get_convex_response;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Clubs {
@@ -29,8 +27,18 @@ pub struct Clubs {
 ///    "ALPHA BARBELL",
 /// ]
 pub async fn get_all_clubs(State(state): State<AppState>) -> Result<Json<Clubs>, AppError> {
-    let response: Vec<String> =
-        get_convex_response(&state.convex, "athletes:listClubs", BTreeMap::new()).await?;
+    let names: Vec<(String,)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT club
+        FROM athletes
+        WHERE club IS NOT NULL AND club <> ''
+        ORDER BY club
+        "#,
+    )
+    .fetch_all(&state.db)
+    .await?;
 
-    Ok(Json(Clubs { names: response }))
+    Ok(Json(Clubs {
+        names: names.into_iter().map(|(club,)| club).collect(),
+    }))
 }

@@ -1,21 +1,17 @@
-use crate::common::query_convex::get_convex_response;
 use crate::common::sort::sort_by_class;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::{Query, State};
-use convex::Value;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use sqlx::prelude::FromRow;
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct StandardParams {
     pub age_category: String,
     pub gender: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct Standard {
     pub age_category: String,
     pub gender: String,
@@ -26,40 +22,39 @@ pub struct Standard {
 
 /// /standards endpoint
 ///
-/// curl 'http://localhost:3000/standards?gender=men&ageCategory=senior' | jq .
+/// curl 'http://localhost:3000/standards?gender=Men&age_category=Senior' | jq .
 ///
 /// This endpoint takes gender and age category and returns standards
 ///
-/// Genders: men, women
-/// Age Categories: u15, u17, youth, junior, senior
+/// Genders: Men, Women
+/// Age Categories: U15, U17, Youth, Junior, Senior
 ///
 /// [
 ///  {
-///    "ageCategory": "senior",
-///    "gender": "men",
-///    "standardA": 281.0,
-///    "standardB": 267.0,
-///    "weightClass": "60kg"
+///    "age_category": "Senior",
+///    "gender": "Men",
+///    "standard_a": 281.0,
+///    "standard_b": 267.0,
+///    "weight_class": "60kg"
 ///  },
 /// ]
 pub async fn get_standards(
     State(state): State<AppState>,
-    Query(record): Query<StandardParams>,
+    Query(params): Query<StandardParams>,
 ) -> Result<Json<Vec<Standard>>, AppError> {
-    let mut args = BTreeMap::new();
-    args.insert(
-        "ageCategory".to_string(),
-        Value::from(record.age_category.to_lowercase()),
-    );
-    args.insert(
-        "gender".to_string(),
-        Value::from(record.gender.to_lowercase()),
-    );
+    let rows = sqlx::query_as::<_, Standard>(
+        r#"
+        SELECT age_category, gender, standard_a, standard_b, weight_class
+        FROM standards
+        WHERE gender = $1 AND age_category = $2
+        "#,
+    )
+    .bind(params.gender)
+    .bind(params.age_category)
+    .fetch_all(&state.db)
+    .await?;
 
-    let response: Vec<Standard> =
-        get_convex_response(&state.convex, "standards:getFiltered", args).await?;
-
-    let sorted = sort_by_class(response, |r| r.weight_class.as_str());
+    let sorted = sort_by_class(rows, |r| r.weight_class.as_str());
 
     Ok(Json(sorted))
 }

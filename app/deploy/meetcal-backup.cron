@@ -1,0 +1,1 @@
+0 3 * * * YOUR_LINUX_USER /home/YOUR_LINUX_USER/meetcal-backend/app/scripts/backup_db.sh >> /var/log/meetcal-backup.log 2>&1

@@ -1,22 +1,18 @@
-use crate::common::query_convex::get_convex_response;
 use crate::common::sort::sort_by_class;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::{Query, State};
-use convex::Value;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use sqlx::prelude::FromRow;
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct WsoRecordParams {
     pub age_category: String,
     pub gender: String,
     pub wso: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct WsoRecord {
     pub age_category: String,
     pub cj_record: f64,
@@ -26,9 +22,10 @@ pub struct WsoRecord {
     pub weight_class: String,
     pub wso: String,
 }
-/// /wso-records/{name} endpoint
+
+/// /wso-records endpoint
 ///
-/// curl 'http://localhost:3000/wso-records?wso=Carolina&gender=Men&ageCategory=Senior' | jq .
+/// curl 'http://localhost:3000/wso-records?wso=Carolina&gender=Men&age_category=Senior' | jq .
 ///
 /// This endpoint takes gender, wso, and age category and returns wso records
 ///
@@ -56,12 +53,12 @@ pub struct WsoRecord {
 ///
 /// [
 ///  {
-///    "ageCategory": "Senior",
-///    "cjRecord": 124.0,
+///    "age_category": "Senior",
+///    "cj_record": 124.0,
 ///    "gender": "Men",
-///    "snatchRecord": 101.0,
-///    "totalRecord": 225.0,
-///    "weightClass": "60",
+///    "snatch_record": 101.0,
+///    "total_record": 225.0,
+///    "weight_class": "60",
 ///    "wso": "Florida"
 ///  },
 /// ]
@@ -69,15 +66,22 @@ pub async fn get_wso_records(
     State(state): State<AppState>,
     Query(params): Query<WsoRecordParams>,
 ) -> Result<Json<Vec<WsoRecord>>, AppError> {
-    let mut args = BTreeMap::new();
-    args.insert("wso".to_string(), Value::from(params.wso));
-    args.insert("ageCategory".to_string(), Value::from(params.age_category));
-    args.insert("gender".to_string(), Value::from(params.gender));
+    let rows = sqlx::query_as::<_, WsoRecord>(
+        r#"
+        SELECT age_category, cj_record, snatch_record, total_record, weight_class, gender, wso
+        FROM wso_records
+        WHERE age_category = $1
+            AND gender = $2
+            AND wso = $3
+        "#,
+    )
+    .bind(params.age_category)
+    .bind(params.gender)
+    .bind(params.wso)
+    .fetch_all(&state.db)
+    .await?;
 
-    let response: Vec<WsoRecord> =
-        get_convex_response(&state.convex, "wsoRecords:getByWso", args).await?;
-
-    let sorted = sort_by_class(response, |r| r.weight_class.as_str());
+    let sorted = sort_by_class(rows, |r| r.weight_class.as_str());
 
     Ok(Json(sorted))
 }

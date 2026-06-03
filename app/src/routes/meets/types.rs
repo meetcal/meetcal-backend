@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
+use sqlx::prelude::FromRow;
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct MeetsParams {
     pub meet: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct Meets {
+    pub federation: String,
     pub end_date: String,
     pub name: String,
     pub start_date: String,
@@ -20,8 +20,7 @@ pub struct Meets {
     pub venue_zip: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct MeetSchedule {
     pub date: String,
     pub meet: String,
@@ -32,8 +31,7 @@ pub struct MeetSchedule {
     pub weight_class: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct Athlete {
     pub adaptive: bool,
     pub age: f64,

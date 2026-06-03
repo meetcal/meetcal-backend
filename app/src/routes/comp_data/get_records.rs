@@ -1,22 +1,18 @@
-use crate::common::query_convex::get_convex_response;
 use crate::common::sort::sort_by_class;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::{Query, State};
-use convex::Value;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use sqlx::prelude::FromRow;
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RecordParams {
     pub age_category: String,
     pub gender: String,
     pub record_type: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct Record {
     pub age_category: String,
     pub gender: String,
@@ -29,47 +25,45 @@ pub struct Record {
 
 /// /records endpoint
 ///
-/// curl 'http://localhost:3000/records?recordType=USAW&gender=men&ageCategory=senior' | jq .
+/// curl 'http://localhost:3000/records?record_type=USAW&gender=Men&age_category=Senior' | jq .
 ///
 /// This endpoint takes federation, gender, and age category and returns records
 ///
 /// Federations: USAW, USAMW, IWF, UMWF
-/// Genders: men, women
-/// Age Categories: u13, u15, u17, youth, junior, university, senior, Masters 35, Masters 40, ..., Masters 90
+/// Genders: Men, Women
+/// Age Categories: U13, U15, U17, Youth, Junior, University, Senior, Masters 35, Masters 40, ..., Masters 90
 ///
 /// [
 ///  {
-///    "ageCategory": "senior",
-///    "cjRecord": 185.0,
-///    "gender": "men",
-///    "recordType": "USAW",
-///    "snatchRecord": 147.0,
-///    "totalRecord": 339.0,
-///    "weightClass": "71kg"
+///    "age_category": "Senior",
+///    "cj_record": 185.0,
+///    "gender": "Men",
+///    "record_type": "USAW",
+///    "snatch_record": 147.0,
+///    "total_record": 339.0,
+///    "weight_class": "71kg"
 ///  },
 /// ]
 pub async fn get_records(
     State(state): State<AppState>,
-    Query(record): Query<RecordParams>,
+    Query(param): Query<RecordParams>,
 ) -> Result<Json<Vec<Record>>, AppError> {
-    let mut args = BTreeMap::new();
-    args.insert(
-        "ageCategory".to_string(),
-        Value::from(record.age_category.to_lowercase()),
-    );
-    args.insert(
-        "gender".to_string(),
-        Value::from(record.gender.to_lowercase()),
-    );
-    args.insert(
-        "recordType".to_string(),
-        Value::from(record.record_type.to_uppercase()),
-    );
+    let rows = sqlx::query_as::<_, Record>(
+        r#"
+        SELECT age_category, cj_record, snatch_record, total_record, weight_class, gender, record_type
+        FROM records
+        WHERE record_type = $1
+            AND gender = $2
+            AND age_category = $3
+        "#,
+    )
+    .bind(param.record_type)
+    .bind(param.gender)
+    .bind(param.age_category)
+    .fetch_all(&state.db)
+    .await?;
 
-    let response: Vec<Record> =
-        get_convex_response(&state.convex, "records:getByFederation", args).await?;
-
-    let sorted = sort_by_class(response, |r| r.weight_class.as_str());
+    let sorted = sort_by_class(rows, |r| r.weight_class.as_str());
 
     Ok(Json(sorted))
 }

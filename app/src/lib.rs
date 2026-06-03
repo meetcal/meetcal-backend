@@ -1,4 +1,5 @@
 pub mod common;
+pub mod configuration;
 pub mod error;
 pub mod routes;
 
@@ -9,7 +10,6 @@ use crate::routes::{
     results::search::search_wrapped,
 };
 use axum::{Router, routing::get};
-use convex::ConvexClient;
 pub use error::AppError;
 use routes::{
     clubs::get_all_clubs::get_all_clubs,
@@ -23,13 +23,14 @@ use routes::{
         get_meet_details::get_meet_details, get_meet_schedule::get_meet_schedule,
     },
 };
+use sqlx::PgPool;
 use std::path::PathBuf;
 use tokio::net::TcpListener;
 use tower_http::compression::CompressionLayer;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub convex: ConvexClient,
+    pub db: PgPool,
 }
 
 pub fn load_env() {
@@ -37,14 +38,7 @@ pub fn load_env() {
     dotenvy::from_path(env_path).expect("failed to load meetcal-backend/.env");
 }
 
-pub async fn run(listener: TcpListener) {
-    let convex_url =
-        std::env::var("CONVEX_URL").expect("CONVEX_URL must be set in meetcal-backend/.env");
-
-    let convex = ConvexClient::new(&convex_url)
-        .await
-        .expect("failed to connect to Convex");
-
+pub async fn run(listener: TcpListener, db: PgPool) {
     let app = Router::new()
         .route("/meets", get(list_meets_next_3months))
         .route("/meet-details", get(get_meet_details))
@@ -61,7 +55,7 @@ pub async fn run(listener: TcpListener) {
         .route("/adaptive", get(get_adaptive_records))
         .route("/search", get(search_wrapped))
         .layer(CompressionLayer::new())
-        .with_state(AppState { convex });
+        .with_state(AppState { db });
 
     axum::serve(listener, app).await.unwrap();
 }

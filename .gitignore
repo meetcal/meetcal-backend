@@ -1,4 +1,6 @@
 .env
+/app/src/configuration.local.yaml
 /app/target
+/app/backups
 /scraper/target
 Cargo.lock

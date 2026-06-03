@@ -1,16 +1,13 @@
 use crate::{
     AppError, AppState,
-    common::query_convex::get_convex_response,
     routes::meets::types::{Meets, MeetsParams},
 };
 use axum::{
     Json,
     extract::{Query, State},
 };
-use convex::Value;
-use std::collections::BTreeMap;
 
-/// /meets/{name} endpoint
+/// /meets-details endpoint
 ///
 /// curl 'localhost:3000/meet-details?meet=2026%20Ohio%20WSO%20Championships' | jq .
 ///
@@ -20,34 +17,41 @@ use std::collections::BTreeMap;
 /// Get meet names as they are listed by copying exact case-sensitive names from BARS
 ///
 /// {
-///   "endDate": "2026-08-16",
+///   "end_date": "2026-08-16",
 ///   "name": "2026 Ohio WSO Championships",
-///   "startDate": "2026-08-15",
-///   "timeZone": "America/New_York",
-///   "venueCity": "Columbus",
-///   "venueName": "2026 Ohio WSO Championships",
-///   "venueState": "OH",
-///   "venueStreet": "400 North High Street",
-///   "venueZip": "43215"
+///   "start_date": "2026-08-15",
+///   "time_zone": "America/New_York",
+///   "venue_city": "Columbus",
+///   "venue_name": "2026 Ohio WSO Championships",
+///   "venue_state": "OH",
+///   "venue_street": "400 North High Street",
+///   "venue_zip": "43215"
 /// }
 pub async fn get_meet_details(
     State(state): State<AppState>,
     Query(params): Query<MeetsParams>,
 ) -> Result<Json<Meets>, AppError> {
-    let mut args = BTreeMap::new();
-    args.insert("name".to_string(), Value::from(params.meet));
-
-    let response: Meets = get_convex_response(&state.convex, "meets:getByName", args).await?;
+    let rows = sqlx::query_as::<_, Meets>(
+        r#"
+        SELECT name, start_date::text as start_date, end_date::text as end_date, time_zone, venue_city, venue_state, venue_name, venue_street, venue_zip, federation
+        FROM meets
+        WHERE name = $1
+        "#,
+    )
+    .bind(params.meet)
+    .fetch_one(&state.db)
+    .await?;
 
     Ok(Json(Meets {
-        name: response.name,
-        start_date: response.start_date,
-        end_date: response.end_date,
-        time_zone: response.time_zone,
-        venue_city: response.venue_city,
-        venue_name: response.venue_name,
-        venue_state: response.venue_state,
-        venue_street: response.venue_street,
-        venue_zip: response.venue_zip,
+        name: rows.name,
+        federation: rows.federation,
+        start_date: rows.start_date,
+        end_date: rows.end_date,
+        time_zone: rows.time_zone,
+        venue_city: rows.venue_city,
+        venue_name: rows.venue_name,
+        venue_state: rows.venue_state,
+        venue_street: rows.venue_street,
+        venue_zip: rows.venue_zip,
     }))
 }

@@ -1,17 +1,14 @@
 use crate::{
-    AppError, AppState, common::query_convex::get_convex_response,
-    routes::comp_data::types::LiftingResults,
+    AppError, AppState,
+    routes::results::types::LiftingResults,
 };
 use axum::{
     Json,
     extract::{Query, State},
 };
-use convex::Value;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SearchParams {
     pub query: String,
     pub start_date: String,
@@ -21,10 +18,10 @@ pub struct SearchParams {
 /// /search endpoint
 ///
 /// gives all results for fully matched name for date range
-/// curl 'localhost:3000/search?query=Alexander%20Nordstrom&startDate=2025-01-01&endDate=2025-12-31' | jq .
+/// curl 'localhost:3000/search?query=Alexander%20Nordstrom&start_date=2025-01-01&end_date=2025-12-31' | jq .
 ///
 /// gives results for all athletes in range whose name matches characters of query
-/// curl 'localhost:3000/search?query=Alexan&startDate=2025-01-01&endDate=2025-12-31' | jq .
+/// curl 'localhost:3000/search?query=Alexan&start_date=2025-01-01&end_date=2025-12-31' | jq .
 ///
 /// This endpoint takes the the athletes name, start and end dates and returns their results for the
 /// time frame for their wrapped. If there is no exact match we fallback to matching characters in
@@ -37,15 +34,15 @@ pub struct SearchParams {
 ///    "date": "2025-08-31",
 ///    "name": "Alexander Nordstrom",
 ///    "age": "Open Men's 110kg",
-///    "bodyWeight": 100.35,
+///    "body_weight": 100.35,
 ///    "snatch1": 115.0,
 ///    "snatch2": 120.0,
 ///    "snatch3": 125.0,
-///    "snatchBest": 125.0,
+///    "snatch_best": 125.0,
 ///    "cj1": 145.0,
 ///    "cj2": 150.0,
 ///    "cj3": 155.0,
-///    "cjBest": 155.0,
+///    "cj_best": 155.0,
 ///    "total": 280.0,
 ///    "adaptive": false
 ///  }
@@ -59,41 +56,72 @@ pub async fn search_wrapped(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<Vec<LiftingResults>>, AppError> {
-    let end_date = params.end_date.clone();
-    let start_date = params.start_date.clone();
+    let exact = sqlx::query_as::<_, LiftingResults>(
+        r#"
+        SELECT
+            COALESCE(federation, '') AS federation,
+            meet,
+            date,
+            name,
+            COALESCE(age, '') AS age,
+            COALESCE(body_weight, 0) AS body_weight,
+            COALESCE(snatch1, 0) AS snatch1,
+            COALESCE(snatch2, 0) AS snatch2,
+            COALESCE(snatch3, 0) AS snatch3,
+            COALESCE(snatch_best, 0) AS snatch_best,
+            COALESCE(cj1, 0) AS cj1,
+            COALESCE(cj2, 0) AS cj2,
+            COALESCE(cj3, 0) AS cj3,
+            COALESCE(cj_best, 0) AS cj_best,
+            COALESCE(total, 0) AS total,
+            adaptive
+        FROM lifting_results
+        WHERE name = $1 AND date >= $2 AND date < $3
+        ORDER BY date DESC
+        "#,
+    )
+    .bind(&params.query)
+    .bind(&params.start_date)
+    .bind(&params.end_date)
+    .fetch_all(&state.db)
+    .await?;
 
-    let mut init_args = BTreeMap::new();
-    init_args.insert(
-        "names".to_string(),
-        Value::from(vec![Value::from(params.query.clone())]),
-    );
-
-    let mut fallback_args = BTreeMap::new();
-    fallback_args.insert("query".to_string(), Value::from(params.query.clone()));
-    fallback_args.insert(
-        "startDate".to_string(),
-        Value::from(params.start_date.clone()),
-    );
-    fallback_args.insert("endDate".to_string(), Value::from(params.end_date.clone()));
-
-    let response: Vec<LiftingResults> =
-        get_convex_response(&state.convex, "liftingResults:getByNames", init_args).await?;
-
-    let filtered = response
-        .into_iter()
-        .filter(|row| row.date < end_date && row.date >= start_date)
-        .collect::<Vec<LiftingResults>>();
-
-    if filtered.is_empty() {
-        let response: Vec<LiftingResults> = get_convex_response(
-            &state.convex,
-            "liftingResults:searchByNameAndYear",
-            fallback_args,
-        )
-        .await?;
-
-        Ok(Json(response))
-    } else {
-        Ok(Json(filtered))
+    if !exact.is_empty() {
+        return Ok(Json(exact));
     }
+
+    let pattern = format!("%{}%", params.query);
+
+    let fallback = sqlx::query_as::<_, LiftingResults>(
+        r#"
+        SELECT
+            COALESCE(federation, '') AS federation,
+            meet,
+            date,
+            name,
+            COALESCE(age, '') AS age,
+            COALESCE(body_weight, 0) AS body_weight,
+            COALESCE(snatch1, 0) AS snatch1,
+            COALESCE(snatch2, 0) AS snatch2,
+            COALESCE(snatch3, 0) AS snatch3,
+            COALESCE(snatch_best, 0) AS snatch_best,
+            COALESCE(cj1, 0) AS cj1,
+            COALESCE(cj2, 0) AS cj2,
+            COALESCE(cj3, 0) AS cj3,
+            COALESCE(cj_best, 0) AS cj_best,
+            COALESCE(total, 0) AS total,
+            adaptive
+        FROM lifting_results
+        WHERE name ILIKE $1 AND date >= $2 AND date < $3
+        ORDER BY date ASC
+        LIMIT 256
+        "#,
+    )
+    .bind(&pattern)
+    .bind(&params.start_date)
+    .bind(&params.end_date)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(fallback))
 }

@@ -1,14 +1,11 @@
 use crate::{
     AppError, AppState,
-    common::query_convex::get_convex_response,
     routes::meets::types::{Athlete, MeetsParams},
 };
 use axum::{
     Json,
     extract::{Query, State},
 };
-use convex::Value;
-use std::collections::BTreeMap;
 
 /// /meets/athletes/{name} endpoint
 ///
@@ -24,28 +21,33 @@ use std::collections::BTreeMap;
 ///    "adaptive": false,
 ///    "age": 27.0,
 ///    "club": "Vardanian Weightlifting",
-///    "entryTotal": 365.0,
+///    "entry_total": 365.0,
 ///    "gender": "Male",
 ///    "meet": "2026 USA Weightlifting National Championships, Powered by Rogue Fitness",
-///    "memberId": "1043909",
 ///    "name": "Kyle Schulman",
-///    "sessionNumber": 45.0,
-///    "sessionPlatform": "Red",
-///    "weightClass": "+110",
+///    "session_number": 45.0,
+///    "session_platform": "Red",
+///    "weight_class": "+110",
 ///    "wso": null
 ///  },
-///]
+/// ]
 pub async fn get_athletes_by_meet(
     State(state): State<AppState>,
     Query(params): Query<MeetsParams>,
 ) -> Result<Json<Vec<Athlete>>, AppError> {
-    let mut args = BTreeMap::new();
-    args.insert("meet".to_string(), Value::from(params.meet));
+    let mut rows = sqlx::query_as::<_, Athlete>(
+        r#"
+        SELECT adaptive, age, club, entry_total, gender, meet, name,
+               session_number, session_platform, weight_class, wso
+        FROM athletes
+        WHERE meet = $1
+        "#,
+    )
+    .bind(params.meet)
+    .fetch_all(&state.db)
+    .await?;
 
-    let mut response: Vec<Athlete> =
-        get_convex_response(&state.convex, "athletes:getByMeet", args).await?;
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
 
-    response.sort_by(|a, b| a.name.cmp(&b.name));
-
-    Ok(Json(response))
+    Ok(Json(rows))
 }

@@ -1,14 +1,11 @@
 use crate::{
     AppError, AppState,
-    common::query_convex::get_convex_response,
     routes::meets::types::{MeetSchedule, MeetsParams},
 };
 use axum::{
     Json,
     extract::{Query, State},
 };
-use convex::Value;
-use std::collections::BTreeMap;
 
 /// /meets/schedule/{name} endpoint
 ///
@@ -19,28 +16,33 @@ use std::collections::BTreeMap;
 ///
 /// Get meet names as they are listed by copying exact case-sensitive names from BARS
 ///
-///[
+/// [
 ///  {
 ///    "date": "2026-06-20",
 ///    "meet": "2026 USA Weightlifting National Championships, Powered by Rogue Fitness",
 ///    "platform": "Red",
-///    "sessionId": 1.0,
-///    "startTime": "08:00:00",
-///    "weighInTime": "06:00:00",
-///    "weightClass": "40kg B"
+///    "session_id": 1.0,
+///    "start_time": "08:00:00",
+///    "weigh_in_time": "06:00:00",
+///    "weight_class": "40kg B"
 ///  },
-///]
+/// ]
 pub async fn get_meet_schedule(
     State(state): State<AppState>,
     Query(params): Query<MeetsParams>,
 ) -> Result<Json<Vec<MeetSchedule>>, AppError> {
-    let mut args = BTreeMap::new();
-    args.insert("meet".to_string(), Value::from(params.meet));
+    let mut rows = sqlx::query_as::<_, MeetSchedule>(
+        r#"
+        SELECT date, meet, platform, session_id, start_time, weigh_in_time, weight_class
+        FROM session_schedule
+        WHERE meet = $1
+        "#,
+    )
+    .bind(params.meet)
+    .fetch_all(&state.db)
+    .await?;
 
-    let mut response: Vec<MeetSchedule> =
-        get_convex_response(&state.convex, "schedule:getByMeet", args).await?;
-
-    response.sort_by(|a, b| {
+    rows.sort_by(|a, b| {
         a.date
             .cmp(&b.date)
             .then_with(|| {
@@ -51,5 +53,5 @@ pub async fn get_meet_schedule(
             .then_with(|| a.platform.cmp(&b.platform))
     });
 
-    Ok(Json(response))
+    Ok(Json(rows))
 }

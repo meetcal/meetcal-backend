@@ -29,8 +29,8 @@ Aggregated endpoints that batch multiple Convex queries today.
       "meet": "2024 Nationals",
       "club": "ABC Weightlifting",
       "gender": "Women",
-      "weightClass": "71kg",
-      "entryTotal": 180
+      "weight_class": "71kg",
+      "entry_total": 180
     }
   ]
 }
