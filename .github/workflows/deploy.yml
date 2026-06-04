@@ -14,7 +14,7 @@ jobs:
       contents: read
       packages: write
     env:
-      IMAGE_BASE: ghcr.io/memohnsen/meetcal-backend/meetcal-api
+      IMAGE_BASE: ghcr.io/meetcal/meetcal-backend/meetcal-api
       DEPLOY_ROOT: /home/maddisen/dev/meetcal-llc/meetcal-backend
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:

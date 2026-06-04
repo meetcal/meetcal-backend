@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="${MEETCAL_BACKEND_ROOT:-/home/maddisen/dev/meetcal-llc/meetcal-backend}"
 ENV_FILE="${ENV_FILE:-${ROOT}/.env}"
-IMAGE="${IMAGE:-ghcr.io/memohnsen/meetcal-backend/meetcal-api:latest}"
+IMAGE="${IMAGE:-ghcr.io/meetcal/meetcal-backend/meetcal-api:latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-meetcal-api}"
 DOCKER_NETWORK="${DOCKER_NETWORK:-meetcal-monitoring}"
 APP_DIR="${APP_DIR:-${ROOT}/app}"
