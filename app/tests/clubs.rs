@@ -1,9 +1,10 @@
-use app::{common::spawn_server, routes::clubs::get_all_clubs::Clubs};
+use app::routes::clubs::get_all_clubs::Clubs;
+
+const API: &str = "https://api.meetcal.app";
 
 #[tokio::test]
 async fn success_get_all_clubs() {
-    let app = spawn_server::spawn_app().await;
-    let url = format!("{}/clubs", app.address);
+    let url = format!("{API}/clubs");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_eq!(response.status(), 200);
@@ -15,8 +16,7 @@ async fn success_get_all_clubs() {
 
 #[tokio::test]
 async fn fail_get_all_clubs() {
-    let app = spawn_server::spawn_app().await;
-    let url = format!("{}/club", app.address);
+    let url = format!("{API}/club");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_ne!(response.status(), 200);
