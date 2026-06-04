@@ -4,6 +4,7 @@ pub mod error;
 pub mod routes;
 
 use crate::routes::{
+    clubs::get_athletes_by_club::get_athletes_by_club,
     comp_data::{
         get_adaptive_records::get_adaptive_records, get_national_rankings::get_national_rankings,
     },
@@ -49,6 +50,7 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .route("/meets/schedule", get(get_meet_schedule))
         .route("/meets/athletes", get(get_athletes_by_meet))
         .route("/clubs", get(get_all_clubs))
+        .route("/clubs/athletes", get(get_athletes_by_club))
         .route("/data/records", get(get_records))
         .route("/data/wso/", get(get_wso_list))
         .route("/data/wso/records", get(get_wso_records))

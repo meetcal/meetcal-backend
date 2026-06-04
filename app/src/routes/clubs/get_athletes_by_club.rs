@@ -6,7 +6,6 @@ use sqlx::prelude::FromRow;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClubsAthletesParams {
-    pub meet: String,
     pub club: String,
 }
 
@@ -22,7 +21,7 @@ pub struct ClubsAthletes {
 
 /// /clubs/athletes endpoint
 ///
-/// curl 'https://api.meetcal.app/clubs/athletes?meet=2026%20Ohio%20WSO%20Championships&club=Columbus%Weightlifting' | jq .
+/// curl 'https://api.meetcal.app/clubs/athletes?&club=POWER%20AND%20GRACE%20PERFORMANCE%2E' | jq .
 ///
 /// This endpoint takes meet name and club name and returns athletes from club in the meet
 ///
@@ -38,7 +37,7 @@ pub struct ClubsAthletes {
 ///    }
 ///  ]
 /// }
-pub async fn get_all_clubs(
+pub async fn get_athletes_by_club(
     State(state): State<AppState>,
     Query(params): Query<ClubsAthletesParams>,
 ) -> Result<Json<Vec<ClubsAthletes>>, AppError> {
@@ -46,12 +45,14 @@ pub async fn get_all_clubs(
         r#"
         SELECT name, meet, club, gender, weight_class, entry_total
         FROM athletes
-        WHERE club = $1 AND meet = $2
+        WHERE club = $1
+            AND meet IN (
+                SELECT name FROM meets WHERE status = 'completed'
+            )
         ORDER BY name desc
         "#,
     )
     .bind(params.club)
-    .bind(params.meet)
     .fetch_all(&state.db)
     .await?;
 
