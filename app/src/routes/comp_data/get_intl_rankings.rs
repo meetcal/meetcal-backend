@@ -25,7 +25,7 @@ pub struct IntlRanking {
 
 /// /data/intl-rankings endpoint
 ///
-/// curl 'http://localhost:3000/data/intl-rankings?meet=Worlds&gender=Women&age_category=Junior' | jq .
+/// curl 'https://api.meetcal.app/data/intl-rankings?meet=Worlds&gender=Women&age_category=Junior' | jq .
 ///
 /// This endpoint takes meet, gender, and age category and returns international rankings
 ///

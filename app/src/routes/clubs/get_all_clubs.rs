@@ -10,7 +10,7 @@ pub struct Clubs {
 
 /// /meets endpoint
 ///
-/// curl 'localhost:3000/clubs' | jq .
+/// curl 'https://api.meetcal.app/clubs' | jq .
 ///
 /// This endpoint takes no input and returns a list of clubs in the db
 ///

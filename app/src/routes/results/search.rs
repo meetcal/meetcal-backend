@@ -15,10 +15,10 @@ pub struct SearchParams {
 /// /search endpoint
 ///
 /// gives all results for fully matched name for date range
-/// curl 'localhost:3000/search?query=Alexander%20Nordstrom&start_date=2025-01-01&end_date=2025-12-31' | jq .
+/// curl 'https://api.meetcal.app/search?query=Alexander%20Nordstrom&start_date=2025-01-01&end_date=2025-12-31' | jq .
 ///
 /// gives results for all athletes in range whose name matches characters of query
-/// curl 'localhost:3000/search?query=Alexan&start_date=2025-01-01&end_date=2025-12-31' | jq .
+/// curl 'https://api.meetcal.app/search?query=Alexan&start_date=2025-01-01&end_date=2025-12-31' | jq .
 ///
 /// This endpoint takes the the athletes name, start and end dates and returns their results for the
 /// time frame for their wrapped. If there is no exact match we fallback to matching characters in

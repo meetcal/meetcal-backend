@@ -25,7 +25,7 @@ pub struct WsoRecord {
 
 /// /data/wso/records endpoint
 ///
-/// curl 'http://localhost:3000/data/wso/records?wso=Carolina&gender=Men&age_category=Senior' | jq .
+/// curl 'https://api.meetcal.app/data/wso/records?wso=Carolina&gender=Men&age_category=Senior' | jq .
 ///
 /// This endpoint takes gender, wso, and age category and returns wso records
 ///

@@ -16,7 +16,7 @@ struct MeetName {
 
 /// /meets endpoint
 ///
-/// curl 'localhost:3000/meets' | jq .
+/// curl 'https://api.meetcal.app/meets' | jq .
 ///
 /// This endpoint takes no input and returns a list of meets in the db in the next 3 months sorted
 /// by earlist to latest

@@ -25,7 +25,7 @@ pub struct Record {
 
 /// /data/records endpoint
 ///
-/// curl 'http://localhost:3000/data/records?record_type=USAW&gender=Men&age_category=Senior' | jq .
+/// curl 'https://api.meetcal.app/data/records?record_type=USAW&gender=Men&age_category=Senior' | jq .
 ///
 /// This endpoint takes federation, gender, and age category and returns records
 ///

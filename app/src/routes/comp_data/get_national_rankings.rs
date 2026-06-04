@@ -19,7 +19,7 @@ pub struct NatRankings {
 
 /// /data/nat-rankings endpoint
 ///
-/// curl 'http://localhost:3000/data/nat-rankings?age_category=Open%20Men%27s%2060kg&federation=USAW' | jq .
+/// curl 'https://api.meetcal.app/data/nat-rankings?age_category=Open%20Men%27s%2060kg&federation=USAW' | jq .
 ///
 /// Age Categories:
 ///  "Men's 11 Under Age Group 32kg",

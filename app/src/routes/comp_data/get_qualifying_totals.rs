@@ -23,7 +23,7 @@ pub struct QualifyingTotal {
 
 /// /data/qualifying-totals endpoint
 ///
-/// curl 'http://localhost:3000/data/qualifying-totals?event_name=Nationals&gender=Men&age_category=Senior' | jq .
+/// curl 'https://api.meetcal.app/data/qualifying-totals?event_name=Nationals&gender=Men&age_category=Senior' | jq .
 ///
 /// This endpoint takes event name, gender, and age category and returns qualifying totals
 ///

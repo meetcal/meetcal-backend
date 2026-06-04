@@ -9,7 +9,7 @@ use axum::{
 
 /// /meets/details endpoint
 ///
-/// curl 'localhost:3000/meets/details?meet=2026%20Ohio%20WSO%20Championships' | jq .
+/// curl 'https://api.meetcal.app/meets/details?meet=2026%20Ohio%20WSO%20Championships' | jq .
 ///
 /// This endpoint takes the name of the meet exactly as it shows in BARS and returns the details of
 /// the meet

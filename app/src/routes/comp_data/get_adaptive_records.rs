@@ -29,7 +29,7 @@ static WEIGHT_CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(\d+\
 
 /// /data/adaptive endpoint
 ///
-/// curl 'http://localhost:3000/data/adaptive?exclude_federation=BWL&gender=Men' | jq .
+/// curl 'https://api.meetcal.app/data/adaptive?exclude_federation=BWL&gender=Men' | jq .
 ///
 /// Params:
 /// Federations: USAW, USAMW, BWL

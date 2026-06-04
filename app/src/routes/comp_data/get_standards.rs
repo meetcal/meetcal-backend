@@ -22,7 +22,7 @@ pub struct Standard {
 
 /// /data/standards endpoint
 ///
-/// curl 'http://localhost:3000/data/standards?gender=Men&age_category=Senior' | jq .
+/// curl 'https://api.meetcal.app/data/standards?gender=Men&age_category=Senior' | jq .
 ///
 /// This endpoint takes gender and age category and returns standards
 ///

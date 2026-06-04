@@ -9,7 +9,7 @@ use axum::{
 
 /// /meets/athletes/{name} endpoint
 ///
-/// curl 'localhost:3000/meets/athletes?meet=2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness' | jq .
+/// curl 'https://api.meetcal.app/meets/athletes?meet=2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness' | jq .
 ///
 /// This endpoint takes the name of the meet exactly as it shows in BARS and returns the athletes in
 /// the meet

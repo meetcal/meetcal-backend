@@ -10,7 +10,7 @@ pub struct WsoNames {
 
 /// /data/wso/ endpoint
 ///
-/// curl 'http://localhost:3000/data/wso/' | jq .
+/// curl 'https://api.meetcal.app/data/wso/' | jq .
 ///
 /// This endpoint takes nothing and returns a list of wsos
 ///
