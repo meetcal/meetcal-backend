@@ -23,7 +23,7 @@ pub struct ClubsAthletes {
 ///
 /// curl 'https://api.meetcal.app/clubs/athletes?&club=POWER%20AND%20GRACE%20PERFORMANCE%2E' | jq .
 ///
-/// This endpoint takes meet name and club name and returns athletes from club in the meet
+/// This endpoint takes club name and returns athletes from club in the completed meets
 ///
 /// {
 ///  "athletes": [
