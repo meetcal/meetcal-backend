@@ -33,13 +33,20 @@ scripts/backup_db.sh
 
 ## Uptime Kuma
 
-Create a Push monitor in Uptime Kuma and copy its Push URL into the repo root `.env`:
+**Postgres backup:** create a **Push** monitor and set in `.env`:
 
 ```bash
-UPTIME_KUMA_PUSH_URL="http://your-kuma-host:3001/api/push/your-monitor-token"
+UPTIME_KUMA_PUSH_URL="http://127.0.0.1:3001/api/push/your-backup-monitor-token"
 ```
 
-If Kuma gives you a longer generated URL with `?status=up&msg=OK&ping=`, either form works. The backup script strips the query string and sends its own success or failure status.
+`backup_db.sh` pings it after each run. If Kuma gives a longer URL with `?status=up&msg=OK&ping=`, either form works; the script strips the query and sends its own status.
+
+**MeetCal API:** create an **HTTP(s)** monitor (not Push) in Uptime Kuma:
+
+- URL: `http://meetcal-api:3000/health` (Kuma and the API container share the `meetcal-monitoring` Docker network)
+- Expected status: `200`
+
+Public check (optional): `https://api.meetcal.app/health`
 
 ## Restore Test
 
