@@ -1,0 +1,8 @@
+.git/
+.env
+*.env
+*.log
+backups/
+docs/
+target/
+src/configuration.local.yaml

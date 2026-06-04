@@ -35,7 +35,9 @@ pub struct AppState {
 
 pub fn load_env() {
     let env_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.env");
-    dotenvy::from_path(env_path).expect("failed to load meetcal-backend/.env");
+    if env_path.exists() {
+        dotenvy::from_path(env_path).expect("failed to load meetcal-backend/.env");
+    }
 }
 
 pub async fn run(listener: TcpListener, db: PgPool) {

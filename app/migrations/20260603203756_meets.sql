@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS meets (
 
     time_zone TEXT NOT NULL,
 
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at BIGINT NOT NULL,
 
     venue_name TEXT NOT NULL,
     venue_street TEXT NOT NULL,

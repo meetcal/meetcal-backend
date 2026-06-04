@@ -1,3 +1,5 @@
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 CREATE TABLE IF NOT EXISTS lifting_results (
     id BIGSERIAL PRIMARY KEY,
     convex_id TEXT NOT NULL UNIQUE,
@@ -24,6 +26,9 @@ CREATE TABLE IF NOT EXISTS lifting_results (
 
 CREATE INDEX IF NOT EXISTS idx_lifting_results_name
     ON lifting_results (name);
+
+CREATE INDEX IF NOT EXISTS idx_lifting_results_name_trgm
+    ON lifting_results USING GIN (name gin_trgm_ops);
 
 CREATE INDEX IF NOT EXISTS idx_lifting_results_meet
     ON lifting_results (meet);

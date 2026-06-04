@@ -17,7 +17,7 @@ async fn main() {
     .await
     .expect("Failed to connect to postgres");
 
-    let address = format!("127.0.0.1:{:?}", config.application_port);
+    let address = format!("{}:{}", config.application_host, config.application_port);
     let listener = TcpListener::bind(address).await.unwrap();
     run(listener, connection).await;
 }

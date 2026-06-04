@@ -71,12 +71,12 @@ CREATE TABLE IF NOT EXISTS saved_sessions (
     notes TEXT,
     athlete_names TEXT[],
     date TEXT,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at BIGINT NOT NULL,
+
+    UNIQUE (session_id, user_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_saved_sessions_user_id ON saved_sessions (user_id);
-CREATE INDEX IF NOT EXISTS idx_saved_sessions_session_user
-    ON saved_sessions (session_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_saved_sessions_date ON saved_sessions (date);
 
 CREATE TABLE IF NOT EXISTS user_preferences (
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 
     user_id TEXT NOT NULL UNIQUE,
     auto_unsave_started_sessions BOOLEAN NOT NULL DEFAULT FALSE,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_preferences_user_id ON user_preferences (user_id);

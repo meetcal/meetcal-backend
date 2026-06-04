@@ -1,1 +1,2 @@
-0 3 * * * YOUR_LINUX_USER /home/YOUR_LINUX_USER/meetcal-backend/app/scripts/backup_db.sh >> /var/log/meetcal-backup.log 2>&1
+# Nightly Postgres dump to local disk and, when R2_BUCKET is set, Cloudflare R2.
+0 3 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/app/scripts/backup_db.sh >> /home/maddisen/dev/meetcal-llc/meetcal-backend/app/backups/meetcal-backup.log 2>&1

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 #[derive(Deserialize)]
 pub struct Settings {
     pub database: DatabaseSettings,
+    pub application_host: String,
     pub application_port: u16,
 }
 
@@ -19,7 +20,9 @@ pub struct DatabaseSettings {
 }
 
 pub fn get_configuration() -> Result<Settings, config::ConfigError> {
-    let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let config_dir = std::env::var("APP_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"));
 
     Config::builder()
         .add_source(File::from(config_dir.join("configuration.yaml")))
@@ -50,7 +53,11 @@ impl DatabaseSettings {
         let password = self.password()?;
         Ok(format!(
             "postgres://{}:{}@{}:{}/{}",
-            self.username, password, self.host, self.port, self.database_name
+            percent_encode(&self.username),
+            percent_encode(&password),
+            self.host,
+            self.port,
+            percent_encode(&self.database_name)
         ))
     }
 
@@ -58,7 +65,27 @@ impl DatabaseSettings {
         let password = self.password()?;
         Ok(format!(
             "postgres://{}:{}@{}:{}",
-            self.username, password, self.host, self.port
+            percent_encode(&self.username),
+            percent_encode(&password),
+            self.host,
+            self.port
         ))
     }
+}
+
+fn percent_encode(value: &str) -> String {
+    let mut encoded = String::new();
+
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                encoded.push_str(&format!("%{byte:02X}"));
+            }
+        }
+    }
+
+    encoded
 }

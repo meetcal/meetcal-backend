@@ -1,7 +1,4 @@
-use crate::{
-    AppError, AppState,
-    routes::results::types::LiftingResults,
-};
+use crate::{AppError, AppState, routes::results::types::LiftingResults};
 use axum::{
     Json,
     extract::{Query, State},
