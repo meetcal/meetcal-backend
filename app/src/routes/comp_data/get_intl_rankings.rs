@@ -23,9 +23,9 @@ pub struct IntlRanking {
     pub age_category: String,
 }
 
-/// /intl-rankings endpoint
+/// /data/intl-rankings endpoint
 ///
-/// curl 'http://localhost:3000/intl-rankings?meet=Worlds&gender=Women&age_category=Junior' | jq .
+/// curl 'http://localhost:3000/data/intl-rankings?meet=Worlds&gender=Women&age_category=Junior' | jq .
 ///
 /// This endpoint takes meet, gender, and age category and returns international rankings
 ///

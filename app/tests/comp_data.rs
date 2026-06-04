@@ -9,7 +9,7 @@ const API: &str = "https://api.meetcal.app";
 
 #[tokio::test]
 async fn success_get_records() {
-    let url = format!("{API}/records?record_type=USAW&gender=Men&age_category=Senior");
+    let url = format!("{API}/data/records?record_type=USAW&gender=Men&age_category=Senior");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_eq!(response.status(), 200);
@@ -24,7 +24,7 @@ async fn success_get_records() {
 
 #[tokio::test]
 async fn fail_get_records() {
-    let url = format!("{API}/records");
+    let url = format!("{API}/data/records");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_ne!(response.status(), 200);
@@ -32,7 +32,7 @@ async fn fail_get_records() {
 
 #[tokio::test]
 async fn success_get_standards() {
-    let url = format!("{API}/standards?gender=Men&age_category=Senior");
+    let url = format!("{API}/data/standards?gender=Men&age_category=Senior");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_eq!(response.status(), 200);
@@ -48,7 +48,7 @@ async fn success_get_standards() {
 
 #[tokio::test]
 async fn fail_get_standards() {
-    let url = format!("{API}/standards");
+    let url = format!("{API}/data/standards");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_ne!(response.status(), 200);
@@ -56,7 +56,7 @@ async fn fail_get_standards() {
 
 #[tokio::test]
 async fn success_get_wsos() {
-    let url = format!("{API}/wso");
+    let url = format!("{API}/data/wso/");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_eq!(response.status(), 200);
@@ -68,7 +68,7 @@ async fn success_get_wsos() {
 
 #[tokio::test]
 async fn fail_get_wsos() {
-    let url = format!("{API}/wsos");
+    let url = format!("{API}/data/wsos");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_ne!(response.status(), 200);
@@ -76,7 +76,7 @@ async fn fail_get_wsos() {
 
 #[tokio::test]
 async fn success_get_wso_records() {
-    let url = format!("{API}/wso-records?wso=Carolina&gender=Men&age_category=Senior");
+    let url = format!("{API}/data/wso/records?wso=Carolina&gender=Men&age_category=Senior");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_eq!(response.status(), 200);
@@ -91,7 +91,7 @@ async fn success_get_wso_records() {
 
 #[tokio::test]
 async fn fail_get_wso_records() {
-    let url = format!("{API}/wso-records");
+    let url = format!("{API}/data/wso/records");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_ne!(response.status(), 200);
@@ -99,7 +99,9 @@ async fn fail_get_wso_records() {
 
 #[tokio::test]
 async fn success_get_qualifying_totals() {
-    let url = format!("{API}/qualifying-totals?event_name=Virus%20Finals&gender=Women&age_category=U11");
+    let url = format!(
+        "{API}/data/qualifying-totals?event_name=Virus%20Finals&gender=Women&age_category=U11"
+    );
     let response = reqwest::get(&url).await.unwrap();
 
     assert_eq!(response.status(), 200);
@@ -114,7 +116,7 @@ async fn success_get_qualifying_totals() {
 
 #[tokio::test]
 async fn fail_get_qualifying_totals() {
-    let url = format!("{API}/qualifying-totals");
+    let url = format!("{API}/data/qualifying-totals");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_ne!(response.status(), 200);
@@ -122,7 +124,7 @@ async fn fail_get_qualifying_totals() {
 
 #[tokio::test]
 async fn success_get_intl_rankings() {
-    let url = format!("{API}/intl-rankings?meet=Worlds&gender=Women&age_category=Junior");
+    let url = format!("{API}/data/intl-rankings?meet=Worlds&gender=Women&age_category=Junior");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_eq!(response.status(), 200);
@@ -137,7 +139,7 @@ async fn success_get_intl_rankings() {
 
 #[tokio::test]
 async fn fail_get_intl_rankings() {
-    let url = format!("{API}/intl-rankings");
+    let url = format!("{API}/data/intl-rankings");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_ne!(response.status(), 200);
@@ -145,7 +147,7 @@ async fn fail_get_intl_rankings() {
 
 #[tokio::test]
 async fn success_get_nat_rankings() {
-    let url = format!("{API}/nat-rankings?age_category=Open%20Men%27s%2060kg&federation=USAW");
+    let url = format!("{API}/data/nat-rankings?age_category=Open%20Men%27s%2060kg&federation=USAW");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_eq!(response.status(), 200);
@@ -155,7 +157,7 @@ async fn success_get_nat_rankings() {
 
 #[tokio::test]
 async fn fail_get_nat_rankings() {
-    let url = format!("{API}/nat-rankings");
+    let url = format!("{API}/data/nat-rankings");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_ne!(response.status(), 200);
@@ -163,7 +165,7 @@ async fn fail_get_nat_rankings() {
 
 #[tokio::test]
 async fn success_get_adaptive_records() {
-    let url = format!("{API}/adaptive?exclude_federation=BWL&gender=Men");
+    let url = format!("{API}/data/adaptive?exclude_federation=BWL&gender=Men");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_eq!(response.status(), 200);
@@ -173,7 +175,7 @@ async fn success_get_adaptive_records() {
 
 #[tokio::test]
 async fn fail_get_adaptive_records() {
-    let url = format!("{API}/adaptive");
+    let url = format!("{API}/data/adaptive");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_ne!(response.status(), 200);

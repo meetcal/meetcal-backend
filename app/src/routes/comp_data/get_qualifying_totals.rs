@@ -21,9 +21,9 @@ pub struct QualifyingTotal {
     pub qualifying_total: f64,
 }
 
-/// /qualifying-totals endpoint
+/// /data/qualifying-totals endpoint
 ///
-/// curl 'http://localhost:3000/qualifying-totals?event_name=Nationals&gender=Men&age_category=Senior' | jq .
+/// curl 'http://localhost:3000/data/qualifying-totals?event_name=Nationals&gender=Men&age_category=Senior' | jq .
 ///
 /// This endpoint takes event name, gender, and age category and returns qualifying totals
 ///

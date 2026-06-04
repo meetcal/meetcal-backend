@@ -27,9 +27,9 @@ static WOMEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bwomen\b").un
 static YEAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\d{4}\b").unwrap());
 static WEIGHT_CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(\d+\+?)kg").unwrap());
 
-/// /adaptive endpoint
+/// /data/adaptive endpoint
 ///
-/// curl 'http://localhost:3000/adaptive?exclude_federation=BWL&gender=Men' | jq .
+/// curl 'http://localhost:3000/data/adaptive?exclude_federation=BWL&gender=Men' | jq .
 ///
 /// Params:
 /// Federations: USAW, USAMW, BWL

@@ -1,11 +1,3 @@
-# Club routes
-
-Used by club stats features (`lib/database/fetch-club-stats.ts`).
-
-Aggregated endpoints that batch multiple Convex queries today.
-
----
-
 ## `GET /clubs/:club/athletes`
 
 **Why:** Show club roster limited to athletes from **completed** meets.

@@ -23,9 +23,9 @@ pub struct WsoRecord {
     pub wso: String,
 }
 
-/// /wso-records endpoint
+/// /data/wso/records endpoint
 ///
-/// curl 'http://localhost:3000/wso-records?wso=Carolina&gender=Men&age_category=Senior' | jq .
+/// curl 'http://localhost:3000/data/wso/records?wso=Carolina&gender=Men&age_category=Senior' | jq .
 ///
 /// This endpoint takes gender, wso, and age category and returns wso records
 ///

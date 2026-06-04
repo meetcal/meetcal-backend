@@ -20,9 +20,9 @@ pub struct Standard {
     pub weight_class: String,
 }
 
-/// /standards endpoint
+/// /data/standards endpoint
 ///
-/// curl 'http://localhost:3000/standards?gender=Men&age_category=Senior' | jq .
+/// curl 'http://localhost:3000/data/standards?gender=Men&age_category=Senior' | jq .
 ///
 /// This endpoint takes gender and age category and returns standards
 ///

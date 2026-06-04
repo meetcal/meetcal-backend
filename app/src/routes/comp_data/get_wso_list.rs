@@ -8,9 +8,9 @@ pub struct WsoNames {
     pub wsos: Vec<String>,
 }
 
-/// /wso endpoint
+/// /data/wso/ endpoint
 ///
-/// curl 'http://localhost:3000/wso' | jq .
+/// curl 'http://localhost:3000/data/wso/' | jq .
 ///
 /// This endpoint takes nothing and returns a list of wsos
 ///

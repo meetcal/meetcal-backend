@@ -27,7 +27,7 @@ async fn fail_get_all_meets() {
 
 #[tokio::test]
 async fn success_get_meet_details() {
-    let url = format!("{API}/meet-details?meet=2026%20Ohio%20WSO%20Championships");
+    let url = format!("{API}/meets/details?meet=2026%20Ohio%20WSO%20Championships");
     let response = reqwest::get(&url).await.unwrap();
 
     assert_eq!(response.status(), 200);

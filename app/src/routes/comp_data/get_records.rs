@@ -23,9 +23,9 @@ pub struct Record {
     pub total_record: f64,
 }
 
-/// /records endpoint
+/// /data/records endpoint
 ///
-/// curl 'http://localhost:3000/records?record_type=USAW&gender=Men&age_category=Senior' | jq .
+/// curl 'http://localhost:3000/data/records?record_type=USAW&gender=Men&age_category=Senior' | jq .
 ///
 /// This endpoint takes federation, gender, and age category and returns records
 ///
