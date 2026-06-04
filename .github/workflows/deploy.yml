@@ -7,7 +7,7 @@ on:
     branches: [master]
 
 jobs:
-  deploy:
+  build:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -15,7 +15,6 @@ jobs:
       packages: write
     env:
       IMAGE_BASE: ghcr.io/meetcal/meetcal-backend/meetcal-api
-      DEPLOY_ROOT: /home/maddisen/dev/meetcal-llc/meetcal-backend
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@v4
@@ -38,26 +37,24 @@ jobs:
           docker push "${IMAGE_BASE}:${DEPLOY_SHA}"
           docker push "${IMAGE_BASE}:latest"
 
+  deploy:
+    needs: build
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: self-hosted
+    env:
+      DEPLOY_ROOT: /home/maddisen/dev/meetcal-llc/meetcal-backend
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+      IMAGE: ghcr.io/meetcal/meetcal-backend/meetcal-api:${{ github.event.workflow_run.head_sha }}
+    steps:
       - name: Pull and run on prod
-        uses: appleboy/ssh-action@v1.2.0
         env:
-          IMAGE: ${{ env.IMAGE_BASE }}:${{ env.DEPLOY_SHA }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          port: 22
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE }}
-          timeout: 60s
-          command_timeout: 10m
-          envs: IMAGE,GITHUB_ACTOR,GHCR_PULL_TOKEN
-          script: |
-            set -euo pipefail
-            echo "${GHCR_PULL_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-            cd "${{ env.DEPLOY_ROOT }}"
-            git fetch origin "${{ env.DEPLOY_SHA }}"
-            git checkout "${{ env.DEPLOY_SHA }}"
-            export IMAGE="${IMAGE}"
-            bash app/deploy/deploy-prod.sh
+        run: |
+          set -euo pipefail
+          echo "${GHCR_PULL_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          cd "${DEPLOY_ROOT}"
+          git fetch origin "${DEPLOY_SHA}"
+          git checkout "${DEPLOY_SHA}"
+          export IMAGE="${IMAGE}"
+          bash app/deploy/deploy-prod.sh
