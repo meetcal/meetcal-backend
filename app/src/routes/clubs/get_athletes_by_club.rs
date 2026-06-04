@@ -16,7 +16,7 @@ pub struct ClubsAthletes {
     pub club: String,
     pub gender: String,
     pub weight_class: String,
-    pub entry_total: String,
+    pub entry_total: f64,
 }
 
 /// /clubs/athletes endpoint
