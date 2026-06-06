@@ -7,6 +7,29 @@ on:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: meetcal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d meetcal"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      APP_DATABASE__HOST: 127.0.0.1
+      APP_DATABASE__PORT: 5432
+      APP_DATABASE__USERNAME: postgres
+      APP_DATABASE__PASSWORD: postgres
+      APP_DATABASE__DATABASE_NAME: meetcal
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/meetcal
+      MEETCAL_ALLOW_TEST_DB_RESET: "1"
+      SKIP_DOCKER: "1"
     defaults:
       run:
         working-directory: app
@@ -21,8 +44,14 @@ jobs:
         with:
           workspaces: app
 
+      - name: Install SQLx CLI
+        run: cargo install sqlx-cli --no-default-features --features postgres --locked
+
+      - name: Prepare test database
+        run: scripts/setup_test_db.sh
+
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Unit tests
-        run: cargo test --lib
+        run: cargo test

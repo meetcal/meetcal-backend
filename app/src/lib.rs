@@ -8,6 +8,7 @@ use crate::routes::{
     comp_data::{
         get_adaptive_records::get_adaptive_records, get_national_rankings::get_national_rankings,
     },
+    meets::get_sessions_for_athletes::get_sessions_for_athletes,
     results::search::search_wrapped,
 };
 use axum::{Router, routing::get};
@@ -49,6 +50,7 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .route("/meets/details", get(get_meet_details))
         .route("/meets/schedule", get(get_meet_schedule))
         .route("/meets/athletes", get(get_athletes_by_meet))
+        .route("/meets/athletes-sessions", get(get_sessions_for_athletes))
         .route("/clubs", get(get_all_clubs))
         .route("/clubs/athletes", get(get_athletes_by_club))
         .route("/data/records", get(get_records))

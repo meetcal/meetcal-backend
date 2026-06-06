@@ -45,10 +45,6 @@ pub struct SearchParams {
 ///  }
 /// ]
 ///
-/// TODO: trim query; word-filter fallback rows; sort by date asc; cap 600
-/// TODO: optional `mode=exact|suggest` or separate route for name autocomplete (`athletes.searchByName`)
-/// TODO: dedupe fallback to distinct names when returning options for client picker
-/// TODO: remove redundant clones — build fallback_args only inside empty branch
 pub async fn search_wrapped(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,

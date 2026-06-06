@@ -101,11 +101,15 @@ cd app
 # Lint
 cargo clippy --all-targets -- -D warnings
 
-# Tests (requires a running Postgres instance with migrated schema)
-cargo test --all-targets
+# Prepare local integration-test data.
+# This truncates app tables in DATABASE_URL, so the reset flag is required.
+MEETCAL_ALLOW_TEST_DB_RESET=1 scripts/setup_test_db.sh
+
+# Tests run against a locally spawned API server.
+cargo test
 
 # Apply new migrations after editing app/migrations/
 sqlx migrate run
 ```
 
-CI runs clippy and tests on every push via [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+CI starts Postgres, runs migrations, loads [`app/scripts/seed_test_db.sql`](app/scripts/seed_test_db.sql), then runs clippy and `cargo test` on every push via [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
