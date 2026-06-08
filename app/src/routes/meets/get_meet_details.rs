@@ -14,6 +14,9 @@ use axum::{
 /// This endpoint takes the name of the meet exactly as it shows in BARS and returns the details of
 /// the meet
 ///
+/// TODO: Reshape for the RN app. Include status and app-ready field names. Prefer folding this
+/// into /meets/package for selected-meet loading so the app avoids extra round trips.
+///
 /// Get meet names as they are listed by copying exact case-sensitive names from BARS
 ///
 /// {

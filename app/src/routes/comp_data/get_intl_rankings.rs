@@ -1,15 +1,8 @@
 use crate::{AppError, AppState};
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct IntlRankingsParams {
-    pub meet: String,
-    pub gender: String,
-    pub age_category: String,
-}
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct IntlRanking {
@@ -25,13 +18,9 @@ pub struct IntlRanking {
 
 /// /data/intl-rankings endpoint
 ///
-/// curl 'https://api.meetcal.app/data/intl-rankings?meet=Worlds&gender=Women&age_category=Junior' | jq .
+/// curl 'https://api.meetcal.app/data/intl-rankings' | jq .
 ///
-/// This endpoint takes meet, gender, and age category and returns international rankings
-///
-/// Meets: Pan Ams, Worlds
-/// Genders: Men, Women
-/// Age Categories: U15, U17, Youth, Junior, University, Senior
+/// This endpoint takes nothing and returns international rankings
 ///
 /// [
 ///   {
@@ -47,21 +36,14 @@ pub struct IntlRanking {
 /// ]
 pub async fn get_intl_rankings(
     State(state): State<AppState>,
-    Query(params): Query<IntlRankingsParams>,
 ) -> Result<Json<Vec<IntlRanking>>, AppError> {
     let rows = sqlx::query_as::<_, IntlRanking>(
         r#"
         SELECT meet, ranking, name, weight_class, total, percent_a, gender, age_category
         FROM intl_rankings
-        WHERE meet = $1
-            AND gender = $2
-            AND age_category = $3
         ORDER BY ranking desc
         "#,
     )
-    .bind(params.meet)
-    .bind(params.gender)
-    .bind(params.age_category)
     .fetch_all(&state.db)
     .await?;
 

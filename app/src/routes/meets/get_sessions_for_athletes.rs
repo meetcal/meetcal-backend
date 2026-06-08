@@ -33,6 +33,9 @@ pub struct SessionsAthletes {
 ///
 /// This endpoint takes meet name and returns athletes and their session rows
 ///
+/// TODO: Keep as a focused route, but the RN app's main prefetch flow should prefer /meets/package
+/// so athlete/session joins, schedule rows, and result history are returned together.
+///
 /// [
 ///     {
 ///       "member_id": "12345",

@@ -16,6 +16,7 @@ pub struct ClubsAthletes {
     pub club: String,
     pub gender: String,
     pub weight_class: String,
+    pub member_id: String,
     pub entry_total: f64,
 }
 
@@ -29,6 +30,7 @@ pub struct ClubsAthletes {
 ///  "athletes": [
 ///    {
 ///      "name": "Jane Doe",
+///      "member_id": "45678frtghyuji"
 ///      "meet": "2024 Nationals",
 ///      "club": "ABC Weightlifting",
 ///      "gender": "Women",
@@ -43,7 +45,7 @@ pub async fn get_athletes_by_club(
 ) -> Result<Json<Vec<ClubsAthletes>>, AppError> {
     let names: Vec<ClubsAthletes> = sqlx::query_as(
         r#"
-        SELECT name, meet, club, gender, weight_class, entry_total
+        SELECT name, meet, club, gender, weight_class, entry_total, member_id
         FROM athletes
         WHERE club = $1
             AND meet IN (

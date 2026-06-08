@@ -10,6 +10,9 @@ use axum::extract::{Query, State};
 ///
 /// This endpoint takes meet and returns the results
 ///
+/// TODO: Keep as a focused route, but the RN app's offline prefetch should prefer /meets/package
+/// so meet lifting results are returned with athletes, sessions, and optional athlete history.
+///
 /// [
 ///   {
 ///     "federation": "USAW",

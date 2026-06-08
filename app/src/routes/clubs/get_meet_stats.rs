@@ -59,6 +59,9 @@ struct ClubResultRow {
 ///
 /// This endpoint takes meet and club name and returns a full report of how the club did at the meet
 ///
+/// TODO: Reshape for the RN app as a screen-ready club report. The backend should calculate PRs,
+/// 6-for-6, total lifted, and snatch/CJ/total medals by weight class so the app only renders.
+///
 /// {
 ///   "totalAthletes": 1,
 ///   "goldMedals": 0,

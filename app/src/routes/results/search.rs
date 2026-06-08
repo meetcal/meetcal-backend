@@ -24,6 +24,11 @@ pub struct SearchParams {
 /// time frame for their wrapped. If there is no exact match we fallback to matching characters in
 /// name and send that to app to show user options
 ///
+/// TODO: Reshape for the RN app's search needs. Support a small name-suggestion mode for
+/// autocomplete, and return a completed Wrapped payload with matchedName, suggestions,
+/// sorted/capped results, and app-ready field names so the app does not perform exact lookup,
+/// fallback lookup, year filtering, sorting, and slicing itself.
+///
 /// [
 ///  {
 ///    "federation": "USAW",

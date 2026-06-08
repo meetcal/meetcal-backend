@@ -14,6 +14,9 @@ use axum::{
 /// This endpoint takes the name of the meet exactly as it shows in BARS and returns the schedule of
 /// the meet
 ///
+/// TODO: Keep as a focused route, but the RN app's main prefetch flow should prefer /meets/package
+/// so schedule, athletes, and lifting results are loaded in one backend-shaped response.
+///
 /// Get meet names as they are listed by copying exact case-sensitive names from BARS
 ///
 /// [

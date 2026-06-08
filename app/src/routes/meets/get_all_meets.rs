@@ -21,6 +21,9 @@ struct MeetName {
 /// This endpoint takes no input and returns a list of meets in the db in the next 3 months sorted
 /// by earlist to latest
 ///
+/// TODO: Reshape or replace for the RN app's fast meet picker. Return full active meet objects
+/// with status, venue, date, and timezone fields, not just a filtered list of names.
+///
 /// "names": [
 ///   "2026 USA Weightlifting National Championships, Powered by Rogue Fitness",
 ///   "2026 Mountain North WSO Championships",

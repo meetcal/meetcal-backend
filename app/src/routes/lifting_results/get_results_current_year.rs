@@ -14,6 +14,9 @@ pub struct ResultsCurrentYearParams {
 ///
 /// This endpoint takes a name and returns results from the past year
 ///
+/// TODO: Replace for the RN app with /lifting-results/year-bests. Return backend-computed
+/// bestSnatch, bestCJ, and bestTotal from caller-provided cutoff_date instead of raw rows.
+///
 /// [
 ///   {
 ///     "federation": "USAW",

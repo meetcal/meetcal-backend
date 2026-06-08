@@ -1,15 +1,9 @@
 use crate::common::sort::sort_by_class;
 use crate::{AppError, AppState};
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct StandardParams {
-    pub age_category: String,
-    pub gender: String,
-}
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct Standard {
@@ -22,12 +16,9 @@ pub struct Standard {
 
 /// /data/standards endpoint
 ///
-/// curl 'https://api.meetcal.app/data/standards?gender=Men&age_category=Senior' | jq .
+/// curl 'https://api.meetcal.app/data/standards' | jq .
 ///
-/// This endpoint takes gender and age category and returns standards
-///
-/// Genders: Men, Women
-/// Age Categories: U15, U17, Youth, Junior, Senior
+/// This endpoint takes nothing and returns standards
 ///
 /// [
 ///  {
@@ -38,19 +29,13 @@ pub struct Standard {
 ///    "weight_class": "60kg"
 ///  },
 /// ]
-pub async fn get_standards(
-    State(state): State<AppState>,
-    Query(params): Query<StandardParams>,
-) -> Result<Json<Vec<Standard>>, AppError> {
+pub async fn get_standards(State(state): State<AppState>) -> Result<Json<Vec<Standard>>, AppError> {
     let rows = sqlx::query_as::<_, Standard>(
         r#"
         SELECT age_category, gender, standard_a, standard_b, weight_class
         FROM standards
-        WHERE gender = $1 AND age_category = $2
         "#,
     )
-    .bind(params.gender)
-    .bind(params.age_category)
     .fetch_all(&state.db)
     .await?;
 

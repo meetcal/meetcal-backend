@@ -14,6 +14,9 @@ use axum::{
 /// This endpoint takes the name of the meet exactly as it shows in BARS and returns the athletes in
 /// the meet
 ///
+/// TODO: Keep as a focused route, but include member_id if the RN app consumes this directly.
+/// For primary meet loading, prefer /meets/package with session data already joined.
+///
 /// Get meet names as they are listed by copying exact case-sensitive names from BARS
 ///
 /// [

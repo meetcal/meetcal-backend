@@ -1,16 +1,9 @@
 use crate::common::sort::sort_by_class;
 use crate::{AppError, AppState};
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct RecordParams {
-    pub age_category: String,
-    pub gender: String,
-    pub record_type: String,
-}
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct Record {
@@ -25,13 +18,9 @@ pub struct Record {
 
 /// /data/records endpoint
 ///
-/// curl 'https://api.meetcal.app/data/records?record_type=USAW&gender=Men&age_category=Senior' | jq .
+/// curl 'https://api.meetcal.app/data/records' | jq .
 ///
-/// This endpoint takes federation, gender, and age category and returns records
-///
-/// Federations: USAW, USAMW, IWF, UMWF
-/// Genders: Men, Women
-/// Age Categories: U13, U15, U17, Youth, Junior, University, Senior, Masters 35, Masters 40, ..., Masters 90
+/// This endpoint takes nothing and returns records
 ///
 /// [
 ///  {
@@ -44,22 +33,13 @@ pub struct Record {
 ///    "weight_class": "71kg"
 ///  },
 /// ]
-pub async fn get_records(
-    State(state): State<AppState>,
-    Query(param): Query<RecordParams>,
-) -> Result<Json<Vec<Record>>, AppError> {
+pub async fn get_records(State(state): State<AppState>) -> Result<Json<Vec<Record>>, AppError> {
     let rows = sqlx::query_as::<_, Record>(
         r#"
         SELECT age_category, cj_record, snatch_record, total_record, weight_class, gender, record_type
         FROM records
-        WHERE record_type = $1
-            AND gender = $2
-            AND age_category = $3
         "#,
     )
-    .bind(param.record_type)
-    .bind(param.gender)
-    .bind(param.age_category)
     .fetch_all(&state.db)
     .await?;
 

@@ -14,6 +14,9 @@ pub struct Results2YrsParams {
 ///
 /// This endpoint takes an array of names and returns the history from the last 2 years
 ///
+/// TODO: Replace for the RN app with /meets/package history or /lifting-results/by-names-since.
+/// Accept caller-provided cutoff_date instead of hardcoding the last 2 years.
+///
 /// [
 ///   {
 ///     "federation": "USAW",

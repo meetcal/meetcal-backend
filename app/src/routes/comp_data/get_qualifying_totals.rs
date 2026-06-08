@@ -1,16 +1,9 @@
 use crate::common::sort::sort_by_class;
 use crate::{AppError, AppState};
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct QualifyingTotalsParams {
-    pub event_name: String,
-    pub gender: String,
-    pub age_category: String,
-}
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct QualifyingTotal {
@@ -23,13 +16,9 @@ pub struct QualifyingTotal {
 
 /// /data/qualifying-totals endpoint
 ///
-/// curl 'https://api.meetcal.app/data/qualifying-totals?event_name=Nationals&gender=Men&age_category=Senior' | jq .
+/// curl 'https://api.meetcal.app/data/qualifying-totals' | jq .
 ///
-/// This endpoint takes event name, gender, and age category and returns qualifying totals
-///
-/// Names: Virus Series, Virus Finals, Nationals, Master's Pan Ams, IMWA Worlds
-/// Genders: Men, Women
-/// Age Categories: U11, U13, U15, U17, Youth, Junior, University, U25, Senior, Masters 35, Masters 40, ..., Masters 90
+/// This endpoint takes nothing and returns qualifying totals
 ///
 /// [
 ///   {
@@ -42,18 +31,13 @@ pub struct QualifyingTotal {
 /// ]
 pub async fn get_qualifying_totals(
     State(state): State<AppState>,
-    Query(params): Query<QualifyingTotalsParams>,
 ) -> Result<Json<Vec<QualifyingTotal>>, AppError> {
     let rows = sqlx::query_as::<_, QualifyingTotal>(
         r#"
         SELECT event_name, gender, age_category, weight_class, qualifying_total
         FROM qualifying_totals
-        WHERE event_name = $1 AND gender = $2 AND age_category = $3
         "#,
     )
-    .bind(params.event_name)
-    .bind(params.gender)
-    .bind(params.age_category)
     .fetch_all(&state.db)
     .await?;
 
