@@ -16,7 +16,6 @@ tower-http = { version = "0.6", features = [
   "compression-br",
 ] }
 regex = "1.12.3"
-uuid = { version = "1.23", features = ["v4", "v7", "serde"] }
 
 [dependencies.sqlx]
 version = "0.9.0"

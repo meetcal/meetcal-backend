@@ -4,9 +4,14 @@ pub mod error;
 pub mod routes;
 
 use crate::routes::{
-    clubs::get_athletes_by_club::get_athletes_by_club,
+    clubs::{get_athletes_by_club::get_athletes_by_club, get_meet_stats::get_meet_stats},
     comp_data::{
         get_adaptive_records::get_adaptive_records, get_national_rankings::get_national_rankings,
+    },
+    lifting_results::{
+        get_lifting_results::get_lifting_results, get_results_2yrs::get_results_2yrs,
+        get_results_by_names::get_results_by_names,
+        get_results_current_year::get_results_current_year,
     },
     meets::get_sessions_for_athletes::get_sessions_for_athletes,
     results::search::search_wrapped,
@@ -46,13 +51,9 @@ pub fn load_env() {
 pub async fn run(listener: TcpListener, db: PgPool) {
     let app = Router::new()
         .route("/health", get(health))
-        .route("/meets", get(list_meets_next_3months))
-        .route("/meets/details", get(get_meet_details))
-        .route("/meets/schedule", get(get_meet_schedule))
-        .route("/meets/athletes", get(get_athletes_by_meet))
-        .route("/meets/athletes-sessions", get(get_sessions_for_athletes))
         .route("/clubs", get(get_all_clubs))
         .route("/clubs/athletes", get(get_athletes_by_club))
+        .route("/clubs/meet-stats", get(get_meet_stats))
         .route("/data/records", get(get_records))
         .route("/data/wso/", get(get_wso_list))
         .route("/data/wso/records", get(get_wso_records))
@@ -61,6 +62,15 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .route("/data/intl-rankings", get(get_intl_rankings))
         .route("/data/nat-rankings", get(get_national_rankings))
         .route("/data/adaptive", get(get_adaptive_records))
+        .route("/meets", get(list_meets_next_3months))
+        .route("/meets/details", get(get_meet_details))
+        .route("/meets/schedule", get(get_meet_schedule))
+        .route("/meets/athletes", get(get_athletes_by_meet))
+        .route("/meets/athletes-sessions", get(get_sessions_for_athletes))
+        .route("/lifting-results", get(get_lifting_results))
+        .route("/lifting-results/by-names", get(get_results_by_names))
+        .route("/lifting-results/recent", get(get_results_2yrs))
+        .route("/lifting-results/year", get(get_results_current_year))
         .route("/search", get(search_wrapped))
         .layer(CompressionLayer::new())
         .with_state(AppState { db });
