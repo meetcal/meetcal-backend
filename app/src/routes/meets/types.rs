@@ -18,6 +18,7 @@ pub struct Meets {
     pub venue_state: String,
     pub venue_street: String,
     pub venue_zip: String,
+    pub status: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
@@ -33,6 +34,7 @@ pub struct MeetSchedule {
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct Athlete {
+    pub member_id: String,
     pub adaptive: bool,
     pub age: f64,
     pub club: String,

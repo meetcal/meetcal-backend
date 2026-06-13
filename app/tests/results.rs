@@ -1,4 +1,4 @@
-use app::routes::results::types::LiftingResults;
+use app::routes::results::search::SearchResponse;
 
 mod support;
 
@@ -12,7 +12,9 @@ async fn success_search() {
     let response = reqwest::get(&url).await.unwrap();
     assert_eq!(response.status(), 200);
 
-    let _body: Vec<LiftingResults> = response.json().await.unwrap();
+    let body: SearchResponse = response.json().await.unwrap();
+    assert_eq!(body.matched_name.as_deref(), Some("Alexander Nordstrom"));
+    assert!(!body.results.is_empty());
 }
 
 #[tokio::test]
@@ -25,7 +27,9 @@ async fn success_search_partial() {
     let response = reqwest::get(&url).await.unwrap();
     assert_eq!(response.status(), 200);
 
-    let _body: Vec<LiftingResults> = response.json().await.unwrap();
+    let body: SearchResponse = response.json().await.unwrap();
+    assert!(!body.suggestions.is_empty());
+    assert!(!body.results.is_empty());
 }
 
 #[tokio::test]

@@ -8,52 +8,69 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SearchParams {
     pub query: String,
-    pub start_date: String,
-    pub end_date: String,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SearchResponse {
+    pub matched_name: Option<String>,
+    pub suggestions: Vec<String>,
+    pub results: Vec<LiftingResults>,
 }
 
 /// /search endpoint
 ///
-/// gives all results for fully matched name for date range
+/// Exact wrapped search:
 /// curl 'https://api.meetcal.app/search?query=Alexander%20Nordstrom&start_date=2025-01-01&end_date=2025-12-31' | jq .
 ///
-/// gives results for all athletes in range whose name matches characters of query
-/// curl 'https://api.meetcal.app/search?query=Alexan&start_date=2025-01-01&end_date=2025-12-31' | jq .
+/// Name suggestions:
+/// curl 'https://api.meetcal.app/search?query=Alexan' | jq .
 ///
-/// This endpoint takes the the athletes name, start and end dates and returns their results for the
-/// time frame for their wrapped. If there is no exact match we fallback to matching characters in
-/// name and send that to app to show user options
+/// This endpoint takes an athlete search query and returns a completed search payload. With
+/// start_date and end_date it returns exact name results for the range when available, otherwise
+/// fallback rows and suggestions. Without dates it returns name suggestions only.
 ///
-/// TODO: Reshape for the RN app's search needs. Support a small name-suggestion mode for
-/// autocomplete, and return a completed Wrapped payload with matchedName, suggestions,
-/// sorted/capped results, and app-ready field names so the app does not perform exact lookup,
-/// fallback lookup, year filtering, sorting, and slicing itself.
-///
-/// [
-///  {
-///    "federation": "USAW",
-///    "meet": "2025 Virus Weightlifting Series 2, Powered by Rogue Fitness",
-///    "date": "2025-08-31",
-///    "name": "Alexander Nordstrom",
-///    "age": "Open Men's 110kg",
-///    "body_weight": 100.35,
-///    "snatch1": 115.0,
-///    "snatch2": 120.0,
-///    "snatch3": 125.0,
-///    "snatch_best": 125.0,
-///    "cj1": 145.0,
-///    "cj2": 150.0,
-///    "cj3": 155.0,
-///    "cj_best": 155.0,
-///    "total": 280.0,
-///    "adaptive": false
-///  }
-/// ]
+/// {
+///   "matched_name": "Alexander Nordstrom",
+///   "suggestions": [],
+///   "results": [
+///     {
+///       "federation": "USAW",
+///       "meet": "2025 Test Meet",
+///       "date": "2025-06-01",
+///       "name": "Alexander Nordstrom",
+///       "age": "Open Men's 60kg",
+///       "body_weight": 59.9,
+///       "snatch1": 90.0,
+///       "snatch2": 95.0,
+///       "snatch3": 100.0,
+///       "snatch_best": 100.0,
+///       "cj1": 120.0,
+///       "cj2": 125.0,
+///       "cj3": 130.0,
+///       "cj_best": 130.0,
+///       "total": 230.0,
+///       "adaptive": false
+///     }
+///   ]
+/// }
 ///
 pub async fn search_wrapped(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
-) -> Result<Json<Vec<LiftingResults>>, AppError> {
+) -> Result<Json<SearchResponse>, AppError> {
+    let suggestions = search_suggestions(&state, &params.query).await?;
+
+    let (Some(start_date), Some(end_date)) = (params.start_date.as_ref(), params.end_date.as_ref())
+    else {
+        return Ok(Json(SearchResponse {
+            matched_name: None,
+            suggestions,
+            results: Vec::new(),
+        }));
+    };
+
     let exact = sqlx::query_as::<_, LiftingResults>(
         r#"
         SELECT
@@ -75,17 +92,22 @@ pub async fn search_wrapped(
             adaptive
         FROM lifting_results
         WHERE name = $1 AND date >= $2 AND date < $3
-        ORDER BY date DESC
+        ORDER BY date ASC
+        LIMIT 600
         "#,
     )
     .bind(&params.query)
-    .bind(&params.start_date)
-    .bind(&params.end_date)
+    .bind(start_date)
+    .bind(end_date)
     .fetch_all(&state.db)
     .await?;
 
     if !exact.is_empty() {
-        return Ok(Json(exact));
+        return Ok(Json(SearchResponse {
+            matched_name: Some(params.query),
+            suggestions: Vec::new(),
+            results: exact,
+        }));
     }
 
     let pattern = format!("%{}%", params.query);
@@ -112,14 +134,37 @@ pub async fn search_wrapped(
         FROM lifting_results
         WHERE name ILIKE $1 AND date >= $2 AND date < $3
         ORDER BY date ASC
-        LIMIT 256
+        LIMIT 600
         "#,
     )
     .bind(&pattern)
-    .bind(&params.start_date)
-    .bind(&params.end_date)
+    .bind(start_date)
+    .bind(end_date)
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(fallback))
+    Ok(Json(SearchResponse {
+        matched_name: None,
+        suggestions,
+        results: fallback,
+    }))
+}
+
+async fn search_suggestions(state: &AppState, query: &str) -> Result<Vec<String>, AppError> {
+    let pattern = format!("%{}%", query);
+
+    let rows: Vec<(String,)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT name
+        FROM lifting_results
+        WHERE name ILIKE $1
+        ORDER BY name
+        LIMIT 8
+        "#,
+    )
+    .bind(pattern)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(rows.into_iter().map(|(name,)| name).collect())
 }

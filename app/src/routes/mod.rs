@@ -4,3 +4,4 @@ pub mod health;
 pub mod lifting_results;
 pub mod meets;
 pub mod results;
+pub mod users;

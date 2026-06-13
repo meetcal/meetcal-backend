@@ -15,8 +15,17 @@ use crate::routes::{
     },
     meets::get_sessions_for_athletes::get_sessions_for_athletes,
     results::search::search_wrapped,
+    users::{
+        preferences::{get_preferences, patch_auto_unsave},
+        saved_sessions::{
+            delete_saved_session, delete_saved_sessions, get_saved_sessions, put_saved_session,
+        },
+    },
 };
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    routing::{get, patch, put},
+};
 pub use error::AppError;
 use routes::{
     clubs::get_all_clubs::get_all_clubs,
@@ -28,7 +37,8 @@ use routes::{
     health::health,
     meets::{
         get_all_meets::list_meets_next_3months, get_athletes_by_meet::get_athletes_by_meet,
-        get_meet_details::get_meet_details, get_meet_schedule::get_meet_schedule,
+        get_meet_details::get_meet_details, get_meet_package::get_meet_package,
+        get_meet_schedule::get_meet_schedule,
     },
 };
 use sqlx::PgPool;
@@ -64,6 +74,7 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .route("/data/adaptive", get(get_adaptive_records))
         .route("/meets", get(list_meets_next_3months))
         .route("/meets/details", get(get_meet_details))
+        .route("/meets/package", get(get_meet_package))
         .route("/meets/schedule", get(get_meet_schedule))
         .route("/meets/athletes", get(get_athletes_by_meet))
         .route("/meets/athletes-sessions", get(get_sessions_for_athletes))
@@ -72,6 +83,19 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .route("/lifting-results/recent", get(get_results_2yrs))
         .route("/lifting-results/year", get(get_results_current_year))
         .route("/search", get(search_wrapped))
+        .route(
+            "/users/me/saved-sessions",
+            get(get_saved_sessions).delete(delete_saved_sessions),
+        )
+        .route(
+            "/users/me/saved-sessions/{session_id}",
+            put(put_saved_session).delete(delete_saved_session),
+        )
+        .route("/users/me/preferences", get(get_preferences))
+        .route(
+            "/users/me/preferences/auto-unsave",
+            patch(patch_auto_unsave),
+        )
         .layer(CompressionLayer::new())
         .with_state(AppState { db });
 

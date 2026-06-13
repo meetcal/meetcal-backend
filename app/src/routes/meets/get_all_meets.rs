@@ -1,18 +1,6 @@
-use crate::{AppError, AppState};
+use crate::{AppError, AppState, routes::meets::types::Meets};
 use axum::Json;
 use axum::extract::State;
-use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MeetsList3Months {
-    pub names: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, FromRow)]
-struct MeetName {
-    name: String,
-}
 
 /// /meets endpoint
 ///
@@ -21,21 +9,26 @@ struct MeetName {
 /// This endpoint takes no input and returns a list of meets in the db in the next 3 months sorted
 /// by earlist to latest
 ///
-/// TODO: Reshape or replace for the RN app's fast meet picker. Return full active meet objects
-/// with status, venue, date, and timezone fields, not just a filtered list of names.
-///
-/// "names": [
-///   "2026 USA Weightlifting National Championships, Powered by Rogue Fitness",
-///   "2026 Mountain North WSO Championships",
-///   "2026 Ohio WSO Championships"
+/// [
+///   {
+///     "end_date": "2026-08-16",
+///     "name": "2026 Ohio WSO Championships",
+///     "start_date": "2026-08-15",
+///     "time_zone": "America/New_York",
+///     "venue_city": "Columbus",
+///     "venue_name": "2026 Ohio WSO Championships",
+///     "venue_state": "OH",
+///     "venue_street": "400 North High Street",
+///     "venue_zip": "43215"
+///     "status": "completed"
+///   }
 /// ]
 pub async fn list_meets_next_3months(
     State(state): State<AppState>,
-) -> Result<Json<MeetsList3Months>, AppError> {
-    let rows = sqlx::query_as::<_, MeetName>(
+) -> Result<Json<Vec<Meets>>, AppError> {
+    let rows = sqlx::query_as::<_, Meets>(
         r#"
-        SELECT name 
-        FROM meets 
+        SELECT name, start_date::text as start_date, end_date::text as end_date, time_zone, venue_city, venue_state, venue_name, venue_street, venue_zip, federation, status FROM meets 
         WHERE status != 'completed' 
             AND start_date >= CURRENT_DATE 
             AND start_date <= CURRENT_DATE + INTERVAL '3 months' 
@@ -45,7 +38,5 @@ pub async fn list_meets_next_3months(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(MeetsList3Months {
-        names: rows.into_iter().map(|n| n.name).collect(),
-    }))
+    Ok(Json(rows))
 }

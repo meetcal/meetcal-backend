@@ -78,6 +78,7 @@ The server listens on `http://127.0.0.1:3000` by default.
 | ------ | -------------------- | --------------------------------- |
 | `GET`  | `/meets`             | Upcoming meets (next 3 months)    |
 | `GET`  | `/meet-details`      | Single meet metadata              |
+| `GET`  | `/meets/package`     | Selected meet data package        |
 | `GET`  | `/meets/schedule`    | Session schedule for a meet       |
 | `GET`  | `/meets/athletes`    | Start list with session timing    |
 | `GET`  | `/clubs`             | Club directory                    |
@@ -90,6 +91,12 @@ The server listens on `http://127.0.0.1:3000` by default.
 | `GET`  | `/nat-rankings`      | National rankings                 |
 | `GET`  | `/adaptive`          | Adaptive division records         |
 | `GET`  | `/search`            | Result search                     |
+| `GET`  | `/users/me/saved-sessions` | Saved sessions for authenticated user |
+| `PUT`  | `/users/me/saved-sessions/{session_id}` | Upsert saved session |
+| `DELETE` | `/users/me/saved-sessions/{session_id}` | Delete saved session |
+| `DELETE` | `/users/me/saved-sessions` | Clear saved sessions |
+| `GET`  | `/users/me/preferences` | Preferences for authenticated user |
+| `PATCH` | `/users/me/preferences/auto-unsave` | Toggle auto-unsave preference |
 
 Responses are gzip- and Brotli-compressed.
 

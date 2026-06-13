@@ -14,9 +14,6 @@ use axum::{
 /// This endpoint takes the name of the meet exactly as it shows in BARS and returns the details of
 /// the meet
 ///
-/// TODO: Reshape for the RN app. Include status and app-ready field names. Prefer folding this
-/// into /meets/package for selected-meet loading so the app avoids extra round trips.
-///
 /// Get meet names as they are listed by copying exact case-sensitive names from BARS
 ///
 /// {
@@ -29,6 +26,7 @@ use axum::{
 ///   "venue_state": "OH",
 ///   "venue_street": "400 North High Street",
 ///   "venue_zip": "43215"
+///   "status": "completed"
 /// }
 pub async fn get_meet_details(
     State(state): State<AppState>,
@@ -36,7 +34,7 @@ pub async fn get_meet_details(
 ) -> Result<Json<Meets>, AppError> {
     let rows = sqlx::query_as::<_, Meets>(
         r#"
-        SELECT name, start_date::text as start_date, end_date::text as end_date, time_zone, venue_city, venue_state, venue_name, venue_street, venue_zip, federation
+        SELECT name, start_date::text as start_date, end_date::text as end_date, time_zone, venue_city, venue_state, venue_name, venue_street, venue_zip, federation, status
         FROM meets
         WHERE name = $1
         "#,
@@ -45,16 +43,5 @@ pub async fn get_meet_details(
     .fetch_one(&state.db)
     .await?;
 
-    Ok(Json(Meets {
-        name: rows.name,
-        federation: rows.federation,
-        start_date: rows.start_date,
-        end_date: rows.end_date,
-        time_zone: rows.time_zone,
-        venue_city: rows.venue_city,
-        venue_name: rows.venue_name,
-        venue_state: rows.venue_state,
-        venue_street: rows.venue_street,
-        venue_zip: rows.venue_zip,
-    }))
+    Ok(Json(rows))
 }

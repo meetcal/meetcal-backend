@@ -14,13 +14,11 @@ use axum::{
 /// This endpoint takes the name of the meet exactly as it shows in BARS and returns the athletes in
 /// the meet
 ///
-/// TODO: Keep as a focused route, but include member_id if the RN app consumes this directly.
-/// For primary meet loading, prefer /meets/package with session data already joined.
-///
 /// Get meet names as they are listed by copying exact case-sensitive names from BARS
 ///
 /// [
 ///  {
+///    "member_id": "1234",
 ///    "adaptive": false,
 ///    "age": 27.0,
 ///    "club": "Vardanian Weightlifting",
@@ -40,7 +38,7 @@ pub async fn get_athletes_by_meet(
 ) -> Result<Json<Vec<Athlete>>, AppError> {
     let mut rows = sqlx::query_as::<_, Athlete>(
         r#"
-        SELECT adaptive, age, club, entry_total, gender, meet, name,
+        SELECT member_id, adaptive, age, club, entry_total, gender, meet, name,
                session_number, session_platform, weight_class, wso
         FROM athletes
         WHERE meet = $1

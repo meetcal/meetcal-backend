@@ -1,5 +1,4 @@
 use app::routes::meets::{
-    get_all_meets::MeetsList3Months,
     get_sessions_for_athletes::SessionsAthletes,
     types::{Athlete, MeetSchedule, Meets},
 };
@@ -14,9 +13,9 @@ async fn success_get_all_meets() {
 
     assert_eq!(response.status(), 200);
 
-    let body: MeetsList3Months = response.json().await.unwrap();
+    let body: Vec<Meets> = response.json().await.unwrap();
 
-    assert!(!body.names.is_empty());
+    assert!(!body.is_empty());
 }
 
 #[tokio::test]

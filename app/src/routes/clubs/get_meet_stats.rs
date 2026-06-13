@@ -27,11 +27,15 @@ pub struct MeetStats {
 #[serde(rename_all = "camelCase")]
 pub struct AthleteMeetResult {
     pub name: String,
+    pub weight_class: String,
     pub snatch_best: f64,
     pub cj_best: f64,
     pub total: f64,
     pub body_weight: f64,
     pub medal: Option<String>,
+    pub snatch_medal: Option<String>,
+    pub cj_medal: Option<String>,
+    pub total_medal: Option<String>,
     pub is_pr: bool,
     pub perfect_lifts: bool,
 }
@@ -39,6 +43,7 @@ pub struct AthleteMeetResult {
 #[derive(Debug, FromRow)]
 struct ClubResultRow {
     name: String,
+    weight_class: String,
     body_weight: f64,
     snatch1: f64,
     snatch2: f64,
@@ -49,7 +54,9 @@ struct ClubResultRow {
     cj3: f64,
     cj_best: f64,
     total: f64,
-    placing: i64,
+    snatch_placing: i64,
+    cj_placing: i64,
+    total_placing: i64,
     previous_best_total: Option<f64>,
 }
 
@@ -58,9 +65,6 @@ struct ClubResultRow {
 /// curl 'https://api.meetcal.app/clubs/meet-stats?meet=2026%20Ohio%20WSO%20Championships&club=Columbus%20Weightlifting' | jq .
 ///
 /// This endpoint takes meet and club name and returns a full report of how the club did at the meet
-///
-/// TODO: Reshape for the RN app as a screen-ready club report. The backend should calculate PRs,
-/// 6-for-6, total lifted, and snatch/CJ/total medals by weight class so the app only renders.
 ///
 /// {
 ///   "totalAthletes": 1,
@@ -92,7 +96,7 @@ pub async fn get_meet_stats(
     let rows: Vec<ClubResultRow> = sqlx::query_as(
         r#"
         WITH club_athletes AS (
-            SELECT DISTINCT name
+            SELECT DISTINCT name, weight_class
             FROM athletes
             WHERE club = $1
                 AND meet = $2
@@ -100,15 +104,28 @@ pub async fn get_meet_stats(
         meet_results AS (
             SELECT
                 lr.*,
+                a.weight_class,
                 RANK() OVER (
-                    PARTITION BY COALESCE(lr.age, '')
+                    PARTITION BY a.weight_class
+                    ORDER BY COALESCE(lr.snatch_best, 0) DESC
+                ) AS snatch_placing,
+                RANK() OVER (
+                    PARTITION BY a.weight_class
+                    ORDER BY COALESCE(lr.cj_best, 0) DESC
+                ) AS cj_placing,
+                RANK() OVER (
+                    PARTITION BY a.weight_class
                     ORDER BY COALESCE(lr.total, 0) DESC
-                ) AS placing
+                ) AS total_placing
             FROM lifting_results lr
+            INNER JOIN athletes a
+                ON a.meet = lr.meet
+                AND a.name = lr.name
             WHERE lr.meet = $2
         )
         SELECT
             mr.name,
+            mr.weight_class,
             COALESCE(mr.body_weight, 0) AS body_weight,
             COALESCE(mr.snatch1, 0) AS snatch1,
             COALESCE(mr.snatch2, 0) AS snatch2,
@@ -119,15 +136,20 @@ pub async fn get_meet_stats(
             COALESCE(mr.cj3, 0) AS cj3,
             COALESCE(mr.cj_best, 0) AS cj_best,
             COALESCE(mr.total, 0) AS total,
-            mr.placing,
+            mr.snatch_placing,
+            mr.cj_placing,
+            mr.total_placing,
             (
                 SELECT MAX(previous.total)
                 FROM lifting_results previous
                 WHERE previous.name = mr.name
                     AND previous.date < mr.date
+                    AND (previous.federation IS NULL OR previous.federation <> 'BWL')
             ) AS previous_best_total
         FROM meet_results mr
-        INNER JOIN club_athletes ca ON ca.name = mr.name
+        INNER JOIN club_athletes ca
+            ON ca.name = mr.name
+            AND ca.weight_class = mr.weight_class
         ORDER BY mr.name
         "#,
     )
@@ -136,9 +158,21 @@ pub async fn get_meet_stats(
     .fetch_all(&state.db)
     .await?;
 
-    let gold_medals = rows.iter().filter(|row| row.placing == 1).count() as i64;
-    let silver_medals = rows.iter().filter(|row| row.placing == 2).count() as i64;
-    let bronze_medals = rows.iter().filter(|row| row.placing == 3).count() as i64;
+    let medal_placings = rows
+        .iter()
+        .flat_map(|row| [row.snatch_placing, row.cj_placing, row.total_placing]);
+    let mut gold_medals = 0;
+    let mut silver_medals = 0;
+    let mut bronze_medals = 0;
+
+    for placing in medal_placings {
+        match placing {
+            1 => gold_medals += 1,
+            2 => silver_medals += 1,
+            3 => bronze_medals += 1,
+            _ => {}
+        }
+    }
 
     let total_prs = rows
         .iter()
@@ -170,16 +204,15 @@ pub async fn get_meet_stats(
         .into_iter()
         .map(|row| AthleteMeetResult {
             name: row.name,
+            weight_class: row.weight_class,
             snatch_best: row.snatch_best,
             cj_best: row.cj_best,
             total: row.total,
             body_weight: row.body_weight,
-            medal: match row.placing {
-                1 => Some("gold".to_string()),
-                2 => Some("silver".to_string()),
-                3 => Some("bronze".to_string()),
-                _ => None,
-            },
+            medal: medal_for(row.total_placing),
+            snatch_medal: medal_for(row.snatch_placing),
+            cj_medal: medal_for(row.cj_placing),
+            total_medal: medal_for(row.total_placing),
             is_pr: row
                 .previous_best_total
                 .is_some_and(|previous| row.total > previous),
@@ -206,4 +239,13 @@ pub async fn get_meet_stats(
         total_weight_lifted,
         athlete_results,
     }))
+}
+
+fn medal_for(placing: i64) -> Option<String> {
+    match placing {
+        1 => Some("gold".to_string()),
+        2 => Some("silver".to_string()),
+        3 => Some("bronze".to_string()),
+        _ => None,
+    }
 }
