@@ -463,14 +463,14 @@ class USAMWEventsScraper:
             return
         
         try:
-            title = "*USAMW Events Scraper Update (DRY RUN)*" if is_dry_run else "*USAMW Events Scraper Update*"
+            title = "*USAMW Events Postgres Update (DRY RUN)*" if is_dry_run else "*USAMW Events Postgres Update*"
             action = "would be " if is_dry_run else ""
             
             message = f"{title}\n\n"
-            message += f"{len(inserted)} event(s) {action}added to Convex\n"
+            message += f"{len(inserted)} event(s) {action}inserted into Postgres\n"
             
             if inserted:
-                message += "\nEvents added:\n"
+                message += "\nEvents inserted:\n"
                 for event in inserted:
                     message += f"• {event['name']}\n"
             

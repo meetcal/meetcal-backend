@@ -1,12 +1,14 @@
 require('dotenv').config();
 const axios = require('axios');
+const path = require('path');
+const { spawnSync } = require('child_process');
 
 const convexUrl = process.env.CONVEX_URL;
 const scraperSecret = process.env.SCRAPER_SECRET;
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
 const API_URL = 'https://usaweightlifting.sport80.com/api/public/widget/data/new/1?p=0&i=20&s=WSO&l=&d=10&f=';
 
-if (!convexUrl || !scraperSecret) {
+if (!process.env.DATABASE_URL && (!convexUrl || !scraperSecret)) {
   console.error('Missing CONVEX_URL or SCRAPER_SECRET. Exiting.');
   process.exit(1);
 }
@@ -147,6 +149,10 @@ function transformMeetsData(meetsData) {
 }
 
 async function ingestMeetToConvex(meet) {
+  if (process.env.DATABASE_URL) {
+    return ingestMeetToPostgres(meet);
+  }
+
   const res = await fetch(`${convexUrl}/api/action`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -173,6 +179,35 @@ async function ingestMeetToConvex(meet) {
   return result.wasInsert;
 }
 
+function ingestMeetToPostgres(meet) {
+  const ingestScript = path.resolve(__dirname, '../../../common/postgres_ingest.py');
+  const python = process.env.POSTGRES_INGEST_PYTHON || 'python3';
+  const result = spawnSync(python, [ingestScript, 'scraperIngestion:ingestMeet'], {
+    input: JSON.stringify({
+      name: meet.name,
+      venueName: meet.venueName,
+      venueStreet: meet.venueStreet,
+      venueCity: meet.venueCity,
+      venueState: meet.venueState,
+      venueZip: meet.venueZip,
+      timeZone: meet.timeZone,
+      startDate: meet.startDate,
+      endDate: meet.endDate,
+      status: meet.status,
+      federation: meet.federation,
+    }),
+    encoding: 'utf8',
+    env: process.env,
+  });
+
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout || `Postgres ingest failed with exit code ${result.status}`);
+  }
+
+  const parsed = JSON.parse(result.stdout);
+  return Boolean(parsed.wasInsert);
+}
+
 async function retry(fn, maxRetries = 3) {
   let retries = 0;
   while (retries < maxRetries) {
@@ -189,8 +224,8 @@ async function retry(fn, maxRetries = 3) {
 async function sendSlackNotification(insertCount, addedMeetNames) {
   if (!SLACK_WEBHOOK_URL) return;
   const message = insertCount === 0
-    ? 'No new WSO meets added to Convex'
-    : `${insertCount} WSO meets added to Convex\n\nMeets added:\n${addedMeetNames.map(n => `- ${n}`).join('\n')}`;
+    ? 'No new WSO meets inserted into Postgres'
+    : `${insertCount} WSO meets inserted into Postgres\n\nMeets inserted:\n${addedMeetNames.map(n => `- ${n}`).join('\n')}`;
   try {
     await axios.post(SLACK_WEBHOOK_URL, { text: message }, { timeout: 30000 });
   } catch (error) {

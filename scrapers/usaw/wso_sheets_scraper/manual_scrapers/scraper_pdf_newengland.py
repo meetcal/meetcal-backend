@@ -282,7 +282,7 @@ class WSORecordsNewEnglandScraper:
             return
         
         # Build message
-        title = f"{self.wso_name} WSO Records Update (PDF)"
+        title = f"{self.wso_name} WSO Records Postgres Update (PDF)"
         total_changes = len(inserted) + len(updated)
         
         if total_changes == 0:
@@ -412,4 +412,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

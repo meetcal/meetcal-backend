@@ -1,7 +1,9 @@
 const CONVEX_URL = process.env.CONVEX_URL;
+const DATABASE_URL = process.env.DATABASE_URL;
 const SLACK_WEBHOOK_URL = process.env.SLACK_MEET_WEBHOOK_URL;
+const { spawnSync } = require("child_process");
 
-if (!CONVEX_URL) {
+if (!DATABASE_URL && !CONVEX_URL) {
   console.error("Missing CONVEX_URL. Exiting.");
   process.exit(1);
 }
@@ -48,6 +50,33 @@ async function queryConvex(path, args = {}) {
   return result.value ?? result;
 }
 
+function queryPostgresMeets(todayKey, cutoffKey) {
+  const sql = `
+    SELECT name, start_date::text, end_date::text
+    FROM meets
+    WHERE status <> 'completed'
+      AND start_date >= '${todayKey}'::date
+      AND start_date <= '${cutoffKey}'::date
+    ORDER BY start_date, name
+  `;
+  const result = spawnSync("psql", [DATABASE_URL, "-X", "-q", "-t", "-A", "-F", "\t", "-c", sql], {
+    encoding: "utf8",
+  });
+
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout || `Postgres query failed with exit code ${result.status}`);
+  }
+
+  return result.stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [name, startDate, endDate] = line.split("\t");
+      return { name, startDate, endDate };
+    });
+}
+
 async function sendSlackMessage(text) {
   const response = await fetch(SLACK_WEBHOOK_URL, {
     method: "POST",
@@ -65,22 +94,26 @@ async function main() {
   const todayKey = toDateKey(today);
   const cutoffKey = toDateKey(addMonths(today, 2));
 
-  const meets = await queryConvex("meets:listAll");
+  const meets = DATABASE_URL
+    ? queryPostgresMeets(todayKey, cutoffKey)
+    : await queryConvex("meets:listAll");
   if (!Array.isArray(meets)) {
-    throw new Error("Convex query did not return a meets array.");
+    throw new Error("Meet query did not return a meets array.");
   }
 
-  const upcomingMeets = meets
-    .filter((meet) => {
-      return (
-        meet.status !== "completed" &&
-        meet.startDate >= todayKey &&
-        meet.startDate <= cutoffKey
-      );
-    })
-    .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.name.localeCompare(b.name));
+  const upcomingMeets = DATABASE_URL
+    ? meets
+    : meets
+        .filter((meet) => {
+          return (
+            meet.status !== "completed" &&
+            meet.startDate >= todayKey &&
+            meet.startDate <= cutoffKey
+          );
+        })
+        .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.name.localeCompare(b.name));
 
-  const header = `Upcoming meets from ${todayKey} through ${cutoffKey}`;
+  const header = `Upcoming meets in Postgres from ${todayKey} through ${cutoffKey}`;
   const message =
     upcomingMeets.length === 0
       ? `${header}\n\nNo meets found.`

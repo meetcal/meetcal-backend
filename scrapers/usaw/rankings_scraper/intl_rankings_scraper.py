@@ -454,7 +454,7 @@ def send_slack_notification(group_results: List[Dict[str, Any]], dry_run: bool =
     ]
 
     if changed_groups:
-        lines = ["*International rankings changed:*"]
+        lines = ["*International rankings Postgres update:*"]
         for result in sorted(changed_groups, key=group_label):
             changed_count = (
                 int(result.get("inserted", 0))
@@ -473,7 +473,7 @@ def send_slack_notification(group_results: List[Dict[str, Any]], dry_run: bool =
                 )
         text = "\n".join(lines)
     else:
-        text = "International rankings scraper completed: no rankings changed."
+        text = "International rankings Postgres scraper completed: no rankings changed."
 
     try:
         response = requests.post(
@@ -609,7 +609,7 @@ def upsert_to_convex(rankings: List[Dict], dry_run: bool = False) -> Dict[str, A
 
     try:
         print(
-            f"Upserting {len(convex_rankings)} intl rankings in Convex for "
+            f"Upserting {len(convex_rankings)} intl rankings in Postgres for "
             f"{group_meet} / {group_gender} / {group_age_category}..."
         )
         result = client.action(
@@ -627,7 +627,7 @@ def upsert_to_convex(rankings: List[Dict], dry_run: bool = False) -> Dict[str, A
         unchanged = int(result.get("unchanged", 0))
         deleted = int(result.get("deleted", 0))
         print(
-            f"Successfully upserted scoped intl rankings in Convex. "
+            f"Successfully upserted scoped intl rankings in Postgres. "
             f"Inserted: {inserted}, Updated: {updated}, Unchanged: {unchanged}, Deleted: {deleted}"
         )
         return {
@@ -641,7 +641,7 @@ def upsert_to_convex(rankings: List[Dict], dry_run: bool = False) -> Dict[str, A
             "pruned": False,
         }
     except Exception as e:
-        logging.error(f"Error replacing intl rankings in Convex: {e}")
+        logging.error(f"Error replacing intl rankings in Postgres: {e}")
         return {"inserted": 0, "updated": 0, "unchanged": 0, "deleted": 0}
 
 

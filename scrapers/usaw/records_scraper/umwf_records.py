@@ -345,7 +345,7 @@ class UMWFRecordsScraper:
             return
 
         # Build message
-        title = "UMWF World Records Update (DRY RUN)" if is_dry_run else "UMWF World Records Update"
+        title = "UMWF World Records Postgres Update (DRY RUN)" if is_dry_run else "UMWF World Records Postgres Update"
 
         # Summary
         total_changes = len(inserted) + len(updated)
@@ -353,7 +353,7 @@ class UMWFRecordsScraper:
             message = f"{title}\nNo changes detected" + (" (dry-run)" if is_dry_run else "")
         else:
             action = "would be " if is_dry_run else ""
-            message = f"{title}\n*{len(inserted)}* new records {action}added, *{len(updated)}* records {action}updated".strip()
+            message = f"{title}\n*{len(inserted)}* new records {action}inserted, *{len(updated)}* records {action}updated".strip()
 
         # Inserted records
         if inserted:

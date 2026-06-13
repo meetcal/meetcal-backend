@@ -231,7 +231,7 @@ class WSORecordsIllinoisScraper:
             print("Slack webhook not configured, skipping notification")
             return
 
-        title = f"{self.wso_name} WSO Records Update (PDF)"
+        title = f"{self.wso_name} WSO Records Postgres Update (PDF)"
         message = (
             f"*{title}*\n\n"
             f"Processed *{record_count}* current record rows\n"

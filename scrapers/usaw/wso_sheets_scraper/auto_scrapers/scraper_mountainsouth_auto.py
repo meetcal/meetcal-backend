@@ -178,7 +178,7 @@ class MountainSouthAutoScraper:
         total_updated = sum(len(r.get("updated", [])) for r in results)
 
         # Build message
-        title = f"{self.wso_name} WSO Records - Automated Scrape Complete"
+        title = f"{self.wso_name} WSO Records Postgres - Automated Scrape Complete"
 
         if self.dry_run:
             message = f"*{title}*\n\n*DRY RUN* - Processed {total_pdfs} PDF files"

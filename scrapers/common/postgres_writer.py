@@ -4,6 +4,7 @@ import hashlib
 import os
 import time
 from contextlib import contextmanager
+from decimal import Decimal
 from typing import Any, Iterable
 
 import psycopg
@@ -44,6 +45,18 @@ def clean(row: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in row.items() if key != "scraperSecret"}
 
 
+def comparable(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
+def row_changed(existing: dict[str, Any] | None, values: dict[str, Any]) -> bool:
+    if existing is None:
+        return True
+    return any(comparable(existing.get(key)) != comparable(value) for key, value in values.items())
+
+
 def upsert_lifting_result(conn, row: dict[str, Any]) -> dict[str, Any]:
     row = clean(row)
     legacy_id = first(row, "legacyId", "legacy_id")
@@ -52,6 +65,42 @@ def upsert_lifting_result(conn, row: dict[str, Any]) -> dict[str, Any]:
     date = first(row, "date", default="")
     name = first(row, "name", default="")
     convex_id = first(row, "convexId", "convex_id") or stable_id("lifting_result", event_id, meet, name)
+    values = {
+        "legacy_id": legacy_id,
+        "event_id": event_id,
+        "meet": meet,
+        "date": date,
+        "name": name,
+        "age": first(row, "age"),
+        "body_weight": first(row, "bodyWeight", "body_weight"),
+        "snatch1": first(row, "snatch1"),
+        "snatch2": first(row, "snatch2"),
+        "snatch3": first(row, "snatch3"),
+        "snatch_best": first(row, "snatchBest", "snatch_best"),
+        "cj1": first(row, "cj1"),
+        "cj2": first(row, "cj2"),
+        "cj3": first(row, "cj3"),
+        "cj_best": first(row, "cjBest", "cj_best"),
+        "total": first(row, "total"),
+        "adaptive": bool(first(row, "adaptive", default=False)),
+        "federation": first(row, "federation"),
+    }
+    existing = conn.execute(
+        """
+        SELECT id, convex_id, legacy_id, event_id, meet, date, name, age, body_weight,
+            snatch1, snatch2, snatch3, snatch_best, cj1, cj2, cj3, cj_best,
+            total, adaptive, federation
+        FROM lifting_results
+        WHERE convex_id = %s
+            OR (legacy_id IS NOT DISTINCT FROM %s AND legacy_id IS NOT NULL)
+            OR (event_id = %s AND meet = %s AND name = %s)
+        LIMIT 1
+        """,
+        (convex_id, legacy_id, event_id, meet, name),
+    ).fetchone()
+    if existing:
+        convex_id = existing["convex_id"]
+    was_changed = row_changed(existing, values)
 
     result = conn.execute(
         """
@@ -86,29 +135,9 @@ def upsert_lifting_result(conn, row: dict[str, Any]) -> dict[str, Any]:
             federation = EXCLUDED.federation
         RETURNING id
         """,
-        {
-            "convex_id": convex_id,
-            "legacy_id": legacy_id,
-            "event_id": event_id,
-            "meet": meet,
-            "date": date,
-            "name": name,
-            "age": first(row, "age"),
-            "body_weight": first(row, "bodyWeight", "body_weight"),
-            "snatch1": first(row, "snatch1"),
-            "snatch2": first(row, "snatch2"),
-            "snatch3": first(row, "snatch3"),
-            "snatch_best": first(row, "snatchBest", "snatch_best"),
-            "cj1": first(row, "cj1"),
-            "cj2": first(row, "cj2"),
-            "cj3": first(row, "cj3"),
-            "cj_best": first(row, "cjBest", "cj_best"),
-            "total": first(row, "total"),
-            "adaptive": bool(first(row, "adaptive", default=False)),
-            "federation": first(row, "federation"),
-        },
+        {"convex_id": convex_id, **values},
     ).fetchone()
-    return {"id": str(result["id"]), "wasInsert": True, "wasChanged": True}
+    return {"id": str(result["id"]), "wasInsert": existing is None, "wasChanged": was_changed}
 
 
 def upsert_record(conn, row: dict[str, Any]) -> dict[str, Any]:
@@ -120,6 +149,29 @@ def upsert_record(conn, row: dict[str, Any]) -> dict[str, Any]:
     convex_id = first(row, "convexId", "convex_id") or stable_id(
         "record", record_type, age_category, gender, weight_class
     )
+    values = {
+        "record_type": record_type,
+        "age_category": age_category,
+        "gender": gender,
+        "weight_class": weight_class,
+        "snatch_record": first(row, "snatchRecord", "snatch_record"),
+        "cj_record": first(row, "cjRecord", "cj_record"),
+        "total_record": first(row, "totalRecord", "total_record"),
+    }
+    existing = conn.execute(
+        """
+        SELECT id, convex_id, record_type, age_category, gender, weight_class,
+            snatch_record, cj_record, total_record
+        FROM records
+        WHERE convex_id = %s
+            OR (record_type = %s AND age_category = %s AND gender = %s AND weight_class = %s)
+        LIMIT 1
+        """,
+        (convex_id, record_type, age_category, gender, weight_class),
+    ).fetchone()
+    if existing:
+        convex_id = existing["convex_id"]
+    was_changed = row_changed(existing, values)
     result = conn.execute(
         """
         INSERT INTO records (
@@ -139,16 +191,16 @@ def upsert_record(conn, row: dict[str, Any]) -> dict[str, Any]:
         """,
         (
             convex_id,
-            record_type,
-            age_category,
-            gender,
-            weight_class,
-            first(row, "snatchRecord", "snatch_record"),
-            first(row, "cjRecord", "cj_record"),
-            first(row, "totalRecord", "total_record"),
+            values["record_type"],
+            values["age_category"],
+            values["gender"],
+            values["weight_class"],
+            values["snatch_record"],
+            values["cj_record"],
+            values["total_record"],
         ),
     ).fetchone()
-    return {"id": str(result["id"]), "wasInsert": True, "wasChanged": True}
+    return {"id": str(result["id"]), "wasInsert": existing is None, "wasChanged": was_changed}
 
 
 def upsert_wso_record(conn, row: dict[str, Any]) -> dict[str, Any]:
@@ -160,6 +212,29 @@ def upsert_wso_record(conn, row: dict[str, Any]) -> dict[str, Any]:
     convex_id = first(row, "convexId", "convex_id") or stable_id(
         "wso_record", wso, age_category, gender, weight_class
     )
+    values = {
+        "wso": wso,
+        "age_category": age_category,
+        "gender": gender,
+        "weight_class": weight_class,
+        "snatch_record": first(row, "snatchRecord", "snatch_record"),
+        "cj_record": first(row, "cjRecord", "cj_record"),
+        "total_record": first(row, "totalRecord", "total_record"),
+    }
+    existing = conn.execute(
+        """
+        SELECT id, convex_id, wso, age_category, gender, weight_class,
+            snatch_record, cj_record, total_record
+        FROM wso_records
+        WHERE convex_id = %s
+            OR (wso = %s AND age_category = %s AND gender = %s AND weight_class = %s)
+        LIMIT 1
+        """,
+        (convex_id, wso, age_category, gender, weight_class),
+    ).fetchone()
+    if existing:
+        convex_id = existing["convex_id"]
+    was_changed = row_changed(existing, values)
     result = conn.execute(
         """
         INSERT INTO wso_records (
@@ -179,16 +254,16 @@ def upsert_wso_record(conn, row: dict[str, Any]) -> dict[str, Any]:
         """,
         (
             convex_id,
-            wso,
-            age_category,
-            gender,
-            weight_class,
-            first(row, "snatchRecord", "snatch_record"),
-            first(row, "cjRecord", "cj_record"),
-            first(row, "totalRecord", "total_record"),
+            values["wso"],
+            values["age_category"],
+            values["gender"],
+            values["weight_class"],
+            values["snatch_record"],
+            values["cj_record"],
+            values["total_record"],
         ),
     ).fetchone()
-    return {"id": str(result["id"]), "wasInsert": True, "wasChanged": True}
+    return {"id": str(result["id"]), "wasInsert": existing is None, "wasChanged": was_changed}
 
 
 def upsert_standard(conn, row: dict[str, Any]) -> dict[str, Any]:
@@ -199,6 +274,26 @@ def upsert_standard(conn, row: dict[str, Any]) -> dict[str, Any]:
     convex_id = first(row, "convexId", "convex_id") or stable_id(
         "standard", age_category, gender, weight_class
     )
+    values = {
+        "age_category": age_category,
+        "gender": gender,
+        "weight_class": weight_class,
+        "standard_a": first(row, "standardA", "standard_a", default=0),
+        "standard_b": first(row, "standardB", "standard_b", default=0),
+    }
+    existing = conn.execute(
+        """
+        SELECT id, convex_id, age_category, gender, weight_class, standard_a, standard_b
+        FROM standards
+        WHERE convex_id = %s
+            OR (age_category = %s AND gender = %s AND weight_class = %s)
+        LIMIT 1
+        """,
+        (convex_id, age_category, gender, weight_class),
+    ).fetchone()
+    if existing:
+        convex_id = existing["convex_id"]
+    was_changed = row_changed(existing, values)
     result = conn.execute(
         """
         INSERT INTO standards (
@@ -215,14 +310,14 @@ def upsert_standard(conn, row: dict[str, Any]) -> dict[str, Any]:
         """,
         (
             convex_id,
-            age_category,
-            gender,
-            weight_class,
-            first(row, "standardA", "standard_a", default=0),
-            first(row, "standardB", "standard_b", default=0),
+            values["age_category"],
+            values["gender"],
+            values["weight_class"],
+            values["standard_a"],
+            values["standard_b"],
         ),
     ).fetchone()
-    return {"id": str(result["id"]), "wasInsert": True, "wasChanged": True}
+    return {"id": str(result["id"]), "wasInsert": existing is None, "wasChanged": was_changed}
 
 
 def upsert_qualifying_total(conn, row: dict[str, Any]) -> dict[str, Any]:
@@ -234,6 +329,26 @@ def upsert_qualifying_total(conn, row: dict[str, Any]) -> dict[str, Any]:
     convex_id = first(row, "convexId", "convex_id") or stable_id(
         "qualifying_total", event_name, age_category, gender, weight_class
     )
+    values = {
+        "event_name": event_name,
+        "gender": gender,
+        "age_category": age_category,
+        "weight_class": weight_class,
+        "qualifying_total": first(row, "qualifyingTotal", "qualifying_total", default=0),
+    }
+    existing = conn.execute(
+        """
+        SELECT id, convex_id, event_name, gender, age_category, weight_class, qualifying_total
+        FROM qualifying_totals
+        WHERE convex_id = %s
+            OR (event_name = %s AND gender = %s AND age_category = %s AND weight_class = %s)
+        LIMIT 1
+        """,
+        (convex_id, event_name, gender, age_category, weight_class),
+    ).fetchone()
+    if existing:
+        convex_id = existing["convex_id"]
+    was_changed = row_changed(existing, values)
     result = conn.execute(
         """
         INSERT INTO qualifying_totals (
@@ -250,20 +365,47 @@ def upsert_qualifying_total(conn, row: dict[str, Any]) -> dict[str, Any]:
         """,
         (
             convex_id,
-            event_name,
-            gender,
-            age_category,
-            weight_class,
-            first(row, "qualifyingTotal", "qualifying_total", default=0),
+            values["event_name"],
+            values["gender"],
+            values["age_category"],
+            values["weight_class"],
+            values["qualifying_total"],
         ),
     ).fetchone()
-    return {"id": str(result["id"]), "wasInsert": True}
+    return {"id": str(result["id"]), "wasInsert": existing is None, "wasChanged": was_changed}
 
 
 def upsert_meet(conn, row: dict[str, Any]) -> dict[str, Any]:
     row = clean(row)
     name = first(row, "name", default="")
     convex_id = first(row, "convexId", "convex_id") or stable_id("meet", name)
+    values = {
+        "name": name,
+        "federation": first(row, "federation", default="USAW"),
+        "start_date": first(row, "startDate", "start_date"),
+        "end_date": first(row, "endDate", "end_date"),
+        "status": first(row, "status", default="upcoming"),
+        "time_zone": first(row, "timeZone", "time_zone", default="America/New_York"),
+        "updated_at": first(row, "updatedAt", "updated_at", default=millis()),
+        "venue_name": first(row, "venueName", "venue_name", default=""),
+        "venue_street": first(row, "venueStreet", "venue_street", default=""),
+        "venue_city": first(row, "venueCity", "venue_city", default=""),
+        "venue_state": first(row, "venueState", "venue_state", default=""),
+        "venue_zip": first(row, "venueZip", "venue_zip", default=""),
+    }
+    existing = conn.execute(
+        """
+        SELECT id, convex_id, name, federation, start_date, end_date, status, time_zone,
+            updated_at, venue_name, venue_street, venue_city, venue_state, venue_zip
+        FROM meets
+        WHERE convex_id = %s OR name = %s
+        LIMIT 1
+        """,
+        (convex_id, name),
+    ).fetchone()
+    if existing:
+        convex_id = existing["convex_id"]
+    was_changed = row_changed(existing, values)
     result = conn.execute(
         """
         INSERT INTO meets (
@@ -288,21 +430,21 @@ def upsert_meet(conn, row: dict[str, Any]) -> dict[str, Any]:
         """,
         (
             convex_id,
-            name,
-            first(row, "federation", default="USAW"),
-            first(row, "startDate", "start_date"),
-            first(row, "endDate", "end_date"),
-            first(row, "status", default="upcoming"),
-            first(row, "timeZone", "time_zone", default="America/New_York"),
-            first(row, "updatedAt", "updated_at", default=millis()),
-            first(row, "venueName", "venue_name", default=""),
-            first(row, "venueStreet", "venue_street", default=""),
-            first(row, "venueCity", "venue_city", default=""),
-            first(row, "venueState", "venue_state", default=""),
-            first(row, "venueZip", "venue_zip", default=""),
+            values["name"],
+            values["federation"],
+            values["start_date"],
+            values["end_date"],
+            values["status"],
+            values["time_zone"],
+            values["updated_at"],
+            values["venue_name"],
+            values["venue_street"],
+            values["venue_city"],
+            values["venue_state"],
+            values["venue_zip"],
         ),
     ).fetchone()
-    return {"id": str(result["id"]), "wasInsert": True}
+    return {"id": str(result["id"]), "wasInsert": existing is None, "wasChanged": was_changed}
 
 
 def upsert_athlete(conn, row: dict[str, Any]) -> dict[str, Any]:
@@ -311,6 +453,34 @@ def upsert_athlete(conn, row: dict[str, Any]) -> dict[str, Any]:
     name = first(row, "name", default="")
     meet = first(row, "meet", default="")
     convex_id = first(row, "convexId", "convex_id") or stable_id("athlete", meet, member_id, name)
+    values = {
+        "member_id": member_id,
+        "name": name,
+        "age": first(row, "age", default=0),
+        "club": first(row, "club", default=""),
+        "wso": first(row, "wso"),
+        "gender": first(row, "gender", default=""),
+        "weight_class": first(row, "weightClass", "weight_class", default=""),
+        "entry_total": first(row, "entryTotal", "entry_total", default=0),
+        "session_number": first(row, "sessionNumber", "session_number"),
+        "session_platform": first(row, "sessionPlatform", "session_platform"),
+        "meet": meet,
+        "adaptive": bool(first(row, "adaptive", default=False)),
+    }
+    existing = conn.execute(
+        """
+        SELECT id, convex_id, member_id, name, age, club, wso, gender, weight_class,
+            entry_total, session_number, session_platform, meet, adaptive
+        FROM athletes
+        WHERE convex_id = %s
+            OR (meet = %s AND member_id = %s AND name = %s)
+        LIMIT 1
+        """,
+        (convex_id, meet, member_id, name),
+    ).fetchone()
+    if existing:
+        convex_id = existing["convex_id"]
+    was_changed = row_changed(existing, values)
     result = conn.execute(
         """
         INSERT INTO athletes (
@@ -335,21 +505,21 @@ def upsert_athlete(conn, row: dict[str, Any]) -> dict[str, Any]:
         """,
         (
             convex_id,
-            member_id,
-            name,
-            first(row, "age", default=0),
-            first(row, "club", default=""),
-            first(row, "wso"),
-            first(row, "gender", default=""),
-            first(row, "weightClass", "weight_class", default=""),
-            first(row, "entryTotal", "entry_total", default=0),
-            first(row, "sessionNumber", "session_number"),
-            first(row, "sessionPlatform", "session_platform"),
-            meet,
-            bool(first(row, "adaptive", default=False)),
+            values["member_id"],
+            values["name"],
+            values["age"],
+            values["club"],
+            values["wso"],
+            values["gender"],
+            values["weight_class"],
+            values["entry_total"],
+            values["session_number"],
+            values["session_platform"],
+            values["meet"],
+            values["adaptive"],
         ),
     ).fetchone()
-    return {"id": str(result["id"]), "wasInsert": True}
+    return {"id": str(result["id"]), "wasInsert": existing is None, "wasChanged": was_changed}
 
 
 def upsert_session_schedule(conn, row: dict[str, Any]) -> dict[str, Any]:
@@ -361,6 +531,28 @@ def upsert_session_schedule(conn, row: dict[str, Any]) -> dict[str, Any]:
     convex_id = first(row, "convexId", "convex_id") or stable_id(
         "session_schedule", meet, session_id, platform, weight_class
     )
+    values = {
+        "date": first(row, "date", default=""),
+        "session_id": session_id,
+        "start_time": first(row, "startTime", "start_time", default=""),
+        "weigh_in_time": first(row, "weighInTime", "weigh_in_time", default=""),
+        "platform": platform,
+        "weight_class": weight_class,
+        "meet": meet,
+    }
+    existing = conn.execute(
+        """
+        SELECT id, convex_id, date, session_id, start_time, weigh_in_time, platform, weight_class, meet
+        FROM session_schedule
+        WHERE convex_id = %s
+            OR (meet = %s AND session_id = %s AND platform = %s AND weight_class = %s)
+        LIMIT 1
+        """,
+        (convex_id, meet, session_id, platform, weight_class),
+    ).fetchone()
+    if existing:
+        convex_id = existing["convex_id"]
+    was_changed = row_changed(existing, values)
     result = conn.execute(
         """
         INSERT INTO session_schedule (
@@ -379,16 +571,16 @@ def upsert_session_schedule(conn, row: dict[str, Any]) -> dict[str, Any]:
         """,
         (
             convex_id,
-            first(row, "date", default=""),
-            session_id,
-            first(row, "startTime", "start_time", default=""),
-            first(row, "weighInTime", "weigh_in_time", default=""),
-            platform,
-            weight_class,
-            meet,
+            values["date"],
+            values["session_id"],
+            values["start_time"],
+            values["weigh_in_time"],
+            values["platform"],
+            values["weight_class"],
+            values["meet"],
         ),
     ).fetchone()
-    return {"id": str(result["id"]), "wasInsert": True}
+    return {"id": str(result["id"]), "wasInsert": existing is None, "wasChanged": was_changed}
 
 
 def upsert_intl_ranking(conn, row: dict[str, Any]) -> dict[str, Any]:
@@ -401,6 +593,31 @@ def upsert_intl_ranking(conn, row: dict[str, Any]) -> dict[str, Any]:
     convex_id = first(row, "convexId", "convex_id") or stable_id(
         "intl_ranking", meet, gender, age_category, ranking, name
     )
+    values = {
+        "legacy_id": first(row, "legacyId", "legacy_id"),
+        "meet": meet,
+        "ranking": ranking,
+        "name": name,
+        "weight_class": first(row, "weightClass", "weight_class"),
+        "total": first(row, "total"),
+        "percent_a": first(row, "percentA", "percent_a"),
+        "gender": gender,
+        "age_category": age_category,
+    }
+    existing = conn.execute(
+        """
+        SELECT id, convex_id, legacy_id, meet, ranking, name, weight_class,
+            total, percent_a, gender, age_category
+        FROM intl_rankings
+        WHERE convex_id = %s
+            OR (meet = %s AND gender = %s AND age_category = %s AND ranking = %s AND name = %s)
+        LIMIT 1
+        """,
+        (convex_id, meet, gender, age_category, ranking, name),
+    ).fetchone()
+    if existing:
+        convex_id = existing["convex_id"]
+    was_changed = row_changed(existing, values)
     result = conn.execute(
         """
         INSERT INTO intl_rankings (
@@ -422,18 +639,18 @@ def upsert_intl_ranking(conn, row: dict[str, Any]) -> dict[str, Any]:
         """,
         (
             convex_id,
-            first(row, "legacyId", "legacy_id"),
-            meet,
-            ranking,
-            name,
-            first(row, "weightClass", "weight_class"),
-            first(row, "total"),
-            first(row, "percentA", "percent_a"),
-            gender,
-            age_category,
+            values["legacy_id"],
+            values["meet"],
+            values["ranking"],
+            values["name"],
+            values["weight_class"],
+            values["total"],
+            values["percent_a"],
+            values["gender"],
+            values["age_category"],
         ),
     ).fetchone()
-    return {"id": str(result["id"]), "wasInsert": True}
+    return {"id": str(result["id"]), "wasInsert": existing is None, "wasChanged": was_changed}
 
 
 def replace_records(conn, record_type: str, rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
@@ -446,24 +663,108 @@ def replace_records(conn, record_type: str, rows: Iterable[dict[str, Any]]) -> d
 
 
 def replace_wso_records(conn, wso: str, rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    conn.execute("DELETE FROM wso_records WHERE wso = %s", (wso,))
+    prepared_rows = [{**row, "wso": wso} for row in rows]
+    existing_rows = conn.execute(
+        """
+        SELECT convex_id, wso, age_category, gender, weight_class,
+            snatch_record, cj_record, total_record
+        FROM wso_records
+        WHERE wso = %s
+        """,
+        (wso,),
+    ).fetchall()
+    existing_by_id = {row["convex_id"]: row for row in existing_rows}
+    existing_by_key = {
+        (row["wso"], row["age_category"], row["gender"], row["weight_class"]): row
+        for row in existing_rows
+    }
     inserted = 0
-    for row in rows:
-        upsert_wso_record(conn, {**row, "wso": wso})
-        inserted += 1
-    return {"inserted": inserted, "updated": 0, "unchanged": 0, "deleted": True}
+    updated = 0
+    unchanged = 0
+    for row in prepared_rows:
+        age_category = first(row, "ageCategory", "age_category", default="")
+        gender = first(row, "gender", default="")
+        weight_class = first(row, "weightClass", "weight_class", default="")
+        convex_id = first(row, "convexId", "convex_id") or stable_id(
+            "wso_record", wso, age_category, gender, weight_class
+        )
+        values = {
+            "wso": wso,
+            "age_category": age_category,
+            "gender": gender,
+            "weight_class": weight_class,
+            "snatch_record": first(row, "snatchRecord", "snatch_record"),
+            "cj_record": first(row, "cjRecord", "cj_record"),
+            "total_record": first(row, "totalRecord", "total_record"),
+        }
+        existing = existing_by_id.get(convex_id) or existing_by_key.get((wso, age_category, gender, weight_class))
+        if existing is None:
+            inserted += 1
+        elif row_changed(existing, values):
+            updated += 1
+        else:
+            unchanged += 1
+
+    conn.execute("DELETE FROM wso_records WHERE wso = %s", (wso,))
+    for row in prepared_rows:
+        upsert_wso_record(conn, row)
+    return {"inserted": inserted, "updated": updated, "unchanged": unchanged, "deleted": True}
 
 
 def replace_intl_rankings_group(conn, args: dict[str, Any]) -> dict[str, Any]:
     meet = first(args, "meet", default="")
     gender = first(args, "gender", default="")
     age_category = first(args, "ageCategory", "age_category", default="")
+    rankings = args.get("rankings", [])
+    existing_rows = conn.execute(
+        """
+        SELECT convex_id, legacy_id, meet, ranking, name, weight_class,
+            total, percent_a, gender, age_category
+        FROM intl_rankings
+        WHERE meet = %s AND gender = %s AND age_category = %s
+        """,
+        (meet, gender, age_category),
+    ).fetchall()
+    existing_by_id = {row["convex_id"]: row for row in existing_rows}
+    existing_by_key = {
+        (row["meet"], row["gender"], row["age_category"], row["ranking"], row["name"]): row
+        for row in existing_rows
+    }
+    inserted = 0
+    updated = 0
+    unchanged = 0
+    for row in rankings:
+        ranking = first(row, "ranking", default=0)
+        name = first(row, "name", default="")
+        convex_id = first(row, "convexId", "convex_id") or stable_id(
+            "intl_ranking", meet, gender, age_category, ranking, name
+        )
+        values = {
+            "legacy_id": first(row, "legacyId", "legacy_id"),
+            "meet": meet,
+            "ranking": ranking,
+            "name": name,
+            "weight_class": first(row, "weightClass", "weight_class"),
+            "total": first(row, "total"),
+            "percent_a": first(row, "percentA", "percent_a"),
+            "gender": gender,
+            "age_category": age_category,
+        }
+        existing = existing_by_id.get(convex_id) or existing_by_key.get(
+            (meet, gender, age_category, ranking, name)
+        )
+        if existing is None:
+            inserted += 1
+        elif row_changed(existing, values):
+            updated += 1
+        else:
+            unchanged += 1
+
     conn.execute(
         "DELETE FROM intl_rankings WHERE meet = %s AND gender = %s AND age_category = %s",
         (meet, gender, age_category),
     )
-    inserted = 0
-    for row in args.get("rankings", []):
+    for row in rankings:
         upsert_intl_ranking(conn, {**row, "meet": meet, "gender": gender, "ageCategory": age_category})
-        inserted += 1
-    return {"inserted": inserted}
+    deleted = max(len(existing_rows) - len(rankings), 0)
+    return {"inserted": inserted, "updated": updated, "unchanged": unchanged, "deleted": deleted}

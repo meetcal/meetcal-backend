@@ -4,6 +4,8 @@ require('dotenv').config();
 const { chromium } = require('playwright');
 const fs = require('fs');
 const https = require('https');
+const path = require('path');
+const { spawnSync } = require('child_process');
 
 // Read Convex configuration from environment
 const convexUrl = process.env.CONVEX_URL;
@@ -227,6 +229,10 @@ async function scrapeWeightliftingData() {
 }
 
 async function updateConvex(entries) {
+    if (process.env.DATABASE_URL) {
+        return updatePostgres(entries);
+    }
+
     if (!convexUrl || !scraperSecret) {
         console.error('CONVEX_URL or SCRAPER_SECRET not configured. Skipping database update.');
         return;
@@ -300,6 +306,61 @@ async function updateConvex(entries) {
     };
 }
 
+function updatePostgres(entries) {
+    if (entries.length === 0) {
+        console.log('No entries to update in Postgres');
+        return { inserted: 0, updated: 0, skipped: 0, total: 0 };
+    }
+
+    const meetName = entries[0].meet;
+    const rows = entries.map((entry) => {
+        const memberId = (entry.member_id && entry.member_id.trim())
+            ? entry.member_id.trim()
+            : String(Math.floor(Math.random() * 900000000) + 100000000);
+
+        return {
+            memberId,
+            name: entry.name,
+            age: entry.age,
+            club: entry.club,
+            gender: entry.gender,
+            weightClass: entry.weight_class,
+            entryTotal: entry.entry_total,
+            sessionNumber: entry.session_number ?? undefined,
+            sessionPlatform: entry.session_platform ?? undefined,
+            meet: entry.meet,
+            adaptive: false,
+        };
+    });
+
+    const ingestScript = path.resolve(__dirname, '../../common/postgres_ingest.py');
+    const python = process.env.POSTGRES_INGEST_PYTHON || 'python3';
+    const result = spawnSync(python, [ingestScript, 'scraperIngestion:ingestAthlete'], {
+        input: JSON.stringify(rows),
+        encoding: 'utf8',
+        env: process.env,
+    });
+
+    if (result.status !== 0) {
+        console.error(result.stderr || result.stdout);
+        throw new Error(`Postgres athlete ingest failed with exit code ${result.status}`);
+    }
+
+    const results = JSON.parse(result.stdout);
+    const inserted = results.filter(row => row.wasInsert).length;
+    const updated = results.filter(row => !row.wasInsert && row.wasChanged).length;
+    const unchanged = results.filter(row => !row.wasInsert && !row.wasChanged).length;
+
+    console.log(`Successfully processed ${rows.length} Postgres entries for meet: ${meetName}`);
+    return {
+        inserted,
+        updated,
+        unchanged,
+        skipped: 0,
+        total: rows.length,
+    };
+}
+
 async function sendSlackNotification(upsertStats, meetName) {
     const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
     
@@ -323,9 +384,11 @@ async function sendSlackNotification(upsertStats, meetName) {
     const upsertedCount = upsertStats.inserted + upsertStats.updated;
     
     // Create the message
-    let message = `*Entry Scraper Update - ${meetName}*\n\n`;
-    message += `${upsertedCount} Athlete${upsertedCount !== 1 ? 's' : ''} Upserted to Convex\n`;
-    message += `• ${upsertStats.inserted} succeeded\n`;
+    let message = `*Entry Scraper Postgres Update - ${meetName}*\n\n`;
+    message += `${upsertedCount} Athlete${upsertedCount !== 1 ? 's' : ''} inserted or updated in Postgres\n`;
+    message += `• ${upsertStats.inserted} inserted\n`;
+    message += `• ${upsertStats.updated} updated\n`;
+    message += `• ${upsertStats.unchanged || 0} unchanged\n`;
     message += `• ${upsertStats.skipped} errors\n\n`;
     
     const payload = JSON.stringify({

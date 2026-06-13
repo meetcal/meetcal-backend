@@ -3,3 +3,9 @@
 /app/target/
 /app/backups/
 /scrapers/target/
+/scrapers/.locks/
+/scrapers/logs/
+/scrapers/**/.runtime/
+/scrapers/**/.venv/
+/scrapers/**/node_modules/
+/__pycache__/

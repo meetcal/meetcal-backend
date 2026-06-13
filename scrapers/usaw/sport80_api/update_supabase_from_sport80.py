@@ -69,10 +69,10 @@ def add_meet_results_to_convex(client: ConvexClient, results_to_insert: list):
             else:
                 unchanged_count += 1
         except Exception as e:
-            logging.error(f"Error upserting result for '{result.get('name')}' in Convex: {e}")
+            logging.error(f"Error upserting result for '{result.get('name')}' in Postgres: {e}")
 
     logging.info(
-        "Processed %s results via Convex: %s inserted, %s updated, %s unchanged.",
+        "Processed %s results via Postgres: %s inserted, %s updated, %s unchanged.",
         len(results_to_insert),
         inserted_count,
         updated_count,
@@ -143,11 +143,11 @@ def send_slack_notification(inserted_meet_names: list[str], updated_meet_names: 
     total_changes = len(inserted_meet_names) + len(updated_meet_names)
 
     if total_changes == 0:
-        message = "No USAW meet result changes detected"
+        message = "USAW Meet Results Postgres Update\nNo meet result changes detected"
     else:
         message = (
-            f"USAW Meet Results Update\n"
-            f"{len(inserted_meet_names)} new meet result set(s) added, "
+            f"USAW Meet Results Postgres Update\n"
+            f"{len(inserted_meet_names)} new meet result set(s) inserted, "
             f"{len(updated_meet_names)} meet result set(s) updated"
         )
         if inserted_meet_names:

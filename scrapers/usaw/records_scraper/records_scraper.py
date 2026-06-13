@@ -515,7 +515,7 @@ class RecordsScraper:
             return
         
         # Build message
-        title = "🇺🇸 USA Weightlifting Records Update (DRY RUN)" if is_dry_run else "🇺🇸 USA Weightlifting Records Update"
+        title = "USA Weightlifting Records Postgres Update (DRY RUN)" if is_dry_run else "USA Weightlifting Records Postgres Update"
         
         # Summary
         total_changes = len(inserted) + len(updated)
@@ -523,7 +523,7 @@ class RecordsScraper:
             message = f"{title}\nNo changes detected" + (" (dry-run)" if is_dry_run else "")
         else:
             action = "would be " if is_dry_run else ""
-            message = f"{title}\n*{len(inserted)}* new records {action}added, *{len(updated)}* records {action}updated".strip()
+            message = f"{title}\n*{len(inserted)}* new records {action}inserted, *{len(updated)}* records {action}updated".strip()
         
         # Inserted records
         if inserted:

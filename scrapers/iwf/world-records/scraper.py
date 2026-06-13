@@ -203,8 +203,25 @@ class IWFWorldRecordsScraper:
         return filepath
     
     def get_existing_records(self) -> List[Dict]:
-        """Stub: existing record comparison not needed with Convex upsert."""
-        return []
+        """Load current IWF records from Postgres for change comparison."""
+        try:
+            from common import postgres_writer as pg
+
+            with pg.connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT record_type, age_category, gender, weight_class,
+                        snatch_record::float8 AS snatch_record,
+                        cj_record::float8 AS cj_record,
+                        total_record::float8 AS total_record
+                    FROM records
+                    WHERE record_type = 'IWF'
+                    """
+                ).fetchall()
+            return [dict(row) for row in rows]
+        except Exception as exc:
+            print(f"⚠️  Could not load existing Postgres IWF records: {exc}")
+            return []
     
     def compare_records(self, new_records: List[Dict], existing_records: List[Dict]) -> Dict:
         """Compare new records with existing records"""
@@ -294,7 +311,7 @@ class IWFWorldRecordsScraper:
         print("\n" + "=" * 80)
     
     def upsert_to_convex(self, records: List[Dict]) -> Dict:
-        """Replace all IWF records in Convex via scraperIngestion:replaceIWFRecords."""
+        """Replace all IWF records in Postgres via scraperIngestion:replaceIWFRecords."""
         if not self.convex_url or not self.scraper_secret:
             return {"status": "skipped", "message": "CONVEX_URL or SCRAPER_SECRET not configured"}
 
@@ -328,7 +345,7 @@ class IWFWorldRecordsScraper:
                 }
                 for r in records
             ]
-            print(f"Replacing {len(convex_records)} IWF records in Convex...")
+            print(f"Replacing {len(convex_records)} IWF records in Postgres...")
             result = client.action("scraperIngestion:replaceIWFRecords", {
                 "scraperSecret": self.scraper_secret,
                 "records": convex_records,
@@ -338,11 +355,11 @@ class IWFWorldRecordsScraper:
             return {
                 "status": "success",
                 "records_upserted": len(records),
-                "message": f"Successfully replaced {len(records)} IWF records",
+                "message": f"Successfully replaced {len(records)} IWF records in Postgres",
                 "changes": changes
             }
         except Exception as e:
-            return {"status": "error", "message": f"Convex error: {str(e)}"}
+            return {"status": "error", "message": f"Postgres error: {str(e)}"}
     
     def send_slack_notification(self, records_count: int, upsert_result: Dict) -> bool:
         """Send Slack notification with results"""
@@ -378,13 +395,13 @@ class IWFWorldRecordsScraper:
             # Build message text
             if new_count == 0 and modified_count == 0:
                 # No changes
-                message_text = "IWF scraper ran successfully. No new records or updates."
+                message_text = "IWF Postgres scraper ran successfully. No new records or updates."
             else:
                 # Build list of updated records
                 message_lines = []
                 
                 # Summary
-                message_lines.append("IWF Records Summary:\n")
+                message_lines.append("IWF Records Postgres Summary:\n")
                 message_lines.append(f"• {new_count} new record(s) inserted")
                 message_lines.append(f"• {modified_count} record(s) updated")
                 
@@ -537,4 +554,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

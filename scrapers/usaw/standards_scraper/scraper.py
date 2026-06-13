@@ -407,7 +407,7 @@ class StandardsScraper:
             return
         
         # Build message
-        title = "USA Weightlifting Standards Update (DRY RUN)" if is_dry_run else "USA Weightlifting Standards Update"
+        title = "USA Weightlifting Standards Postgres Update (DRY RUN)" if is_dry_run else "USA Weightlifting Standards Postgres Update"
         
         # Summary
         total_changes = len(inserted) + len(updated)
@@ -415,7 +415,7 @@ class StandardsScraper:
             message = f"{title}\nNo changes detected" + (" (dry-run)" if is_dry_run else "")
         else:
             action = "would be " if is_dry_run else ""
-            message = f"{title}\n*{len(inserted)}* new standards {action}added, *{len(updated)}* standards {action}updated".strip()
+            message = f"{title}\n*{len(inserted)}* new standards {action}inserted, *{len(updated)}* standards {action}updated".strip()
         
         # Inserted records
         if inserted:
