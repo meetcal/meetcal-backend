@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct UserPreferencesResponse {
     pub auto_unsave_started_sessions: bool,
 }
@@ -25,7 +24,7 @@ pub struct AutoUnsaveRequest {
 /// This endpoint returns the authenticated user's profile preferences.
 ///
 /// {
-///   "autoUnsaveStartedSessions": false
+///   "auto_unsave_started_sessions": false
 /// }
 ///
 pub async fn get_preferences(
@@ -65,7 +64,7 @@ pub async fn get_preferences(
 /// This endpoint updates whether started saved sessions should be removed automatically.
 ///
 /// {
-///   "autoUnsaveStartedSessions": true
+///   "auto_unsave_started_sessions": true
 /// }
 ///
 pub async fn patch_auto_unsave(

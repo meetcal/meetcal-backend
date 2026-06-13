@@ -79,7 +79,7 @@ until psql -h "${DB_HOST}" -U "${DB_USER}" -p "${DB_PORT}" -d postgres -c '\q' >
 done
 
 sqlx database create
-sqlx migrate run
+(cd "${SCRIPT_DIR}/.." && sqlx migrate run)
 psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -f "${SCRIPT_DIR}/seed_test_db.sql"
 
 echo "Test database migrated and seeded."

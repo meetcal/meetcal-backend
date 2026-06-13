@@ -2,6 +2,8 @@ TRUNCATE TABLE
     lifting_results,
     session_schedule,
     athletes,
+    saved_sessions,
+    user_preferences,
     qualifying_totals,
     wso_records,
     records,

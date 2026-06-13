@@ -11,20 +11,18 @@ pub struct ClubMeetStatsParams {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct MeetStats {
     pub total_athletes: i64,
     pub gold_medals: i64,
     pub silver_medals: i64,
     pub bronze_medals: i64,
     pub total_prs: i64,
-    pub perfect6for6: i64,
+    pub perfect_6_for_6: i64,
     pub total_weight_lifted: f64,
     pub athlete_results: Vec<AthleteMeetResult>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AthleteMeetResult {
     pub name: String,
     pub weight_class: String,
@@ -67,14 +65,14 @@ struct ClubResultRow {
 /// This endpoint takes meet and club name and returns a full report of how the club did at the meet
 ///
 /// {
-///   "totalAthletes": 1,
-///   "goldMedals": 0,
-///   "silverMedals": 0,
-///   "bronzeMedals": 0,
-///   "totalPRs": 0,
-///   "perfect6for6": 0,
-///   "totalWeightLifted": 0.0,
-///   "athleteResults": []
+///   "total_athletes": 1,
+///   "gold_medals": 0,
+///   "silver_medals": 0,
+///   "bronze_medals": 0,
+///   "total_prs": 0,
+///   "perfect_6_for_6": 0,
+///   "total_weight_lifted": 0.0,
+///   "athlete_results": []
 /// }
 pub async fn get_meet_stats(
     State(state): State<AppState>,
@@ -182,7 +180,7 @@ pub async fn get_meet_stats(
         })
         .count() as i64;
 
-    let perfect6for6 = rows
+    let perfect_6_for_6 = rows
         .iter()
         .filter(|row| {
             [
@@ -235,7 +233,7 @@ pub async fn get_meet_stats(
         silver_medals,
         bronze_medals,
         total_prs,
-        perfect6for6,
+        perfect_6_for_6,
         total_weight_lifted,
         athlete_results,
     }))

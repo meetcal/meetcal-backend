@@ -17,7 +17,6 @@ pub struct DeleteSavedSessionsParams {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SavedSessionRequest {
     pub meet: String,
     pub session_number: f64,
@@ -30,7 +29,6 @@ pub struct SavedSessionRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
-#[serde(rename_all = "camelCase")]
 pub struct SavedSession {
     pub session_id: String,
     pub meet: String,
@@ -50,7 +48,6 @@ pub struct SavedSessionsResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SaveSessionResponse {
     pub session_id: String,
     pub updated_at: i64,
@@ -62,7 +59,6 @@ pub struct DeleteSavedSessionResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DeleteSavedSessionsResponse {
     pub deleted_count: i64,
 }
@@ -77,16 +73,16 @@ pub struct DeleteSavedSessionsResponse {
 /// {
 ///   "sessions": [
 ///     {
-///       "sessionId": "2025-Nationals-3-Red",
+///       "session_id": "2025-Nationals-3-Red",
 ///       "meet": "2025 Nationals",
-///       "sessionNumber": 3.0,
+///       "session_number": 3.0,
 ///       "platform": "Red",
-///       "weightClass": "73kg",
-///       "startTime": "10:00 AM",
+///       "weight_class": "73kg",
+///       "start_time": "10:00 AM",
 ///       "date": "2025-05-31",
 ///       "notes": "optional",
-///       "athleteNames": ["Jane Doe"],
-///       "updatedAt": 1717171717000
+///       "athlete_names": ["Jane Doe"],
+///       "updated_at": 1717171717000
 ///     }
 ///   ]
 /// }
@@ -126,18 +122,18 @@ pub async fn get_saved_sessions(
     Ok(Json(SavedSessionsResponse { sessions }))
 }
 
-/// /users/me/saved-sessions/:sessionId endpoint
+/// /users/me/saved-sessions/:session_id endpoint
 ///
 /// curl -X PUT 'https://api.meetcal.app/users/me/saved-sessions/2025-Nationals-3-Red' \
 ///   -H 'Authorization: Bearer <clerk-jwt>' \
 ///   -H 'Content-Type: application/json' \
-///   -d '{"meet":"2025 Nationals","sessionNumber":3,"platform":"Red","weightClass":"73kg","startTime":"10:00 AM","date":"2025-05-31","notes":"optional","athleteNames":["Jane Doe"]}' | jq .
+///   -d '{"meet":"2025 Nationals","session_number":3,"platform":"Red","weight_class":"73kg","start_time":"10:00 AM","date":"2025-05-31","notes":"optional","athlete_names":["Jane Doe"]}' | jq .
 ///
 /// This endpoint upserts one saved platform session for the authenticated user.
 ///
 /// {
-///   "sessionId": "2025-Nationals-3-Red",
-///   "updatedAt": 1717171717000
+///   "session_id": "2025-Nationals-3-Red",
+///   "updated_at": 1717171717000
 /// }
 ///
 pub async fn put_saved_session(
@@ -147,7 +143,7 @@ pub async fn put_saved_session(
     Json(body): Json<SavedSessionRequest>,
 ) -> Result<Json<SaveSessionResponse>, AppError> {
     if session_id.trim().is_empty() {
-        return Err(AppError::Validation("sessionId is required".to_string()));
+        return Err(AppError::Validation("session_id is required".to_string()));
     }
 
     let user_id = user_id_from_headers(&headers)?;
@@ -211,7 +207,7 @@ pub async fn put_saved_session(
     }))
 }
 
-/// /users/me/saved-sessions/:sessionId endpoint
+/// /users/me/saved-sessions/:session_id endpoint
 ///
 /// curl -X DELETE 'https://api.meetcal.app/users/me/saved-sessions/2025-Nationals-3-Red' \
 ///   -H 'Authorization: Bearer <clerk-jwt>' | jq .
@@ -258,7 +254,7 @@ pub async fn delete_saved_session(
 /// This endpoint deletes all saved sessions for the authenticated user, optionally scoped to one meet.
 ///
 /// {
-///   "deletedCount": 4
+///   "deleted_count": 4
 /// }
 ///
 pub async fn delete_saved_sessions(
