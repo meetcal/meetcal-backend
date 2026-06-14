@@ -1,5 +1,5 @@
 name: "USA Masters Weightlifting Results"
-url: "https://usamasters.net/results-and-rankings"
+url: "https://usamasters.net/results"
 filter:
   - css: ".kv-ee-content"
   - html2text
