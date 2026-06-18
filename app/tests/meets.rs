@@ -153,6 +153,25 @@ async fn success_get_meet_package() {
     assert!(!body["schedule"].as_array().unwrap().is_empty());
     assert!(!body["athletes"].as_array().unwrap().is_empty());
     assert!(body["meet_results"].as_array().unwrap().is_empty());
+    assert!(!body["attempt_estimates"].as_array().unwrap().is_empty());
+    assert_eq!(body["attempt_estimates"][0]["session_number"], 45.0);
+    assert_eq!(body["attempt_estimates"][0]["platform"], "Red");
+    assert_eq!(
+        body["attempt_estimates"][0]["estimates"][0]["athlete_name"],
+        "Kyle Schulman"
+    );
+    assert_eq!(
+        body["attempt_estimates"][0]["estimates"][0]["snatch"]["attempts"],
+        serde_json::json!([146.0, 149.0, 152.0])
+    );
+    assert_eq!(
+        body["attempt_estimates"][0]["estimates"][0]["clean_and_jerk"]["attempts"],
+        serde_json::json!([193.0, 197.0, 201.0])
+    );
+    assert_eq!(
+        body["attempt_estimates"][0]["estimates"][0]["snatch"]["source"],
+        "entry_total"
+    );
     assert!(body["year_bests_by_name"].is_object());
     assert!(body["recent_results_by_name"].is_object());
 }
