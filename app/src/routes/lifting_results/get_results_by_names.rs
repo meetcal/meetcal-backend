@@ -1,11 +1,15 @@
-use crate::{AppError, AppState, routes::results::types::LiftingResults};
+use crate::{
+    AppError, AppState, common::query::deserialize_csv_or_repeated,
+    routes::results::types::LiftingResults,
+};
 use axum::Json;
 use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ResultsByNamesParams {
-    pub names: String,
+    #[serde(deserialize_with = "deserialize_csv_or_repeated")]
+    pub names: Vec<String>,
 }
 
 /// /lifting-results/by-names endpoint
@@ -38,14 +42,6 @@ pub async fn get_results_by_names(
     State(state): State<AppState>,
     Query(params): Query<ResultsByNamesParams>,
 ) -> Result<Json<Vec<LiftingResults>>, AppError> {
-    let names: Vec<String> = params
-        .names
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(String::from)
-        .collect();
-
     let rows = sqlx::query_as::<_, LiftingResults>(
         r#"
         SELECT
@@ -70,7 +66,7 @@ pub async fn get_results_by_names(
         ORDER BY date DESC
         "#,
     )
-    .bind(&names)
+    .bind(&params.names)
     .fetch_all(&state.db)
     .await?;
 

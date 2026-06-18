@@ -30,9 +30,12 @@ pub use error::AppError;
 use routes::{
     clubs::get_all_clubs::get_all_clubs,
     comp_data::{
-        get_intl_rankings::get_intl_rankings, get_qualifying_totals::get_qualifying_totals,
-        get_records::get_records, get_standards::get_standards, get_wso_list::get_wso_list,
-        get_wso_records::get_wso_records,
+        get_intl_rankings::get_intl_rankings,
+        get_qualifying_totals::get_qualifying_totals,
+        get_records::get_records,
+        get_standards::get_standards,
+        get_wso_list::get_wso_list,
+        get_wso_records::{get_wso_age_groups, get_wso_records},
     },
     health::health,
     meets::{
@@ -65,7 +68,9 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .route("/clubs/athletes", get(get_athletes_by_club))
         .route("/clubs/meet-stats", get(get_meet_stats))
         .route("/data/records", get(get_records))
+        .route("/data/wso", get(get_wso_list))
         .route("/data/wso/", get(get_wso_list))
+        .route("/data/wso/age-groups", get(get_wso_age_groups))
         .route("/data/wso/records", get(get_wso_records))
         .route("/data/standards", get(get_standards))
         .route("/data/qualifying-totals", get(get_qualifying_totals))

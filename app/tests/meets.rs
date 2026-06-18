@@ -125,6 +125,26 @@ async fn success_get_sessions_for_athletes() {
 }
 
 #[tokio::test]
+async fn success_get_sessions_for_athletes_filtered() {
+    let app = support::spawn_test_app().await;
+    let url = format!(
+        "{}/meets/athletes-sessions?meet=2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness&session_number=45&platform=Red",
+        app.address
+    );
+    let response = reqwest::get(&url).await.unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: Vec<SessionsAthletes> = response.json().await.unwrap();
+
+    assert!(!body.is_empty());
+    assert!(
+        body.iter()
+            .all(|row| row.session_number == 45.0 && row.session_platform == "Red")
+    );
+}
+
+#[tokio::test]
 async fn fail_get_sessions_for_athletes() {
     let app = support::spawn_test_app().await;
     let url = format!("{}/meets/athletes-sessions", app.address);

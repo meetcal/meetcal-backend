@@ -62,6 +62,22 @@ async fn success_get_lifting_results_recent() {
 }
 
 #[tokio::test]
+async fn success_get_lifting_results_recent_csv_names() {
+    let app = support::spawn_test_app().await;
+    let url = format!(
+        "{}/lifting-results/recent?names=Adaptive%20Test%20Athlete,Alexander%20Nordstrom&cutoff_date=2025-01-01",
+        app.address
+    );
+    let response = reqwest::get(&url).await.unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: Vec<LiftingResults> = response.json().await.unwrap();
+
+    assert!(body.iter().any(|row| row.name == "Adaptive Test Athlete"));
+}
+
+#[tokio::test]
 async fn fail_get_lifting_results_recent() {
     let app = support::spawn_test_app().await;
     let url = format!("{}/lifting-results/recent", app.address);

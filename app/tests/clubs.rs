@@ -1,4 +1,4 @@
-use app::routes::clubs::{get_all_clubs::Clubs, get_athletes_by_club::ClubsAthletes};
+use app::routes::clubs::get_athletes_by_club::ClubsAthletes;
 use serde_json::Value;
 
 mod support;
@@ -11,9 +11,9 @@ async fn success_get_all_clubs() {
 
     assert_eq!(response.status(), 200);
 
-    let body: Clubs = response.json().await.unwrap();
+    let body: Vec<String> = response.json().await.unwrap();
 
-    assert!(!body.names.is_empty());
+    assert!(!body.is_empty());
 }
 
 #[tokio::test]
@@ -70,6 +70,9 @@ async fn success_get_club_meet_stats() {
     assert_eq!(body["bronze_medals"], 0);
     assert_eq!(body["total_prs"], 0);
     assert_eq!(body["perfect_6_for_6"], 0);
+    assert_eq!(body["snatch_make_rate"], 0);
+    assert_eq!(body["cj_make_rate"], 0);
+    assert_eq!(body["combined_make_rate"], 0);
     assert!(body["athlete_results"].as_array().unwrap().is_empty());
 }
 

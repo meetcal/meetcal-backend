@@ -38,6 +38,9 @@ pub async fn get_records(State(state): State<AppState>) -> Result<Json<Vec<Recor
         r#"
         SELECT age_category, cj_record, snatch_record, total_record, weight_class, gender, record_type
         FROM records
+        WHERE snatch_record IS NOT NULL
+            AND cj_record IS NOT NULL
+            AND total_record IS NOT NULL
         "#,
     )
     .fetch_all(&state.db)

@@ -1,11 +1,15 @@
-use crate::{AppError, AppState, routes::results::types::LiftingResults};
+use crate::{
+    AppError, AppState, common::query::deserialize_csv_or_repeated,
+    routes::results::types::LiftingResults,
+};
 use axum::Json;
 use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Results2YrsParams {
-    pub names: String,
+    #[serde(deserialize_with = "deserialize_csv_or_repeated")]
+    pub names: Vec<String>,
     pub cutoff_date: Option<String>,
 }
 
@@ -41,14 +45,6 @@ pub async fn get_results_2yrs(
     State(state): State<AppState>,
     Query(params): Query<Results2YrsParams>,
 ) -> Result<Json<Vec<LiftingResults>>, AppError> {
-    let names: Vec<String> = params
-        .names
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(String::from)
-        .collect();
-
     let rows = if let Some(cutoff_date) = params.cutoff_date {
         sqlx::query_as::<_, LiftingResults>(
             r#"
@@ -75,7 +71,7 @@ pub async fn get_results_2yrs(
             ORDER BY date DESC
             "#,
         )
-        .bind(&names)
+        .bind(&params.names)
         .bind(cutoff_date)
         .fetch_all(&state.db)
         .await?
@@ -105,7 +101,7 @@ pub async fn get_results_2yrs(
             ORDER BY date DESC
             "#,
         )
-        .bind(&names)
+        .bind(&params.names)
         .fetch_all(&state.db)
         .await?
     };

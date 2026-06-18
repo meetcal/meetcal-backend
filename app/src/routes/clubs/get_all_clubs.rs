@@ -1,20 +1,13 @@
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::State;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Clubs {
-    pub names: Vec<String>,
-}
-
 /// /meets endpoint
 ///
 /// curl 'https://api.meetcal.app/clubs' | jq .
 ///
 /// This endpoint takes no input and returns a list of clubs in the db
 ///
-/// "names": [
+/// [
 ///    "12 Labours Barbell",
 ///    "1Kilo",
 ///    "206 Barbell",
@@ -26,7 +19,7 @@ pub struct Clubs {
 ///    "ALLSOUTH Barbell",
 ///    "ALPHA BARBELL",
 /// ]
-pub async fn get_all_clubs(State(state): State<AppState>) -> Result<Json<Clubs>, AppError> {
+pub async fn get_all_clubs(State(state): State<AppState>) -> Result<Json<Vec<String>>, AppError> {
     let names: Vec<(String,)> = sqlx::query_as(
         r#"
         SELECT DISTINCT club
@@ -38,7 +31,5 @@ pub async fn get_all_clubs(State(state): State<AppState>) -> Result<Json<Clubs>,
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(Clubs {
-        names: names.into_iter().map(|(club,)| club).collect(),
-    }))
+    Ok(Json(names.into_iter().map(|(club,)| club).collect()))
 }

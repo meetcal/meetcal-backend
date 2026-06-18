@@ -7,6 +7,8 @@ use sqlx::prelude::FromRow;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionsAthletesParams {
     pub meet: String,
+    pub session_number: Option<f64>,
+    pub platform: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, FromRow)]
@@ -31,7 +33,8 @@ pub struct SessionsAthletes {
 ///
 /// curl 'https://api.meetcal.app/meets/athletes-sessions?meet=2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness' | jq .
 ///
-/// This endpoint takes meet name and returns athletes and their session rows
+/// This endpoint takes meet name and returns athletes and their session rows.
+/// Optional session_number and platform filters return one session/platform.
 ///
 /// [
 ///     {
@@ -78,9 +81,13 @@ pub async fn get_sessions_for_athletes(
             AND s.session_id = a.session_number
             AND s.platform = a.session_platform
         WHERE a.meet = $1
+            AND ($2::double precision IS NULL OR a.session_number = $2)
+            AND ($3::text IS NULL OR a.session_platform = $3)
         "#,
     )
     .bind(params.meet)
+    .bind(params.session_number)
+    .bind(params.platform)
     .fetch_all(&state.db)
     .await?;
 

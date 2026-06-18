@@ -1,13 +1,6 @@
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::State;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct WsoNames {
-    pub wsos: Vec<String>,
-}
-
 /// /data/wso/ endpoint
 ///
 /// curl 'https://api.meetcal.app/data/wso/' | jq .
@@ -17,8 +10,7 @@ pub struct WsoNames {
 /// Below is a list of all wsos that are in the db
 /// Unlisted wsos do not follow USAW guidelines of having public records hosted online
 ///
-/// {
-///  "wsos": [
+/// [
 ///    "California North",
 ///    "Carolina",
 ///    "DMV",
@@ -37,9 +29,8 @@ pub struct WsoNames {
 ///    "Tennessee-Kentucky",
 ///    "Texas-Oklahoma",
 ///    "Wisconsin"
-///  ]
-/// }
-pub async fn get_wso_list(State(state): State<AppState>) -> Result<Json<WsoNames>, AppError> {
+/// ]
+pub async fn get_wso_list(State(state): State<AppState>) -> Result<Json<Vec<String>>, AppError> {
     let rows: Vec<(String,)> = sqlx::query_as(
         r#"
         SELECT DISTINCT wso
@@ -50,7 +41,5 @@ pub async fn get_wso_list(State(state): State<AppState>) -> Result<Json<WsoNames
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(WsoNames {
-        wsos: rows.into_iter().map(|(wso,)| wso).collect(),
-    }))
+    Ok(Json(rows.into_iter().map(|(wso,)| wso).collect()))
 }

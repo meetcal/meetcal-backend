@@ -1,8 +1,7 @@
 use app::routes::comp_data::{
     get_adaptive_records::AdaptiveRecords, get_intl_rankings::IntlRanking,
     get_national_rankings::NatRankings, get_qualifying_totals::QualifyingTotal,
-    get_records::Record, get_standards::Standard, get_wso_list::WsoNames,
-    get_wso_records::WsoRecord,
+    get_records::Record, get_standards::Standard, get_wso_records::WsoRecord,
 };
 
 mod support;
@@ -66,9 +65,22 @@ async fn success_get_wsos() {
 
     assert_eq!(response.status(), 200);
 
-    let body: WsoNames = response.json().await.unwrap();
+    let body: Vec<String> = response.json().await.unwrap();
 
-    assert!(!body.wsos.is_empty());
+    assert!(!body.is_empty());
+}
+
+#[tokio::test]
+async fn success_get_wsos_without_trailing_slash() {
+    let app = support::spawn_test_app().await;
+    let url = format!("{}/data/wso", app.address);
+    let response = reqwest::get(&url).await.unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: Vec<String> = response.json().await.unwrap();
+
+    assert!(!body.is_empty());
 }
 
 #[tokio::test]
@@ -106,6 +118,34 @@ async fn fail_get_wso_records() {
     let response = reqwest::get(&url).await.unwrap();
 
     assert_ne!(response.status(), 200);
+}
+
+#[tokio::test]
+async fn success_get_wso_records_with_wso_only() {
+    let app = support::spawn_test_app().await;
+    let url = format!("{}/data/wso/records?wso=Carolina", app.address);
+    let response = reqwest::get(&url).await.unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: Vec<WsoRecord> = response.json().await.unwrap();
+
+    assert!(!body.is_empty());
+    assert!(body.iter().all(|row| row.wso == "Carolina"));
+}
+
+#[tokio::test]
+async fn success_get_wso_age_groups() {
+    let app = support::spawn_test_app().await;
+    let url = format!("{}/data/wso/age-groups?wso=Carolina", app.address);
+    let response = reqwest::get(&url).await.unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: Vec<String> = response.json().await.unwrap();
+
+    assert!(!body.is_empty());
+    assert!(body.iter().any(|age_group| age_group == "Senior"));
 }
 
 #[tokio::test]

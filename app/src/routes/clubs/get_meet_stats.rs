@@ -19,6 +19,9 @@ pub struct MeetStats {
     pub total_prs: i64,
     pub perfect_6_for_6: i64,
     pub total_weight_lifted: f64,
+    pub snatch_make_rate: i64,
+    pub cj_make_rate: i64,
+    pub combined_make_rate: i64,
     pub athlete_results: Vec<AthleteMeetResult>,
 }
 
@@ -72,6 +75,9 @@ struct ClubResultRow {
 ///   "total_prs": 0,
 ///   "perfect_6_for_6": 0,
 ///   "total_weight_lifted": 0.0,
+///   "snatch_make_rate": 0,
+///   "cj_make_rate": 0,
+///   "combined_make_rate": 0,
 ///   "athlete_results": []
 /// }
 pub async fn get_meet_stats(
@@ -197,6 +203,22 @@ pub async fn get_meet_stats(
         .count() as i64;
 
     let total_weight_lifted = rows.iter().map(|row| row.total).sum();
+    let snatch_attempts = rows
+        .iter()
+        .flat_map(|row| [row.snatch1, row.snatch2, row.snatch3])
+        .collect::<Vec<_>>();
+    let cj_attempts = rows
+        .iter()
+        .flat_map(|row| [row.cj1, row.cj2, row.cj3])
+        .collect::<Vec<_>>();
+    let snatch_make_rate = make_rate_percent(&snatch_attempts);
+    let cj_make_rate = make_rate_percent(&cj_attempts);
+    let combined_attempts = snatch_attempts
+        .iter()
+        .chain(cj_attempts.iter())
+        .copied()
+        .collect::<Vec<_>>();
+    let combined_make_rate = make_rate_percent(&combined_attempts);
 
     let athlete_results = rows
         .into_iter()
@@ -235,8 +257,21 @@ pub async fn get_meet_stats(
         total_prs,
         perfect_6_for_6,
         total_weight_lifted,
+        snatch_make_rate,
+        cj_make_rate,
+        combined_make_rate,
         athlete_results,
     }))
+}
+
+fn make_rate_percent(attempts: &[f64]) -> i64 {
+    let declared_attempts = attempts.iter().filter(|attempt| **attempt != 0.0).count();
+    if declared_attempts == 0 {
+        return 0;
+    }
+
+    let made_attempts = attempts.iter().filter(|attempt| **attempt > 0.0).count();
+    ((made_attempts as f64 / declared_attempts as f64) * 100.0).round() as i64
 }
 
 fn medal_for(placing: i64) -> Option<String> {

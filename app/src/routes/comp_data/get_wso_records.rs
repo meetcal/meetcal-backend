@@ -7,8 +7,13 @@ use sqlx::prelude::FromRow;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WsoRecordParams {
-    pub age_category: String,
-    pub gender: String,
+    pub wso: String,
+    pub age_category: Option<String>,
+    pub gender: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WsoAgeGroupsParams {
     pub wso: String,
 }
 
@@ -27,7 +32,7 @@ pub struct WsoRecord {
 ///
 /// curl 'https://api.meetcal.app/data/wso/records?wso=Carolina&gender=Men&age_category=Senior' | jq .
 ///
-/// This endpoint takes gender, wso, and age category and returns wso records
+/// This endpoint takes wso plus optional gender and age category filters and returns wso records
 ///
 /// WSOs:
 ///    "California North",
@@ -70,18 +75,50 @@ pub async fn get_wso_records(
         r#"
         SELECT age_category, cj_record, snatch_record, total_record, weight_class, gender, wso
         FROM wso_records
-        WHERE age_category = $1
-            AND gender = $2
-            AND wso = $3
+        WHERE wso = $1
+            AND ($2::text IS NULL OR age_category = $2)
+            AND ($3::text IS NULL OR gender = $3)
         "#,
     )
+    .bind(params.wso)
     .bind(params.age_category)
     .bind(params.gender)
-    .bind(params.wso)
     .fetch_all(&state.db)
     .await?;
 
     let sorted = sort_by_class(rows, |r| r.weight_class.as_str());
 
     Ok(Json(sorted))
+}
+
+/// /data/wso/age-groups endpoint
+///
+/// curl 'https://api.meetcal.app/data/wso/age-groups?wso=Carolina' | jq .
+///
+/// This endpoint returns the age categories that have records for one WSO.
+///
+/// [
+///   "U11",
+///   "U13",
+///   "Senior"
+/// ]
+pub async fn get_wso_age_groups(
+    State(state): State<AppState>,
+    Query(params): Query<WsoAgeGroupsParams>,
+) -> Result<Json<Vec<String>>, AppError> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT age_category
+        FROM wso_records
+        WHERE wso = $1
+        ORDER BY age_category
+        "#,
+    )
+    .bind(params.wso)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(
+        rows.into_iter().map(|(age_group,)| age_group).collect(),
+    ))
 }
