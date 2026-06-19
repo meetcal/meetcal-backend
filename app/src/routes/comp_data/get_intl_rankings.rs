@@ -41,6 +41,14 @@ pub async fn get_intl_rankings(
         r#"
         SELECT meet, ranking, name, weight_class, total, percent_a, gender, age_category
         FROM intl_rankings
+        WHERE meet IS NOT NULL
+            AND ranking IS NOT NULL
+            AND name IS NOT NULL
+            AND weight_class IS NOT NULL
+            AND total IS NOT NULL
+            AND percent_a IS NOT NULL
+            AND gender IS NOT NULL
+            AND age_category IS NOT NULL
         ORDER BY ranking desc
         "#,
     )
