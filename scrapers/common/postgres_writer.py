@@ -45,6 +45,53 @@ def clean(row: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in row.items() if key != "scraperSecret"}
 
 
+def title_case_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped:
+        return stripped
+    return " ".join(part[:1].upper() + part[1:].lower() for part in stripped.split())
+
+
+def normalize_gender(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip()
+    lookup = {
+        "men": "Men",
+        "women": "Women",
+        "male": "Male",
+        "female": "Female",
+        "m": "Men",
+        "f": "Women",
+    }
+    return lookup.get(normalized.lower(), title_case_value(normalized))
+
+
+def normalize_age_category(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = title_case_value(value)
+    age_codes = {
+        "u13": "U13",
+        "u15": "U15",
+        "u17": "U17",
+        "u20": "U20",
+        "u25": "U25",
+    }
+    return age_codes.get(normalized.lower(), normalized)
+
+
+def normalize_federation(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip()
+    if normalized.lower() in {"usaw", "iwf", "umwf", "bwl"}:
+        return normalized.upper()
+    return normalized
+
+
 def comparable(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)
@@ -83,7 +130,7 @@ def upsert_lifting_result(conn, row: dict[str, Any]) -> dict[str, Any]:
         "cj_best": first(row, "cjBest", "cj_best"),
         "total": first(row, "total"),
         "adaptive": bool(first(row, "adaptive", default=False)),
-        "federation": first(row, "federation"),
+        "federation": normalize_federation(first(row, "federation")),
     }
     existing = conn.execute(
         """
@@ -143,8 +190,8 @@ def upsert_lifting_result(conn, row: dict[str, Any]) -> dict[str, Any]:
 def upsert_record(conn, row: dict[str, Any]) -> dict[str, Any]:
     row = clean(row)
     record_type = first(row, "recordType", "record_type", default="")
-    age_category = first(row, "ageCategory", "age_category", default="")
-    gender = first(row, "gender", default="")
+    age_category = normalize_age_category(first(row, "ageCategory", "age_category", default=""))
+    gender = normalize_gender(first(row, "gender", default=""))
     weight_class = first(row, "weightClass", "weight_class", default="")
     convex_id = first(row, "convexId", "convex_id") or stable_id(
         "record", record_type, age_category, gender, weight_class
@@ -206,8 +253,8 @@ def upsert_record(conn, row: dict[str, Any]) -> dict[str, Any]:
 def upsert_wso_record(conn, row: dict[str, Any]) -> dict[str, Any]:
     row = clean(row)
     wso = first(row, "wso", default="")
-    age_category = first(row, "ageCategory", "age_category", default="")
-    gender = first(row, "gender", default="")
+    age_category = normalize_age_category(first(row, "ageCategory", "age_category", default=""))
+    gender = normalize_gender(first(row, "gender", default=""))
     weight_class = first(row, "weightClass", "weight_class", default="")
     convex_id = first(row, "convexId", "convex_id") or stable_id(
         "wso_record", wso, age_category, gender, weight_class
@@ -268,8 +315,8 @@ def upsert_wso_record(conn, row: dict[str, Any]) -> dict[str, Any]:
 
 def upsert_standard(conn, row: dict[str, Any]) -> dict[str, Any]:
     row = clean(row)
-    age_category = first(row, "ageCategory", "age_category", default="")
-    gender = first(row, "gender", default="")
+    age_category = normalize_age_category(first(row, "ageCategory", "age_category", default=""))
+    gender = normalize_gender(first(row, "gender", default=""))
     weight_class = first(row, "weightClass", "weight_class", default="")
     convex_id = first(row, "convexId", "convex_id") or stable_id(
         "standard", age_category, gender, weight_class
@@ -323,8 +370,8 @@ def upsert_standard(conn, row: dict[str, Any]) -> dict[str, Any]:
 def upsert_qualifying_total(conn, row: dict[str, Any]) -> dict[str, Any]:
     row = clean(row)
     event_name = first(row, "eventName", "event_name", default="")
-    age_category = first(row, "ageCategory", "age_category", default="")
-    gender = first(row, "gender", default="")
+    age_category = normalize_age_category(first(row, "ageCategory", "age_category", default=""))
+    gender = normalize_gender(first(row, "gender", default=""))
     weight_class = first(row, "weightClass", "weight_class", default="")
     convex_id = first(row, "convexId", "convex_id") or stable_id(
         "qualifying_total", event_name, age_category, gender, weight_class
@@ -381,7 +428,7 @@ def upsert_meet(conn, row: dict[str, Any]) -> dict[str, Any]:
     convex_id = first(row, "convexId", "convex_id") or stable_id("meet", name)
     values = {
         "name": name,
-        "federation": first(row, "federation", default="USAW"),
+        "federation": normalize_federation(first(row, "federation", default="USAW")),
         "start_date": first(row, "startDate", "start_date"),
         "end_date": first(row, "endDate", "end_date"),
         "status": first(row, "status", default="upcoming"),
@@ -459,7 +506,7 @@ def upsert_athlete(conn, row: dict[str, Any]) -> dict[str, Any]:
         "age": first(row, "age", default=0),
         "club": first(row, "club", default=""),
         "wso": first(row, "wso"),
-        "gender": first(row, "gender", default=""),
+        "gender": normalize_gender(first(row, "gender", default="")),
         "weight_class": first(row, "weightClass", "weight_class", default=""),
         "entry_total": first(row, "entryTotal", "entry_total", default=0),
         "session_number": first(row, "sessionNumber", "session_number"),
@@ -586,8 +633,8 @@ def upsert_session_schedule(conn, row: dict[str, Any]) -> dict[str, Any]:
 def upsert_intl_ranking(conn, row: dict[str, Any]) -> dict[str, Any]:
     row = clean(row)
     meet = first(row, "meet", default="")
-    gender = first(row, "gender", default="")
-    age_category = first(row, "ageCategory", "age_category", default="")
+    gender = normalize_gender(first(row, "gender", default=""))
+    age_category = normalize_age_category(first(row, "ageCategory", "age_category", default=""))
     ranking = first(row, "ranking", default=0)
     name = first(row, "name", default="")
     convex_id = first(row, "convexId", "convex_id") or stable_id(
@@ -682,8 +729,8 @@ def replace_wso_records(conn, wso: str, rows: Iterable[dict[str, Any]]) -> dict[
     updated = 0
     unchanged = 0
     for row in prepared_rows:
-        age_category = first(row, "ageCategory", "age_category", default="")
-        gender = first(row, "gender", default="")
+        age_category = normalize_age_category(first(row, "ageCategory", "age_category", default=""))
+        gender = normalize_gender(first(row, "gender", default=""))
         weight_class = first(row, "weightClass", "weight_class", default="")
         convex_id = first(row, "convexId", "convex_id") or stable_id(
             "wso_record", wso, age_category, gender, weight_class
@@ -713,8 +760,8 @@ def replace_wso_records(conn, wso: str, rows: Iterable[dict[str, Any]]) -> dict[
 
 def replace_intl_rankings_group(conn, args: dict[str, Any]) -> dict[str, Any]:
     meet = first(args, "meet", default="")
-    gender = first(args, "gender", default="")
-    age_category = first(args, "ageCategory", "age_category", default="")
+    gender = normalize_gender(first(args, "gender", default=""))
+    age_category = normalize_age_category(first(args, "ageCategory", "age_category", default=""))
     rankings = args.get("rankings", [])
     existing_rows = conn.execute(
         """

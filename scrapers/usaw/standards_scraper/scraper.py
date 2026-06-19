@@ -201,33 +201,32 @@ class StandardsScraper:
     def _parse_age_category_and_gender(self, header: str) -> Optional[Tuple[str, str]]:
         """
         Parse table header to extract age category and gender.
-        Returns lowercase values to match database format.
         
         Examples:
-        - "Senior Women's A Standards" -> ("senior", "women")
-        - "Junior Men's B Standards" -> ("junior", "men")
-        - "Youth Women's A Standards" -> ("youth", "women")
-        - "U15 Men's Standards" -> ("u15", "men")
+        - "Senior Women's A Standards" -> ("Senior", "Women")
+        - "Junior Men's B Standards" -> ("Junior", "Men")
+        - "Youth Women's A Standards" -> ("Youth", "Women")
+        - "U15 Men's Standards" -> ("U15", "Men")
         """
         header = header.strip()
         
-        # Extract gender (lowercase)
+        # Extract gender
         if "Women" in header or "Women's" in header:
-            gender = "women"
+            gender = "Women"
         elif "Men" in header or "Men's" in header:
-            gender = "men"
+            gender = "Men"
         else:
             return None
         
-        # Extract age category (lowercase)
+        # Extract age category
         if "Senior" in header:
-            return ("senior", gender)
+            return ("Senior", gender)
         elif "Junior" in header:
-            return ("junior", gender)
+            return ("Junior", gender)
         elif "Youth" in header:
-            return ("youth", gender)
+            return ("Youth", gender)
         elif "U15" in header or "u15" in header:
-            return ("u15", gender)
+            return ("U15", gender)
         
         return None
     

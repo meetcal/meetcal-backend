@@ -1,0 +1,273 @@
+record_type,age_category,gender,weight_class,snatch_record,cj_record,total_record
+USAW,u13,women,36kg,33,43,78
+USAW,u13,women,40kg,40,52,92
+USAW,u13,women,44kg,45,57,102
+USAW,u13,women,48kg,58,72,124
+USAW,u13,women,53kg,47,69,124
+USAW,u13,women,58kg,57,74,137
+USAW,u13,women,63kg,57,74,146
+USAW,u13,women,63+kg,72,95,167
+USAW,u15,women,40kg,41,51,97
+USAW,u15,women,44kg,59,74,133
+USAW,u15,women,48kg,61,81,147
+USAW,u15,women,53kg,65,82,151
+USAW,u15,women,58kg,67,90,162
+USAW,u15,women,63kg,75,104,180
+USAW,u15,women,69kg,83,98,182
+USAW,u15,women,69+kg,78,100,182
+USAW,u17,women,44kg,54,64,125
+USAW,u17,women,48kg,70,85,156
+USAW,u17,women,53kg,81,101,190
+USAW,u17,women,58kg,78,99,179
+USAW,u17,women,63kg,82,105,186
+USAW,u17,women,69kg,90,113,207
+USAW,u17,women,77kg,98,115,220
+USAW,u17,women,77+kg,96,119,201
+USAW,junior,women,48kg,70,95,164
+USAW,junior,women,53kg,81,104,190
+USAW,junior,women,58kg,90,110,204
+USAW,junior,women,63kg,103,130,233
+USAW,junior,women,69kg,107,139,254
+USAW,junior,women,77kg,114,130,245
+USAW,junior,women,86kg,115,141,256
+USAW,junior,women,86+kg,102,130,230
+USAW,Masters 35,women,48kg,68,89,161
+USAW,Masters 35,women,53kg,77,101,186
+USAW,Masters 35,women,58kg,80,107,190
+USAW,Masters 35,women,63kg,84,107,194
+USAW,Masters 35,women,69kg,88,108,195
+USAW,Masters 35,women,77kg,93,114,205
+USAW,Masters 35,women,86kg,95,130,224
+USAW,Masters 35,women,86+kg,117,161,278
+USAW,Masters 40,women,48kg,66,88,161
+USAW,Masters 40,women,53kg,65,87,160
+USAW,Masters 40,women,58kg,76,100,183
+USAW,Masters 40,women,63kg,81,104,187
+USAW,Masters 40,women,69kg,86,103,189
+USAW,Masters 40,women,77kg,78,102,182
+USAW,Masters 40,women,86kg,88,105,193
+USAW,Masters 40,women,86+kg,87,120,199
+USAW,Masters 45,women,48kg,55,67,124
+USAW,Masters 45,women,53kg,55,70,130
+USAW,Masters 45,women,58kg,68,79,147
+USAW,Masters 45,women,63kg,76,100,176
+USAW,Masters 45,women,69kg,81,100,181
+USAW,Masters 45,women,77kg,79,104,188
+USAW,Masters 45,women,86kg,76,90,164
+USAW,Masters 45,women,86+kg,84,116,200
+USAW,Masters 50,women,48kg,43,54,104
+USAW,Masters 50,women,53kg,61,75,136
+USAW,Masters 50,women,58kg,58,78,138
+USAW,Masters 50,women,63kg,63,87,148
+USAW,Masters 50,women,69kg,78,90,168
+USAW,Masters 50,women,77kg,71,91,162
+USAW,Masters 50,women,86kg,66,84,149
+USAW,Masters 50,women,86+kg,65,85,153
+USAW,Masters 55,women,48kg,36,47,89
+USAW,Masters 55,women,53kg,53,64,123
+USAW,Masters 55,women,58kg,59,71,129
+USAW,Masters 55,women,63kg,60,71,133
+USAW,Masters 55,women,69kg,63,78,141
+USAW,Masters 55,women,77kg,60,77,134
+USAW,Masters 55,women,86kg,51,68,126
+USAW,Masters 55,women,86+kg,58,83,143
+USAW,Masters 60,women,48kg,38,49,92
+USAW,Masters 60,women,53kg,37,52,97
+USAW,Masters 60,women,58kg,46,55,108
+USAW,Masters 60,women,63kg,47,60,113
+USAW,Masters 60,women,69kg,48,58,110
+USAW,Masters 60,women,77kg,46,61,112
+USAW,Masters 60,women,86kg,51,67,117
+USAW,Masters 60,women,86+kg,48,59,111
+USAW,Masters 65,women,48kg,25,38,70
+USAW,Masters 65,women,53kg,27,41,76
+USAW,Masters 65,women,58kg,33,44,80
+USAW,Masters 65,women,63kg,45,58,110
+USAW,Masters 65,women,69kg,39,58,105
+USAW,Masters 65,women,77kg,39,54,98
+USAW,Masters 65,women,86kg,40,60,100
+USAW,Masters 65,women,86+kg,41,66,107
+USAW,Masters 70,women,48kg,21,30,58
+USAW,Masters 70,women,53kg,22,31,60
+USAW,Masters 70,women,58kg,30,40,77
+USAW,Masters 70,women,63kg,33,43,83
+USAW,Masters 70,women,69kg,48,61,108
+USAW,Masters 70,women,77kg,25,33,61
+USAW,Masters 70,women,86kg,23,30,59
+USAW,Masters 70,women,86+kg,18,21,45
+USAW,Masters 75,women,48kg,22,28,48
+USAW,Masters 75,women,53kg,25,33,58
+USAW,Masters 75,women,58kg,18,28,53
+USAW,Masters 75,women,63kg,32,43,75
+USAW,Masters 75,women,69kg,11,18,37
+USAW,Masters 75,women,77kg,0,0,0
+USAW,Masters 75,women,86kg,0,0,0
+USAW,Masters 75,women,86+kg,19,25,38
+USAW,Masters 80,women,48kg,0,0,0
+USAW,Masters 80,women,53kg,0,0,0
+USAW,Masters 80,women,58kg,10,17,34
+USAW,Masters 80,women,63kg,0,0,0
+USAW,Masters 80,women,69kg,0,0,0
+USAW,Masters 80,women,77kg,0,0,0
+USAW,Masters 80,women,86kg,0,0,0
+USAW,Masters 80,women,86+kg,0,0,0
+USAW,Masters 85,women,48kg,0,0,0
+USAW,Masters 85,women,53kg,0,0,0
+USAW,Masters 85,women,58kg,0,0,0
+USAW,Masters 85,women,63kg,0,0,0
+USAW,Masters 85,women,69kg,0,0,0
+USAW,Masters 85,women,77kg,0,0,0
+USAW,Masters 85,women,86kg,0,0,0
+USAW,Masters 85,women,86+kg,0,0,0
+USAW,Masters 90,women,48kg,0,0,0
+USAW,Masters 90,women,53kg,0,0,0
+USAW,Masters 90,women,58kg,0,0,0
+USAW,Masters 90,women,63kg,0,0,0
+USAW,Masters 90,women,69kg,0,0,0
+USAW,Masters 90,women,77kg,0,0,0
+USAW,Masters 90,women,86kg,0,0,0
+USAW,Masters 90,women,86+kg,0,0,0
+USAW,senior,women,48kg,82,105,193
+USAW,senior,women,53kg,96,120,216
+USAW,senior,women,58kg,93,117,214
+USAW,senior,women,63kg,107,133,240
+USAW,senior,women,69kg,119,149,263
+USAW,senior,women,77kg,125,155,279
+USAW,senior,women,86kg,115,141,256
+USAW,senior,women,86+kg,117,161,278
+USAW,u13,men,40kg,40,55,98
+USAW,u13,men,44kg,48,62,117
+USAW,u13,men,48kg,56,74,130
+USAW,u13,men,52kg,55,71,128
+USAW,u13,men,56kg,60,82,147
+USAW,u13,men,60kg,65,81,138
+USAW,u13,men,65kg,70,86,143
+USAW,u13,men,65+kg,100,125,225
+USAW,u15,men,48kg,59,76,140
+USAW,u15,men,52kg,71,93,169
+USAW,u15,men,56kg,90,112,207
+USAW,u15,men,60kg,95,117,217
+USAW,u15,men,65kg,98,122,225
+USAW,u15,men,71kg,100,125,230
+USAW,u15,men,79kg,103,130,236
+USAW,u15,men,79+kg,105,130,240
+USAW,u17,men,56kg,90,112,198
+USAW,u17,men,60kg,90,106,196
+USAW,u17,men,65kg,105,142,247
+USAW,u17,men,71kg,111,142,249
+USAW,u17,men,79kg,131,164,295
+USAW,u17,men,88kg,123,160,280
+USAW,u17,men,94kg,126,163,289
+USAW,u17,men,94+kg,135,169,303
+USAW,junior,men,60kg,120,169,296
+USAW,junior,men,65kg,124,170,297
+USAW,junior,men,71kg,146,185,339
+USAW,junior,men,79kg,145,192,349
+USAW,junior,men,88kg,152,190,348
+USAW,junior,men,94kg,151,184,345
+USAW,junior,men,110kg,159,193,365
+USAW,junior,men,110+kg,160,199,360
+USAW,Masters 35,men,60kg,96,118,219
+USAW,Masters 35,men,65kg,105,129,234
+USAW,Masters 35,men,71kg,135,165,308
+USAW,Masters 35,men,79kg,130,161,291
+USAW,Masters 35,men,88kg,136,180,316
+USAW,Masters 35,men,94kg,152,185,345
+USAW,Masters 35,men,110kg,146,179,327
+USAW,Masters 35,men,110+kg,176,206,381
+USAW,Masters 40,men,60kg,88,115,210
+USAW,Masters 40,men,65kg,101,118,227
+USAW,Masters 40,men,71kg,112,148,258
+USAW,Masters 40,men,79kg,122,148,272
+USAW,Masters 40,men,88kg,122,151,273
+USAW,Masters 40,men,94kg,143,182,334
+USAW,Masters 40,men,110kg,134,166,294
+USAW,Masters 40,men,110+kg,140,167,306
+USAW,Masters 45,men,60kg,76,103,186
+USAW,Masters 45,men,65kg,84,108,198
+USAW,Masters 45,men,71kg,98,119,225
+USAW,Masters 45,men,79kg,117,140,257
+USAW,Masters 45,men,88kg,116,154,270
+USAW,Masters 45,men,94kg,121,151,281
+USAW,Masters 45,men,110kg,128,153,280
+USAW,Masters 45,men,110+kg,121,165,285
+USAW,Masters 50,men,60kg,81,100,188
+USAW,Masters 50,men,65kg,87,107,201
+USAW,Masters 50,men,71kg,89,113,207
+USAW,Masters 50,men,79kg,98,124,229
+USAW,Masters 50,men,88kg,109,130,246
+USAW,Masters 50,men,94kg,112,139,258
+USAW,Masters 50,men,110kg,115,141,261
+USAW,Masters 50,men,110+kg,125,140,267
+USAW,Masters 55,men,60kg,86,108,201
+USAW,Masters 55,men,65kg,85,107,200
+USAW,Masters 55,men,71kg,82,107,195
+USAW,Masters 55,men,79kg,92,107,204
+USAW,Masters 55,men,88kg,103,124,231
+USAW,Masters 55,men,94kg,108,130,238
+USAW,Masters 55,men,110kg,106,127,230
+USAW,Masters 55,men,110+kg,102,137,243
+USAW,Masters 60,men,60kg,63,83,151
+USAW,Masters 60,men,65kg,68,81,154
+USAW,Masters 60,men,71kg,73,98,179
+USAW,Masters 60,men,79kg,93,115,209
+USAW,Masters 60,men,88kg,85,114,194
+USAW,Masters 60,men,94kg,96,118,223
+USAW,Masters 60,men,110kg,93,120,208
+USAW,Masters 60,men,110+kg,100,125,209
+USAW,Masters 65,men,60kg,56,69,132
+USAW,Masters 65,men,65kg,57,72,135
+USAW,Masters 65,men,71kg,72,86,158
+USAW,Masters 65,men,79kg,67,100,172
+USAW,Masters 65,men,88kg,81,112,193
+USAW,Masters 65,men,94kg,70,92,169
+USAW,Masters 65,men,110kg,75,95,170
+USAW,Masters 65,men,110+kg,83,103,186
+USAW,Masters 70,men,60kg,45,69,120
+USAW,Masters 70,men,65kg,53,76,135
+USAW,Masters 70,men,71kg,59,78,145
+USAW,Masters 70,men,79kg,62,92,162
+USAW,Masters 70,men,88kg,62,79,148
+USAW,Masters 70,men,94kg,59,87,155
+USAW,Masters 70,men,110kg,65,85,150
+USAW,Masters 70,men,110+kg,58,68,131
+USAW,Masters 75,men,60kg,40,53,99
+USAW,Masters 75,men,65kg,47,72,127
+USAW,Masters 75,men,71kg,51,69,127
+USAW,Masters 75,men,79kg,52,66,126
+USAW,Masters 75,men,88kg,54,71,132
+USAW,Masters 75,men,94kg,51,66,124
+USAW,Masters 75,men,110kg,40,48,91
+USAW,Masters 75,men,110+kg,46,49,92
+USAW,Masters 80,men,60kg,25,31,63
+USAW,Masters 80,men,65kg,34,44,86
+USAW,Masters 80,men,71kg,31,41,80
+USAW,Masters 80,men,79kg,55,66,121
+USAW,Masters 80,men,88kg,53,73,133
+USAW,Masters 80,men,94kg,41,54,103
+USAW,Masters 80,men,110kg,30,43,73
+USAW,Masters 80,men,110+kg,39,0,0
+USAW,Masters 85,men,60kg,30,43,80
+USAW,Masters 85,men,65kg,30,36,74
+USAW,Masters 85,men,71kg,28,39,75
+USAW,Masters 85,men,79kg,42,55,105
+USAW,Masters 85,men,88kg,46,65,118
+USAW,Masters 85,men,94kg,0,0,0
+USAW,Masters 85,men,110kg,0,0,0
+USAW,Masters 85,men,110+kg,0,0,0
+USAW,Masters 90,men,60kg,28,38,73
+USAW,Masters 90,men,65kg,17,24,47
+USAW,Masters 90,men,71kg,0,0,0
+USAW,Masters 90,men,79kg,25,35,68
+USAW,Masters 90,men,88kg,16,24,47
+USAW,Masters 90,men,94kg,0,0,0
+USAW,Masters 90,men,110kg,0,0,0
+USAW,Masters 90,men,110+kg,0,0,0
+USAW,senior,men,60kg,126,171,298
+USAW,senior,men,65kg,138,181,318
+USAW,senior,men,71kg,147,185,339
+USAW,senior,men,79kg,155,204,354
+USAW,senior,men,88kg,162,195,363
+USAW,senior,men,94kg,165,195,362
+USAW,senior,men,110kg,173,224,397
+USAW,senior,men,110+kg,187,233,418
