@@ -9,9 +9,10 @@ use crate::routes::{
         get_adaptive_records::get_adaptive_records, get_national_rankings::get_national_rankings,
     },
     lifting_results::{
-        get_lifting_results::get_lifting_results, get_results_2yrs::get_results_2yrs,
+        get_lifting_results::get_lifting_results,
+        get_results_2yrs::get_results_2yrs,
         get_results_by_names::get_results_by_names,
-        get_results_current_year::get_results_current_year,
+        get_results_current_year::{get_results_bests, get_results_current_year},
     },
     meets::get_sessions_for_athletes::get_sessions_for_athletes,
     results::search::search_wrapped,
@@ -87,6 +88,7 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .route("/lifting-results/by-names", get(get_results_by_names))
         .route("/lifting-results/recent", get(get_results_2yrs))
         .route("/lifting-results/year", get(get_results_current_year))
+        .route("/lifting-results/bests", get(get_results_bests))
         .route("/search", get(search_wrapped))
         .route(
             "/users/me/saved-sessions",

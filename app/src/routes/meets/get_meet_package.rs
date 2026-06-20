@@ -112,6 +112,14 @@ pub struct YearBests {
     pub best_total: f64,
 }
 
+#[derive(Debug, FromRow)]
+struct YearBestsByNameRow {
+    name: String,
+    best_snatch: f64,
+    best_cj: f64,
+    best_total: f64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PackageAttemptEstimateSession {
     pub session_number: f64,
@@ -344,13 +352,14 @@ pub async fn get_meet_package(
         .map(|athlete| athlete.name.clone())
         .collect();
 
-    let (recent_results_by_name, year_bests_by_name, history_rows) =
-        if let Some(cutoff_date) = params.history_cutoff_date.as_ref() {
-            let history_rows = if athlete_names.is_empty() {
-                Vec::new()
-            } else {
-                sqlx::query_as::<_, PackageLiftingResult>(
-                    r#"
+    let (recent_results_by_name, history_rows) = if let Some(cutoff_date) =
+        params.history_cutoff_date.as_ref()
+    {
+        let history_rows = if athlete_names.is_empty() {
+            Vec::new()
+        } else {
+            sqlx::query_as::<_, PackageLiftingResult>(
+                r#"
                     SELECT
                         id,
                         event_id,
@@ -375,19 +384,23 @@ pub async fn get_meet_package(
                         AND date >= $2
                     ORDER BY name, date DESC
                     "#,
-                )
-                .bind(&athlete_names)
-                .bind(cutoff_date)
-                .fetch_all(&state.db)
-                .await?
-            };
-
-            let (recent_results_by_name, year_bests_by_name) =
-                build_history_maps(&athlete_names, history_rows.clone());
-            (recent_results_by_name, year_bests_by_name, history_rows)
-        } else {
-            (BTreeMap::new(), BTreeMap::new(), Vec::new())
+            )
+            .bind(&athlete_names)
+            .bind(cutoff_date)
+            .fetch_all(&state.db)
+            .await?
         };
+
+        let (recent_results_by_name, _) = build_history_maps(&athlete_names, history_rows.clone());
+        (recent_results_by_name, history_rows)
+    } else {
+        (BTreeMap::new(), Vec::new())
+    };
+    let year_bests_by_name = if params.history_cutoff_date.is_some() && !athlete_names.is_empty() {
+        fetch_year_bests_by_name(&state, &athlete_names).await?
+    } else {
+        BTreeMap::new()
+    };
 
     let package_athletes: Vec<PackageAthlete> =
         athletes.into_iter().map(PackageAthlete::from).collect();
@@ -884,6 +897,65 @@ fn build_history_maps(
     let year_bests_by_name = bests_by_name.into_iter().collect();
 
     (recent_results_by_name, year_bests_by_name)
+}
+
+async fn fetch_year_bests_by_name(
+    state: &AppState,
+    athlete_names: &[String],
+) -> Result<BTreeMap<String, YearBests>, AppError> {
+    let mut bests_by_name: BTreeMap<String, YearBests> = athlete_names
+        .iter()
+        .map(|name| {
+            (
+                name.clone(),
+                YearBests {
+                    best_snatch: 0.0,
+                    best_cj: 0.0,
+                    best_total: 0.0,
+                },
+            )
+        })
+        .collect();
+
+    let rows = sqlx::query_as::<_, YearBestsByNameRow>(
+        r#"
+        SELECT
+            name,
+            COALESCE(MAX(GREATEST(
+                COALESCE(snatch_best, 0),
+                COALESCE(snatch1, 0),
+                COALESCE(snatch2, 0),
+                COALESCE(snatch3, 0)
+            )), 0) AS best_snatch,
+            COALESCE(MAX(GREATEST(
+                COALESCE(cj_best, 0),
+                COALESCE(cj1, 0),
+                COALESCE(cj2, 0),
+                COALESCE(cj3, 0)
+            )), 0) AS best_cj,
+            COALESCE(MAX(COALESCE(total, 0)), 0) AS best_total
+        FROM lifting_results
+        WHERE name = ANY($1::text[])
+            AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
+        GROUP BY name
+        "#,
+    )
+    .bind(athlete_names)
+    .fetch_all(&state.db)
+    .await?;
+
+    for row in rows {
+        bests_by_name.insert(
+            row.name,
+            YearBests {
+                best_snatch: row.best_snatch,
+                best_cj: row.best_cj,
+                best_total: row.best_total,
+            },
+        );
+    }
+
+    Ok(bests_by_name)
 }
 
 fn max_positive(values: [f64; 4]) -> f64 {

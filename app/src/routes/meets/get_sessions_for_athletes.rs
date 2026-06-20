@@ -58,8 +58,10 @@ pub async fn get_sessions_for_athletes(
     State(state): State<AppState>,
     Query(params): Query<SessionsAthletesParams>,
 ) -> Result<Json<Vec<SessionsAthletes>>, AppError> {
-    let rows: Vec<SessionsAthletes> = sqlx::query_as(
-        r#"
+    let rows: Vec<SessionsAthletes> = match (params.session_number, params.platform) {
+        (Some(session_number), Some(platform)) => {
+            sqlx::query_as(
+                r#"
         SELECT  
             a.member_id,
             a.name,
@@ -81,15 +83,111 @@ pub async fn get_sessions_for_athletes(
             AND s.session_id = a.session_number
             AND s.platform = a.session_platform
         WHERE a.meet = $1
-            AND ($2::double precision IS NULL OR a.session_number = $2)
-            AND ($3::text IS NULL OR a.session_platform = $3)
+            AND a.session_number = $2
+            AND a.session_platform = $3
         "#,
-    )
-    .bind(params.meet)
-    .bind(params.session_number)
-    .bind(params.platform)
-    .fetch_all(&state.db)
-    .await?;
+            )
+            .bind(&params.meet)
+            .bind(session_number)
+            .bind(platform)
+            .fetch_all(&state.db)
+            .await?
+        }
+        (Some(session_number), None) => {
+            sqlx::query_as(
+                r#"
+        SELECT  
+            a.member_id,
+            a.name,
+            a.age,
+            a.club,
+            a.wso,
+            a.gender,
+            a.weight_class,
+            a.entry_total,
+            a.adaptive,
+            a.session_number,
+            a.session_platform,
+            s.date,
+            s.start_time,
+            s.weigh_in_time
+        FROM athletes a
+        JOIN session_schedule s
+            ON s.meet = a.meet
+            AND s.session_id = a.session_number
+            AND s.platform = a.session_platform
+        WHERE a.meet = $1
+            AND a.session_number = $2
+        "#,
+            )
+            .bind(&params.meet)
+            .bind(session_number)
+            .fetch_all(&state.db)
+            .await?
+        }
+        (None, Some(platform)) => {
+            sqlx::query_as(
+                r#"
+        SELECT  
+            a.member_id,
+            a.name,
+            a.age,
+            a.club,
+            a.wso,
+            a.gender,
+            a.weight_class,
+            a.entry_total,
+            a.adaptive,
+            a.session_number,
+            a.session_platform,
+            s.date,
+            s.start_time,
+            s.weigh_in_time
+        FROM athletes a
+        JOIN session_schedule s
+            ON s.meet = a.meet
+            AND s.session_id = a.session_number
+            AND s.platform = a.session_platform
+        WHERE a.meet = $1
+            AND a.session_platform = $2
+        "#,
+            )
+            .bind(&params.meet)
+            .bind(platform)
+            .fetch_all(&state.db)
+            .await?
+        }
+        (None, None) => {
+            sqlx::query_as(
+                r#"
+        SELECT  
+            a.member_id,
+            a.name,
+            a.age,
+            a.club,
+            a.wso,
+            a.gender,
+            a.weight_class,
+            a.entry_total,
+            a.adaptive,
+            a.session_number,
+            a.session_platform,
+            s.date,
+            s.start_time,
+            s.weigh_in_time
+        FROM athletes a
+        JOIN session_schedule s
+            ON s.meet = a.meet
+            AND s.session_id = a.session_number
+            AND s.platform = a.session_platform
+        WHERE a.meet = $1
+        "#,
+            )
+            .bind(&params.meet)
+            .fetch_all(&state.db)
+            .await?
+        }
+    };
 
     Ok(Json(rows))
 }
