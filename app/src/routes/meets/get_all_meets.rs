@@ -30,7 +30,6 @@ pub async fn list_meets_next_3months(
         r#"
         SELECT name, start_date::text as start_date, end_date::text as end_date, time_zone, venue_city, venue_state, venue_name, venue_street, venue_zip, federation, status FROM meets 
         WHERE status != 'completed' 
-            AND start_date >= CURRENT_DATE 
             AND start_date <= CURRENT_DATE + INTERVAL '3 months' 
         ORDER BY start_date asc 
         "#,
