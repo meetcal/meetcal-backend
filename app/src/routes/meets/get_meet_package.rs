@@ -1,16 +1,68 @@
 use crate::{AppError, AppState};
 use axum::{
-    Json,
+    body::Bytes,
     extract::{Query, State},
+    http::header,
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{LazyLock, RwLock};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct MeetPackageParams {
     pub meet: String,
     pub history_cutoff_date: Option<String>,
+}
+
+/// How long a built package is served from cache before being rebuilt, set via
+/// APP_PACKAGE_CACHE_TTL_SECS (default 3600s / 1 hour).
+///
+/// The package is effectively static during a meet weekend: schedule, roster,
+/// attempt estimates, and history are all fixed beforehand, and this meet's own
+/// results (`meet_results`) aren't scraped in until ~1 week after the meet ends.
+static PACKAGE_CACHE_TTL: LazyLock<Duration> = LazyLock::new(|| {
+    let secs = std::env::var("APP_PACKAGE_CACHE_TTL_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(3600);
+    Duration::from_secs(secs)
+});
+
+struct CachedPackage {
+    body: Bytes,
+    inserted: Instant,
+}
+
+/// Process-wide cache of pre-serialized package bodies, keyed by meet + cutoff.
+static PACKAGE_CACHE: LazyLock<RwLock<HashMap<String, CachedPackage>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+fn cached_package(key: &str) -> Option<Bytes> {
+    let cache = PACKAGE_CACHE.read().ok()?;
+    let entry = cache.get(key)?;
+    (entry.inserted.elapsed() < *PACKAGE_CACHE_TTL).then(|| entry.body.clone())
+}
+
+fn store_package(key: &str, body: Bytes) {
+    if let Ok(mut cache) = PACKAGE_CACHE.write() {
+        // Only a couple of meets are ever active at once; drop stale entries so the
+        // map can't accumulate old meets over time.
+        cache.retain(|_, entry| entry.inserted.elapsed() < *PACKAGE_CACHE_TTL);
+        cache.insert(
+            key.to_string(),
+            CachedPackage {
+                body,
+                inserted: Instant::now(),
+            },
+        );
+    }
+}
+
+fn package_response(body: Bytes) -> Response {
+    ([(header::CONTENT_TYPE, "application/json")], body).into_response()
 }
 
 #[derive(Debug, Serialize)]
@@ -251,7 +303,16 @@ struct AthletePackageRow {
 pub async fn get_meet_package(
     State(state): State<AppState>,
     Query(params): Query<MeetPackageParams>,
-) -> Result<Json<MeetPackage>, AppError> {
+) -> Result<Response, AppError> {
+    let cache_key = format!(
+        "{}|{}",
+        params.meet,
+        params.history_cutoff_date.as_deref().unwrap_or("")
+    );
+    if let Some(body) = cached_package(&cache_key) {
+        return Ok(package_response(body));
+    }
+
     let meet = sqlx::query_as::<_, PackageMeet>(
         r#"
         SELECT
@@ -406,7 +467,7 @@ pub async fn get_meet_package(
         athletes.into_iter().map(PackageAthlete::from).collect();
     let attempt_estimates = build_attempt_estimates(&package_athletes, &history_rows);
 
-    Ok(Json(MeetPackage {
+    let package = MeetPackage {
         meet,
         schedule: build_schedule(schedule_rows),
         athletes: package_athletes,
@@ -414,7 +475,11 @@ pub async fn get_meet_package(
         attempt_estimates,
         year_bests_by_name,
         recent_results_by_name,
-    }))
+    };
+
+    let body = Bytes::from(serde_json::to_vec(&package).map_err(anyhow::Error::from)?);
+    store_package(&cache_key, body.clone());
+    Ok(package_response(body))
 }
 
 fn build_schedule(rows: Vec<ScheduleRow>) -> Vec<PackageScheduleDay> {
