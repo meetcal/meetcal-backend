@@ -47,8 +47,10 @@ use routes::{
 };
 use sqlx::PgPool;
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tower_http::compression::CompressionLayer;
+use tower_http::timeout::TimeoutLayer;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -104,6 +106,10 @@ pub async fn run(listener: TcpListener, db: PgPool) {
             patch(patch_auto_unsave),
         )
         .layer(CompressionLayer::new())
+        .layer(TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(15),
+        ))
         .with_state(AppState { db });
 
     axum::serve(listener, app).await.unwrap();
