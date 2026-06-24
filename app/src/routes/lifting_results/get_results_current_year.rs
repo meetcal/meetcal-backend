@@ -1,9 +1,12 @@
-use crate::{AppError, AppState, common::query::deserialize_csv_or_repeated};
+use crate::{
+    AppError, AppState,
+    common::{names::normalize_name, query::deserialize_csv_or_repeated},
+};
 use axum::Json;
 use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ResultsCurrentYearParams {
@@ -68,11 +71,11 @@ pub async fn get_results_current_year(
                 )), 0) AS best_cj,
                 COALESCE(MAX(COALESCE(total, 0)), 0) AS best_total
             FROM lifting_results
-            WHERE name = $1
+            WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = $1
                 AND date >= $2
             "#,
         )
-        .bind(params.name)
+        .bind(normalize_name(&params.name))
         .bind(cutoff_date)
         .fetch_one(&state.db)
         .await?
@@ -94,11 +97,11 @@ pub async fn get_results_current_year(
                 )), 0) AS best_cj,
                 COALESCE(MAX(COALESCE(total, 0)), 0) AS best_total
             FROM lifting_results
-            WHERE name = $1
+            WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = $1
                 AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
             "#,
         )
-        .bind(params.name)
+        .bind(normalize_name(&params.name))
         .fetch_one(&state.db)
         .await?
     };
@@ -144,11 +147,22 @@ pub async fn get_results_bests(
         return Ok(Json(by_name));
     }
 
+    // Match results to the originally requested names case- and whitespace-insensitively,
+    // while keeping the response keyed by the requested names the caller looks up by.
+    let normalized_names: Vec<String> = params.names.iter().map(|name| normalize_name(name)).collect();
+    let mut requested_by_normalized: HashMap<String, Vec<String>> = HashMap::new();
+    for name in &params.names {
+        requested_by_normalized
+            .entry(normalize_name(name))
+            .or_default()
+            .push(name.clone());
+    }
+
     let rows = if let Some(cutoff_date) = params.cutoff_date {
         sqlx::query_as::<_, YearBestsByName>(
             r#"
             SELECT
-                name,
+                lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) AS name,
                 COALESCE(MAX(GREATEST(
                     COALESCE(snatch_best, 0),
                     COALESCE(snatch1, 0),
@@ -163,12 +177,12 @@ pub async fn get_results_bests(
                 )), 0) AS best_cj,
                 COALESCE(MAX(COALESCE(total, 0)), 0) AS best_total
             FROM lifting_results
-            WHERE name = ANY($1::text[])
+            WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
                 AND date >= $2
-            GROUP BY name
+            GROUP BY lower(btrim(regexp_replace(name, '\s+', ' ', 'g')))
             "#,
         )
-        .bind(&params.names)
+        .bind(&normalized_names)
         .bind(cutoff_date)
         .fetch_all(&state.db)
         .await?
@@ -176,7 +190,7 @@ pub async fn get_results_bests(
         sqlx::query_as::<_, YearBestsByName>(
             r#"
             SELECT
-                name,
+                lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) AS name,
                 COALESCE(MAX(GREATEST(
                     COALESCE(snatch_best, 0),
                     COALESCE(snatch1, 0),
@@ -191,25 +205,31 @@ pub async fn get_results_bests(
                 )), 0) AS best_cj,
                 COALESCE(MAX(COALESCE(total, 0)), 0) AS best_total
             FROM lifting_results
-            WHERE name = ANY($1::text[])
+            WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
                 AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
-            GROUP BY name
+            GROUP BY lower(btrim(regexp_replace(name, '\s+', ' ', 'g')))
             "#,
         )
-        .bind(&params.names)
+        .bind(&normalized_names)
         .fetch_all(&state.db)
         .await?
     };
 
+    // `row.name` is the normalized form; fan it back out to every requested name
+    // that normalizes to it.
     for row in rows {
-        by_name.insert(
-            row.name,
-            YearBests {
-                best_snatch: row.best_snatch,
-                best_cj: row.best_cj,
-                best_total: row.best_total,
-            },
-        );
+        if let Some(requested) = requested_by_normalized.get(&row.name) {
+            for name in requested {
+                by_name.insert(
+                    name.clone(),
+                    YearBests {
+                        best_snatch: row.best_snatch,
+                        best_cj: row.best_cj,
+                        best_total: row.best_total,
+                    },
+                );
+            }
+        }
     }
 
     Ok(Json(by_name))

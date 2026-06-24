@@ -1,4 +1,4 @@
-use crate::{AppError, AppState, routes::results::types::LiftingResults};
+use crate::{AppError, AppState, common::names::normalize_name, routes::results::types::LiftingResults};
 use axum::{
     Json,
     extract::{Query, State},
@@ -91,12 +91,12 @@ pub async fn search_wrapped(
             COALESCE(total, 0) AS total,
             adaptive
         FROM lifting_results
-        WHERE name = $1 AND date >= $2 AND date < $3
+        WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = $1 AND date >= $2 AND date < $3
         ORDER BY date ASC
         LIMIT 600
         "#,
     )
-    .bind(&params.query)
+    .bind(normalize_name(&params.query))
     .bind(start_date)
     .bind(end_date)
     .fetch_all(&state.db)

@@ -1,5 +1,6 @@
 use crate::{
-    AppError, AppState, common::query::deserialize_csv_or_repeated,
+    AppError, AppState,
+    common::{names::normalize_name, query::deserialize_csv_or_repeated},
     routes::results::types::LiftingResults,
 };
 use axum::Json;
@@ -42,6 +43,8 @@ pub async fn get_results_by_names(
     State(state): State<AppState>,
     Query(params): Query<ResultsByNamesParams>,
 ) -> Result<Json<Vec<LiftingResults>>, AppError> {
+    let normalized_names: Vec<String> = params.names.iter().map(|name| normalize_name(name)).collect();
+
     let rows = sqlx::query_as::<_, LiftingResults>(
         r#"
         SELECT
@@ -62,11 +65,11 @@ pub async fn get_results_by_names(
             COALESCE(total, 0) AS total,
             adaptive
         FROM lifting_results
-        WHERE name = ANY($1::text[])
+        WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
         ORDER BY date DESC
         "#,
     )
-    .bind(&params.names)
+    .bind(&normalized_names)
     .fetch_all(&state.db)
     .await?;
 

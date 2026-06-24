@@ -1,4 +1,4 @@
-use crate::{AppError, AppState};
+use crate::{AppError, AppState, common::names::normalize_name};
 use axum::{
     body::Bytes,
     extract::{Query, State},
@@ -412,6 +412,10 @@ pub async fn get_meet_package(
         .iter()
         .map(|athlete| athlete.name.clone())
         .collect();
+    let normalized_athlete_names: Vec<String> = athlete_names
+        .iter()
+        .map(|name| normalize_name(name))
+        .collect();
 
     let (recent_results_by_name, history_rows) = if let Some(cutoff_date) =
         params.history_cutoff_date.as_ref()
@@ -441,12 +445,12 @@ pub async fn get_meet_package(
                         COALESCE(total, 0) AS total,
                         adaptive
                     FROM lifting_results
-                    WHERE name = ANY($1::text[])
+                    WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
                         AND date >= $2
                     ORDER BY name, date DESC
                     "#,
             )
-            .bind(&athlete_names)
+            .bind(&normalized_athlete_names)
             .bind(cutoff_date)
             .fetch_all(&state.db)
             .await?
@@ -458,7 +462,7 @@ pub async fn get_meet_package(
         (BTreeMap::new(), Vec::new())
     };
     let year_bests_by_name = if params.history_cutoff_date.is_some() && !athlete_names.is_empty() {
-        fetch_year_bests_by_name(&state, &athlete_names).await?
+        fetch_year_bests_by_name(&state, &athlete_names, &normalized_athlete_names).await?
     } else {
         BTreeMap::new()
     };
@@ -583,10 +587,10 @@ fn build_session_attempt_estimates(
     let mut temp_estimates = Vec::new();
 
     for athlete in athletes {
-        let normalized_name = normalize_athlete_name(&athlete.name);
+        let normalized_name = normalize_name(&athlete.name);
         let history: Vec<PackageLiftingResult> = history_rows
             .iter()
-            .filter(|row| normalize_athlete_name(&row.name) == normalized_name)
+            .filter(|row| normalize_name(&row.name) == normalized_name)
             .cloned()
             .collect();
 
@@ -901,13 +905,6 @@ fn max_successful(values: [f64; 4]) -> Option<f64> {
     if best > 0.0 { Some(best) } else { None }
 }
 
-fn normalize_athlete_name(name: &str) -> String {
-    name.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
 fn build_history_maps(
     athlete_names: &[String],
     rows: Vec<PackageLiftingResult>,
@@ -915,6 +912,8 @@ fn build_history_maps(
     BTreeMap<String, Vec<PackageLiftingResult>>,
     BTreeMap<String, YearBests>,
 ) {
+    let requested_by_normalized = requested_names_by_normalized(athlete_names);
+
     let mut recent_results_by_name: BTreeMap<String, Vec<PackageLiftingResult>> = athlete_names
         .iter()
         .map(|name| (name.clone(), Vec::new()))
@@ -934,29 +933,39 @@ fn build_history_maps(
         .collect();
 
     for row in rows {
-        let bests = bests_by_name
-            .entry(row.name.clone())
-            .or_insert_with(|| YearBests {
-                best_snatch: 0.0,
-                best_cj: 0.0,
-                best_total: 0.0,
-            });
+        // Attribute each result to the requested athlete name(s) it matches once
+        // case and whitespace are normalized, so "Anna Mcelderry" picks up rows
+        // stored as "Anna McElderry".
+        let Some(requested_names) = requested_by_normalized.get(&normalize_name(&row.name)) else {
+            continue;
+        };
 
-        bests.best_snatch = bests.best_snatch.max(max_positive([
-            row.snatch_best,
-            row.snatch1,
-            row.snatch2,
-            row.snatch3,
-        ]));
-        bests.best_cj = bests
-            .best_cj
-            .max(max_positive([row.cj_best, row.cj1, row.cj2, row.cj3]));
-        bests.best_total = bests.best_total.max(row.total.max(0.0));
+        for requested in requested_names {
+            let bests = bests_by_name
+                .entry(requested.clone())
+                .or_insert_with(|| YearBests {
+                    best_snatch: 0.0,
+                    best_cj: 0.0,
+                    best_total: 0.0,
+                });
 
-        recent_results_by_name
-            .entry(row.name.clone())
-            .or_default()
-            .push(row);
+            bests.best_snatch = bests.best_snatch.max(max_positive([
+                row.snatch_best,
+                row.snatch1,
+                row.snatch2,
+                row.snatch3,
+            ]));
+            bests.best_cj =
+                bests
+                    .best_cj
+                    .max(max_positive([row.cj_best, row.cj1, row.cj2, row.cj3]));
+            bests.best_total = bests.best_total.max(row.total.max(0.0));
+
+            recent_results_by_name
+                .entry(requested.clone())
+                .or_default()
+                .push(row.clone());
+        }
     }
 
     let year_bests_by_name = bests_by_name.into_iter().collect();
@@ -964,9 +973,23 @@ fn build_history_maps(
     (recent_results_by_name, year_bests_by_name)
 }
 
+/// Builds a lookup from normalized name to the requested display name(s) that
+/// normalize to it, so result rows can be attributed back to the caller's names.
+fn requested_names_by_normalized(athlete_names: &[String]) -> HashMap<String, Vec<String>> {
+    let mut by_normalized: HashMap<String, Vec<String>> = HashMap::new();
+    for name in athlete_names {
+        by_normalized
+            .entry(normalize_name(name))
+            .or_default()
+            .push(name.clone());
+    }
+    by_normalized
+}
+
 async fn fetch_year_bests_by_name(
     state: &AppState,
     athlete_names: &[String],
+    normalized_athlete_names: &[String],
 ) -> Result<BTreeMap<String, YearBests>, AppError> {
     let mut bests_by_name: BTreeMap<String, YearBests> = athlete_names
         .iter()
@@ -982,10 +1005,12 @@ async fn fetch_year_bests_by_name(
         })
         .collect();
 
+    let requested_by_normalized = requested_names_by_normalized(athlete_names);
+
     let rows = sqlx::query_as::<_, YearBestsByNameRow>(
         r#"
         SELECT
-            name,
+            lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) AS name,
             COALESCE(MAX(GREATEST(
                 COALESCE(snatch_best, 0),
                 COALESCE(snatch1, 0),
@@ -1000,24 +1025,29 @@ async fn fetch_year_bests_by_name(
             )), 0) AS best_cj,
             COALESCE(MAX(COALESCE(total, 0)), 0) AS best_total
         FROM lifting_results
-        WHERE name = ANY($1::text[])
+        WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
             AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
-        GROUP BY name
+        GROUP BY lower(btrim(regexp_replace(name, '\s+', ' ', 'g')))
         "#,
     )
-    .bind(athlete_names)
+    .bind(normalized_athlete_names)
     .fetch_all(&state.db)
     .await?;
 
     for row in rows {
-        bests_by_name.insert(
-            row.name,
-            YearBests {
-                best_snatch: row.best_snatch,
-                best_cj: row.best_cj,
-                best_total: row.best_total,
-            },
-        );
+        let Some(requested_names) = requested_by_normalized.get(&row.name) else {
+            continue;
+        };
+        for requested in requested_names {
+            bests_by_name.insert(
+                requested.clone(),
+                YearBests {
+                    best_snatch: row.best_snatch,
+                    best_cj: row.best_cj,
+                    best_total: row.best_total,
+                },
+            );
+        }
     }
 
     Ok(bests_by_name)

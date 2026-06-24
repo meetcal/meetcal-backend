@@ -124,7 +124,8 @@ pub async fn get_meet_stats(
             FROM lifting_results lr
             INNER JOIN athletes a
                 ON a.meet = lr.meet
-                AND a.name = lr.name
+                AND lower(btrim(regexp_replace(a.name, '\s+', ' ', 'g')))
+                    = lower(btrim(regexp_replace(lr.name, '\s+', ' ', 'g')))
             WHERE lr.meet = $2
         )
         SELECT
@@ -146,13 +147,15 @@ pub async fn get_meet_stats(
             (
                 SELECT MAX(previous.total)
                 FROM lifting_results previous
-                WHERE previous.name = mr.name
+                WHERE lower(btrim(regexp_replace(previous.name, '\s+', ' ', 'g')))
+                        = lower(btrim(regexp_replace(mr.name, '\s+', ' ', 'g')))
                     AND previous.date < mr.date
                     AND (previous.federation IS NULL OR previous.federation <> 'BWL')
             ) AS previous_best_total
         FROM meet_results mr
         INNER JOIN club_athletes ca
-            ON ca.name = mr.name
+            ON lower(btrim(regexp_replace(ca.name, '\s+', ' ', 'g')))
+                = lower(btrim(regexp_replace(mr.name, '\s+', ' ', 'g')))
             AND ca.weight_class = mr.weight_class
         ORDER BY mr.name
         "#,
