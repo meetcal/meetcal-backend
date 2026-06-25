@@ -53,6 +53,11 @@ cp watches.example.json watches.json   # then edit URLs/meet name
 nightly `meet-sync` job, so the mobile API joins line up. Meet/venue details
 are owned by `meet-sync`; this pipeline only stages athletes + schedule.
 
+`watches.json` can be edited by hand or managed from Slack: the Rust API exposes
+`POST /scrapers/slack/commands` backing `list` / `add` / `delete` slash
+commands that edit this same file (see the repo README). Writes are atomic, so
+the pipeline can read while a command updates it.
+
 ### Environment
 
 ```bash

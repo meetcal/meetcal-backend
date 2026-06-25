@@ -97,8 +97,26 @@ The server listens on `http://127.0.0.1:3000` by default.
 | `DELETE` | `/users/me/saved-sessions` | Clear saved sessions |
 | `GET`  | `/users/me/preferences` | Preferences for authenticated user |
 | `PATCH` | `/users/me/preferences/auto-unsave` | Toggle auto-unsave preference |
+| `POST` | `/scrapers/slack/commands` | Slack slash commands to manage meet-automation watches |
 
 Responses are gzip- and Brotli-compressed.
+
+### Slack slash commands (meet watches)
+
+`POST /scrapers/slack/commands` lets the meet-automation Slack channel manage
+which meet pages the scraper pipeline watches, editing
+[`scrapers/usaw/meet_automation/watches.json`](scrapers/usaw/meet_automation/watches.json).
+It is the API's only mutating route and writes no database; every request is
+verified against `SLACK_SIGNING_SECRET` and may be restricted to one channel /
+user allowlist. Point three Slack slash commands (e.g. `/meet-list`,
+`/meet-add`, `/meet-delete`) at this URL:
+
+- `list` — show watched meet pages
+- `add <key> | <meet name> | <page url> [| <start-list url> | <schedule url>]`
+- `delete <key>`
+
+The endpoint is disabled (HTTP 503) until `SLACK_SIGNING_SECRET` is set. See the
+Slack-related variables in [`.env.example`](.env.example).
 
 ## Development
 

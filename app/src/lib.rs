@@ -23,9 +23,10 @@ use crate::routes::{
         },
     },
 };
+use crate::routes::scrapers::{SlackConfig, slack_commands::slack_commands};
 use axum::{
     Router,
-    routing::{get, patch, put},
+    routing::{get, patch, post, put},
 };
 pub use error::AppError;
 use routes::{
@@ -55,6 +56,7 @@ use tower_http::timeout::TimeoutLayer;
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    pub slack: SlackConfig,
 }
 
 pub fn load_env() {
@@ -105,12 +107,16 @@ pub async fn run(listener: TcpListener, db: PgPool) {
             "/users/me/preferences/auto-unsave",
             patch(patch_auto_unsave),
         )
+        .route("/scrapers/slack/commands", post(slack_commands))
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(15),
         ))
-        .with_state(AppState { db });
+        .with_state(AppState {
+            db,
+            slack: SlackConfig::from_env(),
+        });
 
     axum::serve(listener, app).await.unwrap();
 }
