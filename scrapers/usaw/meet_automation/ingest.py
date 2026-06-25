@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # Make ``common`` importable regardless of cwd.
 SCRAPERS_DIR = Path(__file__).resolve().parents[2]
@@ -172,14 +172,22 @@ def ingest_bundle(
     meet_name: str,
     target: str = TARGET_BOTH,
     replace: bool = True,
+    on_target_done: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
-    """Ingest a staged bundle. Returns per-target stats."""
+    """Ingest a staged bundle. Returns per-target stats.
+
+    ``on_target_done(target, stats)`` is invoked after each backend finishes, so
+    callers can post an incremental confirmation (e.g. one Slack reply per DB).
+    """
     results: Dict[str, Any] = {"target": target, "replace": replace}
     for resolved in _resolve_targets(target):
         if resolved == TARGET_POSTGRES:
-            results[TARGET_POSTGRES] = _ingest_postgres(athletes, schedule, meet, meet_name, replace)
+            stats = _ingest_postgres(athletes, schedule, meet, meet_name, replace)
         elif resolved == TARGET_CONVEX:
-            results[TARGET_CONVEX] = _ingest_convex(athletes, schedule, meet, meet_name, replace)
+            stats = _ingest_convex(athletes, schedule, meet, meet_name, replace)
         else:
             raise ValueError(f"Unknown ingest target: {resolved}")
+        results[resolved] = stats
+        if on_target_done is not None:
+            on_target_done(resolved, stats)
     return results

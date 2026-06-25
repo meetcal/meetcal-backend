@@ -130,10 +130,55 @@ def _run_one(watch: MeetWatch, args, slack_cfg: SlackConfig) -> None:
     detect.mark_seen(result)
 
 
-def _do_ingest(bundle: StagedBundle, target: str, replace: bool) -> StagedBundle:
+def _format_target_confirmation(run_id: str, target: str, stats: dict) -> str:
+    if target == "postgres":
+        a = stats.get("athletes", {})
+        s = stats.get("schedule", {})
+        msg = (
+            f":white_check_mark: *Postgres* updated for `{run_id}` — "
+            f"athletes: {a.get('inserted', 0)} ins / {a.get('updated', 0)} upd, "
+            f"schedule: {s.get('inserted', 0)} ins / {s.get('updated', 0)} upd"
+        )
+        if stats.get("deleted_athletes") or stats.get("deleted_schedule"):
+            msg += (
+                f" (replaced {stats.get('deleted_athletes', 0)} athletes, "
+                f"{stats.get('deleted_schedule', 0)} schedule rows)"
+            )
+        return msg
+    if target == "convex":
+        msg = (
+            f":white_check_mark: *Convex* updated for `{run_id}` — "
+            f"athletes: {stats.get('athletes', 0)}, schedule: {stats.get('schedule', 0)}"
+        )
+        if stats.get("failed"):
+            msg += f" :warning: {stats['failed']} failed"
+        return msg
+    return f":white_check_mark: *{target}* updated for `{run_id}`"
+
+
+def _slack_target_reporter(slack_cfg: SlackConfig, bundle: StagedBundle):
+    """Post one Slack confirmation per DB as each upload completes."""
+    def report(target: str, stats: dict) -> None:
+        try:
+            slack.post_thread_reply(
+                slack_cfg, bundle, _format_target_confirmation(bundle.run_id, target, stats)
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return report
+
+
+def _do_ingest(
+    bundle: StagedBundle, target: str, replace: bool, slack_cfg: Optional[SlackConfig] = None
+) -> StagedBundle:
+    on_target_done = (
+        _slack_target_reporter(slack_cfg, bundle)
+        if slack_cfg is not None and bundle.slack.ts
+        else None
+    )
     result = ingest.ingest_bundle(
         bundle.athletes, bundle.schedule, bundle.meet, bundle.meet_name,
-        target=target, replace=replace,
+        target=target, replace=replace, on_target_done=on_target_done,
     )
     bundle.ingest_result = result
     bundle.status = STATUS_INGESTED
@@ -146,7 +191,7 @@ def cmd_ingest(args) -> int:
     if bundle.status == STATUS_INGESTED and not args.force:
         print(f"{args.run_id} already ingested; use --force to re-ingest")
         return 0
-    bundle = _do_ingest(bundle, args.target, replace=not args.no_replace)
+    bundle = _do_ingest(bundle, args.target, replace=not args.no_replace, slack_cfg=SlackConfig.from_env())
     print(f"ingested {args.run_id}: {bundle.ingest_result}")
     return 0
 
@@ -171,11 +216,14 @@ def cmd_approve(args) -> int:
         if decision == "approved":
             print(f"[{run_id}] approved in Slack -> ingesting")
             bundle.status = STATUS_APPROVED
-            bundle = _do_ingest(bundle, args.target, replace=not args.no_replace)
             try:
-                slack.post_thread_reply(
-                    slack_cfg, bundle, f":rocket: Published `{run_id}` to Postgres + Convex."
-                )
+                slack.post_thread_reply(slack_cfg, bundle, f":rocket: Approved — publishing `{run_id}`…")
+            except Exception:  # noqa: BLE001
+                pass
+            # _do_ingest posts one confirmation per DB as each upload completes.
+            bundle = _do_ingest(bundle, args.target, replace=not args.no_replace, slack_cfg=slack_cfg)
+            try:
+                slack.post_thread_reply(slack_cfg, bundle, f":checkered_flag: `{run_id}` published to all targets.")
             except Exception:  # noqa: BLE001
                 pass
             acted = True
