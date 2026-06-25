@@ -112,17 +112,17 @@ effect on the running server with **no redeploy or git pull**. Both are disabled
 signature-verified (optionally restricted to a user allowlist).
 
 **`POST /scrapers/slack/commands`** — `list` / `add` / `delete`, routed by the
-originating channel:
+**command name** (so one Slack channel can host both lists, or you can split
+them across channels):
 
-| Channel | Edits | Commands |
+| Command group | Edits | Forms |
 | --- | --- | --- |
-| Meet-watches channel (`SLACK_MEET_AUTOMATION_CHANNEL`) | [`watches.json`](scrapers/usaw/meet_automation/watches.json) | `add <key> \| <meet name> \| <page url> [\| <start-list url> \| <schedule url>]`, `delete <key>`, `list` |
-| Entries channel (`SLACK_ENTRIES_CHANNEL`) | [`entries_targets.json`](scrapers/usaw/entry_scraper/entries_targets.example.json) | `add <label> \| <entries url>`, `delete <label>`, `list` |
+| `/meet-*` | [`watches.json`](scrapers/usaw/meet_automation/watches.json) | `add <key> \| <meet name> \| <page url> [\| <start-list url> \| <schedule url>]`, `delete <key>`, `list` |
+| `/entries-*` | [`entries_targets.json`](scrapers/usaw/entry_scraper/entries_targets.example.json) | `add <label> \| <entries url>`, `delete <label>`, `list` |
 
-Point namespaced slash commands (e.g. `/meet-add`, `/entries-add`) at the URL;
-the channel decides which list is edited. The entries job
-(`run_scraper_job.sh entries`) reads `entries_targets.json` each run, falling
-back to a built-in list when it's absent.
+Channels (`SLACK_MEET_AUTOMATION_CHANNEL`, `SLACK_ENTRIES_CHANNEL`) act as an
+optional allowlist. The entries job (`run_scraper_job.sh entries`) reads
+`entries_targets.json` each run, falling back to a built-in list when absent.
 
 **`POST /scrapers/slack/interactions`** — receives the *Approve & publish* /
 *Reject* buttons the meet-automation pipeline posts. A click records a decision
@@ -130,7 +130,9 @@ under `MEET_AUTOMATION_STATE_DIR/decisions/`, which the pipeline's `approve`
 cron consumes to perform the dual-write to Postgres + Convex. The DB write stays
 in the Python pipeline, so this API keeps no database credentials.
 
-See the Slack-related variables in [`.env.example`](.env.example).
+Full server setup — Slack app config, env vars, cron, preview hosting, testing —
+is in [`docs/meet-automation-setup.md`](docs/meet-automation-setup.md). See also
+the Slack-related variables in [`.env.example`](.env.example).
 
 ## Development
 

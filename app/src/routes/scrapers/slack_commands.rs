@@ -30,6 +30,9 @@ const ENTRIES_USAGE: &str = "*Entry targets*\n\
     • `add <label> | <entries url>`\n\
     • `delete <label>`";
 
+const GENERIC_USAGE: &str = "Use a meet or entries command, e.g. `/meet-list`, \
+    `/meet-add`, `/entries-list`, `/entries-add`.";
+
 #[derive(Deserialize, Default)]
 struct SlackCommand {
     #[serde(default)]
@@ -70,20 +73,43 @@ pub async fn slack_commands(
         return ephemeral("could not parse slash command payload");
     };
 
-    let Some(surface) = cfg.resolve(&cmd.channel_id) else {
+    if !cfg.channel_allowed(&cmd.channel_id) {
         return ephemeral("These commands aren't enabled in this channel.");
-    };
+    }
     if !cfg.user_allowed(&cmd.user_id) {
         return ephemeral("You're not authorized to manage scraper lists.");
     }
 
+    // The command name decides which list (one channel can host both).
+    let Some(kind) = route_kind(&cmd.command, &cmd.text) else {
+        return ephemeral(GENERIC_USAGE);
+    };
     let (action, args) = parse_action(&cmd.command, &cmd.text);
-    let store = surface.store();
-    let text = match surface.kind {
+    let store = cfg.store_for(kind);
+    let text = match kind {
         ListKind::Watches => watches_reply(action, &args, &store),
         ListKind::Entries => entries_reply(action, &args, &store),
     };
     ephemeral(&text)
+}
+
+/// Decide which list a command targets from its name (and, as a fallback, the
+/// first word of its text): `/meet-*` / `/watch-*` → watches, `/entries-*` /
+/// `/entry-*` → entries.
+fn route_kind(command: &str, text: &str) -> Option<ListKind> {
+    let name = command.trim_start_matches('/').to_ascii_lowercase();
+    if name.contains("entr") {
+        return Some(ListKind::Entries);
+    }
+    if name.contains("watch") || name.contains("meet") {
+        return Some(ListKind::Watches);
+    }
+    // Generic command (e.g. `/scraper entries list`): look at the first word.
+    match text.split_whitespace().next().unwrap_or("") {
+        "entries" | "entry" => Some(ListKind::Entries),
+        "meet" | "meets" | "watch" | "watches" => Some(ListKind::Watches),
+        _ => None,
+    }
 }
 
 // --- meet watches ---------------------------------------------------------
@@ -245,6 +271,19 @@ fn parse_action(command: &str, text: &str) -> (Action, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn route_kind_by_command_name() {
+        assert_eq!(route_kind("/meet-list", ""), Some(ListKind::Watches));
+        assert_eq!(route_kind("/meet-add", "a|b|c"), Some(ListKind::Watches));
+        assert_eq!(route_kind("/entries-add", "a|b"), Some(ListKind::Entries));
+        assert_eq!(route_kind("/entry-list", ""), Some(ListKind::Entries));
+        assert_eq!(route_kind("/watch-delete", "k"), Some(ListKind::Watches));
+        // Generic command falls back to the first word of the text.
+        assert_eq!(route_kind("/scraper", "entries list"), Some(ListKind::Entries));
+        assert_eq!(route_kind("/scraper", "meet list"), Some(ListKind::Watches));
+        assert_eq!(route_kind("/scraper", "huh"), None);
+    }
 
     #[test]
     fn dispatch_by_command_name() {
