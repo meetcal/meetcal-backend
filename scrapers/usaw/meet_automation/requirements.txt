@@ -1,0 +1,21 @@
+# Direct deps for the meet automation pipeline. This is a superset that also
+# covers the two existing scrapers it drives (final_start_scraper +
+# owlcms_schedule_scraper), so a single venv can run the whole pipeline.
+#
+# DB writes use the shared common/postgres_writer (psycopg). Convex writes and
+# PDF/Slack HTTP use requests.
+
+# pipeline + ingest + slack + detect
+requests==2.32.3
+python-dotenv==1.0.1
+psycopg[binary]>=3.2.0
+
+# start-list scraper (final_start_scraper/scraper.py)
+pdfplumber==0.11.7
+pdfminer.six==20250506
+PyPDF2==3.0.1
+pillow==11.2.1
+pypdfium2==4.30.1
+
+# schedule scraper (owlcms_schedule_scraper/final_scraper.py)
+pypdf==5.1.0
