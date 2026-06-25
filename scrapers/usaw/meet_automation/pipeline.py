@@ -204,6 +204,33 @@ def cmd_reject(args) -> int:
     return 0
 
 
+def _read_decision(run_id: str):
+    """Return (decision, path) from a button-click decision file, if any.
+
+    The Rust interactions endpoint writes <state>/decisions/<run_id>.json when a
+    button is clicked. This is the primary approval signal; Slack reply polling
+    is the fallback.
+    """
+    path = config.STATE_DIR / "decisions" / f"{run_id}.json"
+    if not path.exists():
+        return None, None
+    try:
+        import json
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("decision"), path
+    except Exception:  # noqa: BLE001
+        return None, path
+
+
+def _consume_decision(decision_path) -> None:
+    if decision_path is not None:
+        try:
+            decision_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def cmd_approve(args) -> int:
     slack_cfg = SlackConfig.from_env()
     run_ids = [args.run_id] if args.run_id else stage.list_runs()
@@ -212,7 +239,9 @@ def cmd_approve(args) -> int:
         bundle = stage.load_run(run_id)
         if bundle.status != STATUS_PENDING_APPROVAL:
             continue
-        decision = slack.poll_approval(slack_cfg, bundle)
+        decision, decision_path = _read_decision(run_id)
+        if decision is None:
+            decision = slack.poll_approval(slack_cfg, bundle)
         if decision == "approved":
             print(f"[{run_id}] approved in Slack -> ingesting")
             bundle.status = STATUS_APPROVED
@@ -226,6 +255,7 @@ def cmd_approve(args) -> int:
                 slack.post_thread_reply(slack_cfg, bundle, f":checkered_flag: `{run_id}` published to all targets.")
             except Exception:  # noqa: BLE001
                 pass
+            _consume_decision(decision_path)
             acted = True
         elif decision == "rejected":
             print(f"[{run_id}] rejected in Slack")
@@ -235,6 +265,7 @@ def cmd_approve(args) -> int:
                 slack.post_thread_reply(slack_cfg, bundle, f":wastebasket: Discarded `{run_id}`.")
             except Exception:  # noqa: BLE001
                 pass
+            _consume_decision(decision_path)
             acted = True
         else:
             print(f"[{run_id}] still pending")

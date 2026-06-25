@@ -76,8 +76,18 @@ SLACK_MEET_AUTOMATION_WEBHOOK_URL=https://hooks.slack.com/services/…
 MEET_AUTOMATION_PREVIEW_BASE_URL=https://meetcal.example.com/staged
 ```
 
-If only the webhook is set you still get the review message, but the bot can't
-read your reply — approve with `pipeline.py ingest <run_id>` instead.
+Approval works three ways, in priority order:
+
+1. **Buttons (recommended).** The review message carries *Approve & publish* /
+   *Reject* buttons. A click hits the Rust API's
+   `POST /scrapers/slack/interactions`, which writes a decision file under
+   `MEET_AUTOMATION_STATE_DIR/decisions/<run_id>.json`. The `approve` cron
+   consumes it and performs the dual-write. The API and this pipeline must share
+   the same `MEET_AUTOMATION_STATE_DIR` (same server).
+2. **Reply polling.** With a bot token, `approve` also reads thread replies for
+   `okay` / `reject` (fallback when buttons aren't wired).
+3. **CLI.** `pipeline.py ingest <run_id>` / `reject <run_id>` for manual control
+   or webhook-only setups.
 
 ## Usage
 

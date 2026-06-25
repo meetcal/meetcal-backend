@@ -3,11 +3,35 @@
 //! Slack signs every request with `v0=HMAC_SHA256(signing_secret, "v0:" + timestamp + ":" + body)`.
 //! See <https://api.slack.com/authentication/verifying-requests-from-slack>.
 
+use axum::{
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// Extract the Slack signature headers and verify them over `body`. Returns
+/// `Some(response)` with a ready-to-send `401` on failure, `None` on success.
+/// Shared by the slash-command and interaction handlers.
+pub fn require_valid(secret: &str, headers: &HeaderMap, body: &[u8]) -> Option<Response> {
+    let timestamp = header(headers, "x-slack-request-timestamp");
+    let provided = header(headers, "x-slack-signature");
+    let (Some(timestamp), Some(provided)) = (timestamp, provided) else {
+        return Some((StatusCode::UNAUTHORIZED, "missing Slack signature headers").into_response());
+    };
+    if verify(secret, &timestamp, body, &provided) {
+        None
+    } else {
+        Some((StatusCode::UNAUTHORIZED, "bad Slack signature").into_response())
+    }
+}
+
+fn header(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers.get(name)?.to_str().ok().map(str::to_string)
+}
 
 /// Reject requests whose timestamp is more than this many seconds from now,
 /// to blunt replay attacks (Slack's own recommended window).

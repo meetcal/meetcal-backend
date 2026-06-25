@@ -97,26 +97,40 @@ The server listens on `http://127.0.0.1:3000` by default.
 | `DELETE` | `/users/me/saved-sessions` | Clear saved sessions |
 | `GET`  | `/users/me/preferences` | Preferences for authenticated user |
 | `PATCH` | `/users/me/preferences/auto-unsave` | Toggle auto-unsave preference |
-| `POST` | `/scrapers/slack/commands` | Slack slash commands to manage meet-automation watches |
+| `POST` | `/scrapers/slack/commands` | Slack slash commands to manage scraper lists |
+| `POST` | `/scrapers/slack/interactions` | Slack Approve/Reject buttons for staged meet uploads |
 
 Responses are gzip- and Brotli-compressed.
 
-### Slack slash commands (meet watches)
+### Slack control surfaces (scraper lists + approvals)
 
-`POST /scrapers/slack/commands` lets the meet-automation Slack channel manage
-which meet pages the scraper pipeline watches, editing
-[`scrapers/usaw/meet_automation/watches.json`](scrapers/usaw/meet_automation/watches.json).
-It is the API's only mutating route and writes no database; every request is
-verified against `SLACK_SIGNING_SECRET` and may be restricted to one channel /
-user allowlist. Point three Slack slash commands (e.g. `/meet-list`,
-`/meet-add`, `/meet-delete`) at this URL:
+The API exposes two Slack endpoints — its only mutating surfaces. They edit JSON
+files on the server's disk and drop approval decisions; they touch no database.
+Because those files live next to the cron jobs that read them, changes take
+effect on the running server with **no redeploy or git pull**. Both are disabled
+(HTTP 503) until `SLACK_SIGNING_SECRET` is set, and every request is
+signature-verified (optionally restricted to a user allowlist).
 
-- `list` — show watched meet pages
-- `add <key> | <meet name> | <page url> [| <start-list url> | <schedule url>]`
-- `delete <key>`
+**`POST /scrapers/slack/commands`** — `list` / `add` / `delete`, routed by the
+originating channel:
 
-The endpoint is disabled (HTTP 503) until `SLACK_SIGNING_SECRET` is set. See the
-Slack-related variables in [`.env.example`](.env.example).
+| Channel | Edits | Commands |
+| --- | --- | --- |
+| Meet-watches channel (`SLACK_MEET_AUTOMATION_CHANNEL`) | [`watches.json`](scrapers/usaw/meet_automation/watches.json) | `add <key> \| <meet name> \| <page url> [\| <start-list url> \| <schedule url>]`, `delete <key>`, `list` |
+| Entries channel (`SLACK_ENTRIES_CHANNEL`) | [`entries_targets.json`](scrapers/usaw/entry_scraper/entries_targets.example.json) | `add <label> \| <entries url>`, `delete <label>`, `list` |
+
+Point namespaced slash commands (e.g. `/meet-add`, `/entries-add`) at the URL;
+the channel decides which list is edited. The entries job
+(`run_scraper_job.sh entries`) reads `entries_targets.json` each run, falling
+back to a built-in list when it's absent.
+
+**`POST /scrapers/slack/interactions`** — receives the *Approve & publish* /
+*Reject* buttons the meet-automation pipeline posts. A click records a decision
+under `MEET_AUTOMATION_STATE_DIR/decisions/`, which the pipeline's `approve`
+cron consumes to perform the dual-write to Postgres + Convex. The DB write stays
+in the Python pipeline, so this API keeps no database credentials.
+
+See the Slack-related variables in [`.env.example`](.env.example).
 
 ## Development
 

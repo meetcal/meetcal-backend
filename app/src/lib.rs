@@ -23,7 +23,9 @@ use crate::routes::{
         },
     },
 };
-use crate::routes::scrapers::{SlackConfig, slack_commands::slack_commands};
+use crate::routes::scrapers::{
+    SlackConfig, interactions::slack_interactions, slack_commands::slack_commands,
+};
 use axum::{
     Router,
     routing::{get, patch, post, put},
@@ -108,6 +110,7 @@ pub async fn run(listener: TcpListener, db: PgPool) {
             patch(patch_auto_unsave),
         )
         .route("/scrapers/slack/commands", post(slack_commands))
+        .route("/scrapers/slack/interactions", post(slack_interactions))
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,

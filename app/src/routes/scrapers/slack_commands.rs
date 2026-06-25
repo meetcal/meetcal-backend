@@ -1,33 +1,34 @@
-//! Slack slash-command handler for managing meet-automation watches.
+//! Slack slash-command handler for managing scraper lists.
 //!
-//! One route backs all three commands; point `/list`, `/add`, `/delete` (or
-//! namespaced variants like `/meet-list`) at it and they dispatch on the
-//! command name, falling back to the first word of the command text. Every
-//! request is signature-verified and optionally restricted to one channel and
-//! an allowlist of users.
-//!
-//! Usage shown to users:
-//!   /…-list
-//!   /…-add  <key> | <meet name> | <page url> [| <start-list url> | <schedule url>]
-//!   /…-delete <key>
+//! One route backs all commands across all channels; it verifies the Slack
+//! signature, routes the request to the list bound to the originating channel
+//! (meet watches or entry targets), and dispatches `list` / `add` / `delete`.
+//! The action is taken from the command name (e.g. `/meet-add`, `/entries-add`)
+//! or the first word of the command text. Replies are ephemeral.
 
 use axum::{
     Json,
     body::Bytes,
+    extract::State,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
-use super::signature;
-use super::watches::NewWatch;
+use super::store::{JsonListStore, require_http_url, validate_slug};
+use super::{ListKind, signature};
 use crate::AppState;
 
-const USAGE: &str = "*Meet watches*\n\
+const WATCHES_USAGE: &str = "*Meet watches*\n\
     • `list` — show watched meet pages\n\
     • `add <key> | <meet name> | <page url> [| <start-list url> | <schedule url>]`\n\
     • `delete <key>`";
+
+const ENTRIES_USAGE: &str = "*Entry targets*\n\
+    • `list` — show meet entry URLs being scraped\n\
+    • `add <label> | <entries url>`\n\
+    • `delete <label>`";
 
 #[derive(Deserialize, Default)]
 struct SlackCommand {
@@ -49,7 +50,7 @@ enum Action {
 }
 
 pub async fn slack_commands(
-    axum::extract::State(state): axum::extract::State<AppState>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -57,79 +58,151 @@ pub async fn slack_commands(
     if !cfg.enabled() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            "Slack meet-automation commands are not configured",
+            "Slack scraper commands are not configured",
         )
             .into_response();
     }
-
-    // 1. Verify the request really came from Slack (signature over raw body).
-    let timestamp = header(&headers, "x-slack-request-timestamp");
-    let provided_sig = header(&headers, "x-slack-signature");
-    let (Some(timestamp), Some(provided_sig)) = (timestamp, provided_sig) else {
-        return (StatusCode::UNAUTHORIZED, "missing Slack signature headers").into_response();
-    };
-    if !signature::verify(&cfg.signing_secret, &timestamp, &body, &provided_sig) {
-        return (StatusCode::UNAUTHORIZED, "bad Slack signature").into_response();
+    if let Some(resp) = signature::require_valid(&cfg.signing_secret, &headers, &body) {
+        return resp;
     }
 
-    // 2. Parse the urlencoded payload.
     let Ok(cmd) = serde_urlencoded::from_bytes::<SlackCommand>(&body) else {
         return ephemeral("could not parse slash command payload");
     };
 
-    // 3. Channel + user allowlist.
-    if !cfg.channel_id.is_empty() && cmd.channel_id != cfg.channel_id {
+    let Some(surface) = cfg.resolve(&cmd.channel_id) else {
         return ephemeral("These commands aren't enabled in this channel.");
-    }
-    if !cfg.allowed_users.is_empty() && !cfg.allowed_users.iter().any(|u| u == &cmd.user_id) {
-        return ephemeral("You're not authorized to manage meet watches.");
+    };
+    if !cfg.user_allowed(&cmd.user_id) {
+        return ephemeral("You're not authorized to manage scraper lists.");
     }
 
-    // 4. Dispatch.
     let (action, args) = parse_action(&cmd.command, &cmd.text);
-    let store = cfg.store();
-    let text = match action {
-        Action::List => match store.list() {
-            Ok(watches) if watches.is_empty() => "No meet pages are being watched.".to_string(),
-            Ok(watches) => {
-                let mut out = format!("*Watching {} meet page(s):*", watches.len());
-                for w in watches {
-                    out.push_str(&format!("\n• `{}` — {}\n   {}", w.key, w.meet_name, w.page_url));
+    let store = surface.store();
+    let text = match surface.kind {
+        ListKind::Watches => watches_reply(action, &args, &store),
+        ListKind::Entries => entries_reply(action, &args, &store),
+    };
+    ephemeral(&text)
+}
+
+// --- meet watches ---------------------------------------------------------
+fn watches_reply(action: Action, args: &str, store: &JsonListStore) -> String {
+    match action {
+        Action::List => match store.items() {
+            Ok(items) if items.is_empty() => "No meet pages are being watched.".to_string(),
+            Ok(items) => {
+                let mut out = format!("*Watching {} meet page(s):*", items.len());
+                for w in items {
+                    out.push_str(&format!(
+                        "\n• `{}` — {}\n   {}",
+                        field(&w, "key"),
+                        field(&w, "meet_name"),
+                        field(&w, "page_url"),
+                    ));
                 }
                 out
             }
             Err(msg) => format!(":warning: {msg}"),
         },
-        Action::Add => match parse_add(&args) {
-            Ok(spec) => {
-                let key = spec.key.clone();
-                match store.add(spec) {
+        Action::Add => match build_watch(args) {
+            Ok(obj) => {
+                let key = field(&obj, "key");
+                match store.add(obj) {
                     Ok(()) => format!(":white_check_mark: Added watch `{key}`."),
                     Err(msg) => format!(":warning: {msg}"),
                 }
             }
-            Err(msg) => format!(":warning: {msg}\n\n{USAGE}"),
+            Err(msg) => format!(":warning: {msg}\n\n{WATCHES_USAGE}"),
         },
-        Action::Delete => {
-            let key = args.split_whitespace().next().unwrap_or("").to_string();
-            if key.is_empty() {
-                format!(":warning: usage: `delete <key>`\n\n{USAGE}")
-            } else {
-                match store.delete(&key) {
-                    Ok(true) => format!(":white_check_mark: Deleted watch `{key}`."),
-                    Ok(false) => format!(":mag: No watch with key `{key}`."),
+        Action::Delete => delete_reply(args, store, "watch", WATCHES_USAGE),
+        Action::Help => WATCHES_USAGE.to_string(),
+    }
+}
+
+fn build_watch(args: &str) -> Result<Value, String> {
+    let fields: Vec<String> = args.split('|').map(|s| s.trim().to_string()).collect();
+    let get = |i: usize| fields.get(i).filter(|s| !s.is_empty()).cloned();
+
+    let key = get(0).ok_or("missing <key>")?;
+    let meet_name = get(1).ok_or("missing <meet name>")?;
+    let page_url = get(2).ok_or("missing <page url>")?;
+    let start_list_url = get(3);
+    let schedule_url = get(4);
+
+    validate_slug("key", &key)?;
+    require_http_url("page url", Some(&page_url))?;
+    require_http_url("start-list url", start_list_url.as_deref())?;
+    require_http_url("schedule url", schedule_url.as_deref())?;
+
+    Ok(json!({
+        "key": key,
+        "meet_name": meet_name,
+        "page_url": page_url,
+        "start_list_url": start_list_url,
+        "schedule_url": schedule_url,
+        "source_format": "auto",
+        "start_member_id": 3100,
+        "schedule_start_id": 1,
+        "default_year": 2026,
+    }))
+}
+
+// --- entry targets --------------------------------------------------------
+fn entries_reply(action: Action, args: &str, store: &JsonListStore) -> String {
+    match action {
+        Action::List => match store.items() {
+            Ok(items) if items.is_empty() => "No meet entries are being scraped.".to_string(),
+            Ok(items) => {
+                let mut out = format!("*Scraping entries for {} target(s):*", items.len());
+                for e in items {
+                    out.push_str(&format!("\n• `{}` — {}", field(&e, "label"), field(&e, "url")));
+                }
+                out
+            }
+            Err(msg) => format!(":warning: {msg}"),
+        },
+        Action::Add => match build_entry(args) {
+            Ok(obj) => {
+                let label = field(&obj, "label");
+                match store.add(obj) {
+                    Ok(()) => format!(":white_check_mark: Added entry target `{label}`."),
                     Err(msg) => format!(":warning: {msg}"),
                 }
             }
-        }
-        Action::Help => USAGE.to_string(),
-    };
-
-    ephemeral(&text)
+            Err(msg) => format!(":warning: {msg}\n\n{ENTRIES_USAGE}"),
+        },
+        Action::Delete => delete_reply(args, store, "entry target", ENTRIES_USAGE),
+        Action::Help => ENTRIES_USAGE.to_string(),
+    }
 }
 
-fn header(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers.get(name)?.to_str().ok().map(str::to_string)
+fn build_entry(args: &str) -> Result<Value, String> {
+    let fields: Vec<String> = args.split('|').map(|s| s.trim().to_string()).collect();
+    let get = |i: usize| fields.get(i).filter(|s| !s.is_empty()).cloned();
+
+    let label = get(0).ok_or("missing <label>")?;
+    let url = get(1).ok_or("missing <entries url>")?;
+    require_http_url("entries url", Some(&url))?;
+
+    Ok(json!({ "label": label, "url": url }))
+}
+
+// --- shared ---------------------------------------------------------------
+fn delete_reply(args: &str, store: &JsonListStore, noun: &str, usage: &str) -> String {
+    let key = args.trim();
+    if key.is_empty() {
+        return format!(":warning: usage: `delete <key>`\n\n{usage}");
+    }
+    match store.delete(key) {
+        Ok(true) => format!(":white_check_mark: Deleted {noun} `{key}`."),
+        Ok(false) => format!(":mag: No {noun} matching `{key}`."),
+        Err(msg) => format!(":warning: {msg}"),
+    }
+}
+
+fn field(value: &Value, key: &str) -> String {
+    value.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
 fn ephemeral(text: &str) -> Response {
@@ -169,23 +242,6 @@ fn parse_action(command: &str, text: &str) -> (Action, String) {
     }
 }
 
-fn parse_add(args: &str) -> Result<NewWatch, String> {
-    let fields: Vec<String> = args.split('|').map(|s| s.trim().to_string()).collect();
-    let get = |i: usize| fields.get(i).filter(|s| !s.is_empty()).cloned();
-
-    let key = get(0).ok_or("missing <key>")?;
-    let meet_name = get(1).ok_or("missing <meet name>")?;
-    let page_url = get(2).ok_or("missing <page url>")?;
-
-    Ok(NewWatch {
-        key,
-        meet_name,
-        page_url,
-        start_list_url: get(3),
-        schedule_url: get(4),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,7 +249,7 @@ mod tests {
     #[test]
     fn dispatch_by_command_name() {
         assert!(matches!(parse_action("/meet-list", ""), (Action::List, _)));
-        assert!(matches!(parse_action("/add", "a|b|c"), (Action::Add, _)));
+        assert!(matches!(parse_action("/entries-add", "a|b"), (Action::Add, _)));
         assert!(matches!(parse_action("/meet-delete", "k"), (Action::Delete, _)));
     }
 
@@ -206,18 +262,25 @@ mod tests {
     }
 
     #[test]
-    fn add_parsing() {
-        let spec = parse_add("2026-nats | 2026 Nationals | https://e.com/p").unwrap();
-        assert_eq!(spec.key, "2026-nats");
-        assert_eq!(spec.meet_name, "2026 Nationals");
-        assert_eq!(spec.page_url, "https://e.com/p");
-        assert!(spec.start_list_url.is_none());
+    fn build_watch_parsing() {
+        let w = build_watch("2026-nats | 2026 Nationals | https://e.com/p").unwrap();
+        assert_eq!(field(&w, "key"), "2026-nats");
+        assert_eq!(field(&w, "page_url"), "https://e.com/p");
+        assert_eq!(w["start_member_id"], 3100);
+        assert!(w["start_list_url"].is_null());
 
-        let full =
-            parse_add("k | n | https://e.com/p | https://e.com/s | https://e.com/sch").unwrap();
-        assert_eq!(full.start_list_url.as_deref(), Some("https://e.com/s"));
-        assert_eq!(full.schedule_url.as_deref(), Some("https://e.com/sch"));
+        let full = build_watch("k | n | https://e.com/p | https://e.com/s | https://e.com/c").unwrap();
+        assert_eq!(field(&full, "start_list_url"), "https://e.com/s");
 
-        assert!(parse_add("only-key").is_err());
+        assert!(build_watch("only-key").is_err());
+        assert!(build_watch("bad key | n | https://e.com").is_err());
+    }
+
+    #[test]
+    fn build_entry_parsing() {
+        let e = build_entry("Masters Nats | https://usaweightlifting.sport80.com/public/events/1/entries/2").unwrap();
+        assert_eq!(field(&e, "label"), "Masters Nats");
+        assert!(build_entry("no url").is_err());
+        assert!(build_entry("label | ftp://nope").is_err());
     }
 }

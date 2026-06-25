@@ -70,6 +70,37 @@ def build_blocks(cfg: SlackConfig, bundle: StagedBundle) -> List[Dict[str, Any]]
     if links:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": " · ".join(links)}})
 
+    # Interactive buttons. The Rust API's /scrapers/slack/interactions endpoint
+    # receives the click and records the decision for the approve cron. The
+    # button value carries the run id.
+    blocks.append(
+        {
+            "type": "actions",
+            "block_id": "meet_approval",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": "meet_approve",
+                    "style": "primary",
+                    "text": {"type": "plain_text", "text": "✅ Approve & publish"},
+                    "value": bundle.run_id,
+                    "confirm": {
+                        "title": {"type": "plain_text", "text": "Publish to Postgres + Convex?"},
+                        "text": {"type": "mrkdwn", "text": f"Publish `{bundle.run_id}`?"},
+                        "confirm": {"type": "plain_text", "text": "Publish"},
+                        "deny": {"type": "plain_text", "text": "Cancel"},
+                    },
+                },
+                {
+                    "type": "button",
+                    "action_id": "meet_reject",
+                    "style": "danger",
+                    "text": {"type": "plain_text", "text": "🗑 Reject"},
+                    "value": bundle.run_id,
+                },
+            ],
+        }
+    )
     blocks.append(
         {
             "type": "context",
@@ -77,8 +108,8 @@ def build_blocks(cfg: SlackConfig, bundle: StagedBundle) -> List[Dict[str, Any]]
                 {
                     "type": "mrkdwn",
                     "text": (
-                        f"Run `{bundle.run_id}`. Reply *okay* in this thread to publish to "
-                        f"Postgres + Convex, or *reject* to discard."
+                        f"Run `{bundle.run_id}`. Use the buttons, or reply *okay* / *reject* "
+                        f"in this thread."
                     ),
                 }
             ],
