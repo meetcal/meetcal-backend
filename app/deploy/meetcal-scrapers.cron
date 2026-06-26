@@ -4,6 +4,9 @@
 SHELL=/bin/bash
 MEETCAL_BACKEND_ROOT=/home/maddisen/dev/meetcal-llc/meetcal-backend
 
+# Nightly Postgres dump to local disk and, when R2_BUCKET is set, Cloudflare R2.
+0 3 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/app/scripts/backup_db.sh >> /home/maddisen/dev/meetcal-llc/meetcal-backend/app/backups/meetcal-backup.log 2>&1
+
 0 23 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh urlwatch >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/urlwatch.log 2>&1
 15 23 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh standards >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/standards.log 2>&1
 35 23 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh records >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/records.log 2>&1
