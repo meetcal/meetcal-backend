@@ -3,5 +3,20 @@
 }
 
 api.meetcal.app {
-	reverse_proxy 127.0.0.1:3000
+	# Staged meet-automation previews, served read-only so the Slack review's
+	# "Preview the data" link works. Behind basic auth because preview.html
+	# contains athlete PII (names, member ids, clubs). Generate the hash with
+	# `caddy hash-password` and set MEET_AUTOMATION_PREVIEW_BASE_URL to
+	# https://api.meetcal.app/staged so the pipeline emits matching links.
+	handle_path /staged/* {
+		root * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/usaw/meet_automation/state/runs
+		basicauth {
+			maddisen REPLACE_WITH_BCRYPT_HASH
+		}
+		file_server
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
 }
