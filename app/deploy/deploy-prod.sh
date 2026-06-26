@@ -19,6 +19,30 @@ set -a
 source "${ENV_FILE}"
 set +a
 
+SCRAPERS_MOUNT="/srv/meetcal-backend/scrapers"
+MEET_AUTOMATION_WATCHES_PATH="${MEET_AUTOMATION_WATCHES_PATH:-${SCRAPERS_MOUNT}/usaw/meet_automation/watches.json}"
+ENTRIES_TARGETS_PATH="${ENTRIES_TARGETS_PATH:-${SCRAPERS_MOUNT}/usaw/entry_scraper/entries_targets.json}"
+MEET_AUTOMATION_STATE_DIR="${MEET_AUTOMATION_STATE_DIR:-${SCRAPERS_MOUNT}/usaw/meet_automation/state}"
+
+env_args=(
+  -e APP_APPLICATION_HOST=0.0.0.0
+  -e APP_DATABASE__HOST=meetcal
+  -e APP_DATABASE__PASSWORD
+  -e "MEET_AUTOMATION_WATCHES_PATH=${MEET_AUTOMATION_WATCHES_PATH}"
+  -e "ENTRIES_TARGETS_PATH=${ENTRIES_TARGETS_PATH}"
+  -e "MEET_AUTOMATION_STATE_DIR=${MEET_AUTOMATION_STATE_DIR}"
+)
+
+for optional_var in \
+  SLACK_SIGNING_SECRET \
+  SLACK_MEET_AUTOMATION_CHANNEL \
+  SLACK_ENTRIES_CHANNEL \
+  MEET_AUTOMATION_SLACK_ALLOWED_USERS; do
+  if [[ -n "${!optional_var:-}" ]]; then
+    env_args+=(-e "${optional_var}")
+  fi
+done
+
 docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
 docker run -d \
@@ -26,7 +50,6 @@ docker run -d \
   --restart unless-stopped \
   --network "${DOCKER_NETWORK}" \
   -p 127.0.0.1:3000:3000 \
-  -e APP_APPLICATION_HOST=0.0.0.0 \
-  -e APP_DATABASE__HOST=meetcal \
-  -e APP_DATABASE__PASSWORD \
+  -v "${ROOT}/scrapers:${SCRAPERS_MOUNT}" \
+  "${env_args[@]}" \
   "${IMAGE}"

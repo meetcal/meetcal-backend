@@ -181,6 +181,30 @@ usamw_events() {
   python_job "${SCRAPERS_DIR}/usamw/meets" scrape_events.py
 }
 
+meet_automation() {
+  local dir="${SCRAPERS_DIR}/usaw/meet_automation"
+  shift || true
+  python_job "${dir}" -m usaw.meet_automation.pipeline "$@"
+}
+
+meet_automation_run() {
+  local watches_file="${MEET_AUTOMATION_WATCHES_PATH:-${SCRAPERS_DIR}/usaw/meet_automation/watches.json}"
+  local watch_count
+  watch_count="$(python3 -c "import json,sys
+try:
+    data=json.load(open(sys.argv[1]))
+except Exception:
+    print(0)
+else:
+    print(len(data) if isinstance(data, list) else 0)
+" "${watches_file}" 2>/dev/null)"
+  if [[ "${watch_count}" == "0" ]]; then
+    echo "meet automation: no watches in ${watches_file}; skipping."
+    return 0
+  fi
+  meet_automation "$JOB" run --all
+}
+
 urlwatch_job() {
   local dir="${SCRAPERS_DIR}/urlwatch"
   local venv="${dir}/.venv"
@@ -201,6 +225,8 @@ run_selected_job() {
     entries) entry_scrapers ;;
     intl-rankings) python_job "${SCRAPERS_DIR}/usaw/rankings_scraper" intl_rankings_scraper.py --all ;;
     iwf-world-records) python_job "${SCRAPERS_DIR}/iwf/world-records" scraper.py ;;
+    meet-automation-approve) meet_automation "$JOB" approve --all-pending ;;
+    meet-automation-run) meet_automation_run ;;
     meet-sync) meet_sync ;;
     records) python_job "${SCRAPERS_DIR}/usaw/records_scraper" records_scraper.py ;;
     results-sport80) results_sport80 ;;

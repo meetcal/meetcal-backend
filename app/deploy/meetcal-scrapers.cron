@@ -11,6 +11,8 @@ MEETCAL_BACKEND_ROOT=/home/maddisen/dev/meetcal-llc/meetcal-backend
 15 0 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh iwf-world-records >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/iwf-world-records.log 2>&1
 35 0 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh intl-rankings >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/intl-rankings.log 2>&1
 5 1 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh meet-sync >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/meet-sync.log 2>&1
+0 8 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh meet-automation-run >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/meet-automation.log 2>&1
+*/5 * * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh meet-automation-approve >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/meet-automation-approve.log 2>&1
 35 1 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh usamw-events >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/usamw-events.log 2>&1
 5 2 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh results-sport80 >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/results-sport80.log 2>&1
 40 2 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh wso-records >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/wso-records.log 2>&1
