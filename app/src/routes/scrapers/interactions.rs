@@ -21,6 +21,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::now_unix_secs;
 use super::signature;
 use crate::AppState;
 
@@ -154,16 +155,6 @@ fn is_safe_run_id(run_id: &str) -> bool {
         && run_id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-}
-
-// Unix epoch seconds — the decision file is informational only (the Python
-// approve cron reads `decision`, not the timestamp), so we avoid pulling in a
-// date crate just to format this.
-fn now_unix_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

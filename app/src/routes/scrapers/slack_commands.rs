@@ -17,13 +17,20 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::store::{JsonListStore, require_http_url, validate_slug};
-use super::{ListKind, signature};
+use super::{ListKind, now_unix_secs, signature};
 use crate::AppState;
 
 const WATCHES_USAGE: &str = "*Meet watches*\n\
     • `list` — show watched meet pages\n\
     • `add <key> | <meet name> | <page url> [| <start-list url> | <schedule url>]`\n\
-    • `delete <key>`";
+    • `delete <key>`\n\
+    • `run <key>` (or `/meet-run <key>`) — scrape + validate + stage it now";
+
+const RUN_USAGE: &str = "*Run a meet now*\n\
+    • `/meet-run <key>` — scrape + validate + stage one watched meet for review\n\
+    • `/meet-run all` — do it for every watched meet\n\
+    The pipeline posts a review here with Approve / Reject buttons; nothing is \
+    written to the database until you approve.";
 
 const ENTRIES_USAGE: &str = "*Entry targets*\n\
     • `list` — show meet entry URLs being scraped\n\
@@ -31,7 +38,7 @@ const ENTRIES_USAGE: &str = "*Entry targets*\n\
     • `delete <label>`";
 
 const GENERIC_USAGE: &str = "Use a meet or entries command, e.g. `/meet-list`, \
-    `/meet-add`, `/entries-list`, `/entries-add`.";
+    `/meet-add`, `/meet-run`, `/entries-list`, `/entries-add`.";
 
 #[derive(Deserialize, Default)]
 struct SlackCommand {
@@ -49,6 +56,8 @@ enum Action {
     List,
     Add,
     Delete,
+    /// Trigger a pipeline run now (meet watches only).
+    Run,
     Help,
 }
 
@@ -85,10 +94,15 @@ pub async fn slack_commands(
         return ephemeral(GENERIC_USAGE);
     };
     let (action, args) = parse_action(&cmd.command, &cmd.text);
-    let store = cfg.store_for(kind);
-    let text = match kind {
-        ListKind::Watches => watches_reply(action, &args, &store),
-        ListKind::Entries => entries_reply(action, &args, &store),
+    let text = match (kind, action) {
+        // Running the pipeline is a meet-watch concept; it needs the shared
+        // state dir, so it gets `cfg` rather than just the list store.
+        (ListKind::Watches, Action::Run) => run_reply(cfg, &args, &cmd.user_id),
+        (ListKind::Entries, Action::Run) => {
+            ":information_source: `run` applies to meet watches. Try `/meet-run <key>`.".to_string()
+        }
+        (ListKind::Watches, action) => watches_reply(action, &args, &cfg.store_for(kind)),
+        (ListKind::Entries, action) => entries_reply(action, &args, &cfg.store_for(kind)),
     };
     ephemeral(&text)
 }
@@ -142,6 +156,8 @@ fn watches_reply(action: Action, args: &str, store: &JsonListStore) -> String {
             Err(msg) => format!(":warning: {msg}\n\n{WATCHES_USAGE}"),
         },
         Action::Delete => delete_reply(args, store, "watch", WATCHES_USAGE),
+        // Routed separately by `slack_commands` (it needs the shared state dir).
+        Action::Run => RUN_USAGE.to_string(),
         Action::Help => WATCHES_USAGE.to_string(),
     }
 }
@@ -174,6 +190,92 @@ fn build_watch(args: &str) -> Result<Value, String> {
     }))
 }
 
+// --- run now --------------------------------------------------------------
+/// Handle `/meet-run <key>` / `/meet-run all`. The API can't run the Python
+/// pipeline itself (no DB creds, and Slack's 3s slash timeout can't wait for a
+/// scrape), so it drops a request file the `run --requested` cron drains —
+/// mirroring the Approve/Reject decision-file handshake.
+fn run_reply(cfg: &super::SlackConfig, args: &str, user_id: &str) -> String {
+    let target = match parse_run_target(args) {
+        Ok(t) => t,
+        Err(msg) => return format!(":warning: {msg}\n\n{RUN_USAGE}"),
+    };
+
+    // For a specific key, confirm it's actually being watched before queueing.
+    if let Some(key) = &target {
+        let store = cfg.store_for(ListKind::Watches);
+        match store.items() {
+            Ok(items) if !items.iter().any(|i| store.key_of(i).eq_ignore_ascii_case(key)) => {
+                return format!(
+                    ":mag: No meet watch matching `{key}`. Add it with `/meet-add` first, \
+                     or run every watch with `/meet-run all`."
+                );
+            }
+            Err(msg) => return format!(":warning: {msg}"),
+            _ => {}
+        }
+    }
+
+    match queue_run(cfg, target.as_deref(), user_id) {
+        Ok(()) => {
+            let what = match &target {
+                Some(key) => format!("`{key}`"),
+                None => "all watched meets".to_string(),
+            };
+            format!(
+                ":hourglass_flowing_sand: Queued a pipeline run for {what}. It'll scrape, \
+                 validate, and post a review here with Approve / Reject buttons shortly."
+            )
+        }
+        Err(msg) => format!(":warning: Could not queue run: {msg}"),
+    }
+}
+
+/// Parse the `/meet-run` argument. Empty or `all` ⇒ every watch (`Ok(None)`);
+/// otherwise the single watch key.
+fn parse_run_target(args: &str) -> Result<Option<String>, String> {
+    let first = args.split_whitespace().next().unwrap_or("");
+    if first.is_empty() || first.eq_ignore_ascii_case("all") {
+        return Ok(None);
+    }
+    validate_slug("key", first)?;
+    Ok(Some(first.to_string()))
+}
+
+/// Atomically drop a run-request file for the pipeline to pick up. `None` keys
+/// off the `__all__` sentinel; a specific key keys off itself, so re-running the
+/// same watch before the cron drains it just refreshes one file.
+fn queue_run(cfg: &super::SlackConfig, key: Option<&str>, user_id: &str) -> Result<(), String> {
+    let dir = cfg.run_requests_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
+    let body = run_request_body(key, user_id);
+    let path = dir.join(run_request_filename(key));
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&body).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("write: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
+    Ok(())
+}
+
+fn run_request_filename(key: Option<&str>) -> String {
+    match key {
+        Some(key) => format!("{key}.json"),
+        None => "__all__.json".to_string(),
+    }
+}
+
+fn run_request_body(key: Option<&str>, user_id: &str) -> Value {
+    json!({
+        "key": key,
+        "all": key.is_none(),
+        // A manual trigger should always produce a staged run to review, even if
+        // the source PDFs haven't changed since the last automatic run.
+        "force": true,
+        "requested_by_id": user_id,
+        "requested_at_unix": now_unix_secs(),
+    })
+}
+
 // --- entry targets --------------------------------------------------------
 fn entries_reply(action: Action, args: &str, store: &JsonListStore) -> String {
     match action {
@@ -199,6 +301,9 @@ fn entries_reply(action: Action, args: &str, store: &JsonListStore) -> String {
             Err(msg) => format!(":warning: {msg}\n\n{ENTRIES_USAGE}"),
         },
         Action::Delete => delete_reply(args, store, "entry target", ENTRIES_USAGE),
+        Action::Run => {
+            ":information_source: `run` applies to meet watches. Try `/meet-run <key>`.".to_string()
+        }
         Action::Help => ENTRIES_USAGE.to_string(),
     }
 }
@@ -254,6 +359,9 @@ fn parse_action(command: &str, text: &str) -> (Action, String) {
     {
         return (Action::Delete, text.trim().to_string());
     }
+    if name.ends_with("run") {
+        return (Action::Run, text.trim().to_string());
+    }
 
     // Generic command (e.g. `/meet add …`): dispatch on the first word.
     let mut parts = text.trim().splitn(2, char::is_whitespace);
@@ -262,6 +370,7 @@ fn parse_action(command: &str, text: &str) -> (Action, String) {
     match first.as_str() {
         "add" => (Action::Add, rest),
         "delete" | "remove" | "del" | "rm" => (Action::Delete, rest),
+        "run" => (Action::Run, rest),
         "list" | "ls" | "" => (Action::List, rest),
         "help" => (Action::Help, rest),
         _ => (Action::Help, String::new()),
@@ -290,6 +399,48 @@ mod tests {
         assert!(matches!(parse_action("/meet-list", ""), (Action::List, _)));
         assert!(matches!(parse_action("/entries-add", "a|b"), (Action::Add, _)));
         assert!(matches!(parse_action("/meet-delete", "k"), (Action::Delete, _)));
+        assert!(matches!(parse_action("/meet-run", "2026-nats"), (Action::Run, _)));
+    }
+
+    #[test]
+    fn run_routes_to_watches() {
+        // `/meet-run` carries "meet", so it targets the watches list.
+        assert_eq!(route_kind("/meet-run", "2026-nats"), Some(ListKind::Watches));
+    }
+
+    #[test]
+    fn dispatch_run_by_text_word() {
+        let (a, rest) = parse_action("/meet", "run 2026-nats");
+        assert!(matches!(a, Action::Run));
+        assert_eq!(rest, "2026-nats");
+    }
+
+    #[test]
+    fn run_target_parsing() {
+        assert_eq!(parse_run_target("").unwrap(), None);
+        assert_eq!(parse_run_target("   ").unwrap(), None);
+        assert_eq!(parse_run_target("all").unwrap(), None);
+        assert_eq!(parse_run_target("ALL").unwrap(), None);
+        assert_eq!(parse_run_target("2026-nats").unwrap(), Some("2026-nats".to_string()));
+        // Only the first token is taken as the key.
+        assert_eq!(parse_run_target("2026-nats now").unwrap(), Some("2026-nats".to_string()));
+        assert!(parse_run_target("bad/key").is_err());
+    }
+
+    #[test]
+    fn run_request_filename_and_body() {
+        assert_eq!(run_request_filename(Some("2026-nats")), "2026-nats.json");
+        assert_eq!(run_request_filename(None), "__all__.json");
+
+        let one = run_request_body(Some("2026-nats"), "U1");
+        assert_eq!(field(&one, "key"), "2026-nats");
+        assert_eq!(one["all"], false);
+        assert_eq!(one["force"], true);
+        assert_eq!(field(&one, "requested_by_id"), "U1");
+
+        let all = run_request_body(None, "U1");
+        assert!(all["key"].is_null());
+        assert_eq!(all["all"], true);
     }
 
     #[test]

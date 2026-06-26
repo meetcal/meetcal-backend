@@ -115,6 +115,21 @@ impl SlackConfig {
     pub fn decisions_dir(&self) -> PathBuf {
         self.state_dir.join("decisions")
     }
+
+    /// Where `/meet-run` drops "run this watch now" requests for the Python
+    /// pipeline's `run --requested` cron to drain (shared `state_dir`).
+    pub fn run_requests_dir(&self) -> PathBuf {
+        self.state_dir.join("run_requests")
+    }
+}
+
+/// Unix epoch seconds. Used to stamp decision / run-request files dropped on the
+/// shared filesystem; informational only, so we avoid pulling in a date crate.
+pub(crate) fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn env_str(name: &str) -> String {
