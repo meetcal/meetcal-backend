@@ -98,6 +98,9 @@ PY=.venv/bin/python
 # 1. detect + scrape + validate + stage + Slack notify (NO db writes)
 $PY -m usaw.meet_automation.pipeline run --all
 
+# 1b. drain on-demand /meet-run requests dropped by the Slack command
+$PY -m usaw.meet_automation.pipeline run --requested
+
 # 2. poll Slack for your "okay"/"reject" reply; publish approved runs
 $PY -m usaw.meet_automation.pipeline approve --all-pending
 
@@ -113,6 +116,13 @@ $PY -m usaw.meet_automation.pipeline detect --all --candidates  # dry inspection
 `run` only stages when a PDF is new or its content hash changed. Use `--force`
 to stage regardless, `--no-slack` to skip notification.
 
+`run --requested` drains files left under `state/run_requests/` by the Rust API's
+`/meet-run <key>` (or `/meet-run all`) Slack command — each carries `force` so a
+manual trigger always stages a fresh run for review. Run it on a short cron
+(every couple minutes) so `/meet-run` feels near-immediate. The API never runs
+the pipeline itself (no DB creds, and Slack's 3s slash timeout can't wait for a
+scrape); it just drops the request file, mirroring the button decision handshake.
+
 ### Cron wiring
 
 Add to your scraper cron (or run via `run_scraper_job.sh`-style wrapper). The
@@ -122,6 +132,8 @@ short poll loop for your reply.
 ```cron
 # stage + notify every morning
 0 8 * * *   cd /path/meetcal-backend/scrapers && PYTHONPATH=. usaw/meet_automation/.venv/bin/python -m usaw.meet_automation.pipeline run --all   >> logs/meet-automation.log 2>&1
+# drain on-demand /meet-run requests every couple minutes
+*/2 * * * * cd /path/meetcal-backend/scrapers && PYTHONPATH=. usaw/meet_automation/.venv/bin/python -m usaw.meet_automation.pipeline run --requested >> logs/meet-automation-requests.log 2>&1
 # act on your Slack reply every 5 minutes
 */5 * * * * cd /path/meetcal-backend/scrapers && PYTHONPATH=. usaw/meet_automation/.venv/bin/python -m usaw.meet_automation.pipeline approve --all-pending >> logs/meet-automation-approve.log 2>&1
 ```

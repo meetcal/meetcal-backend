@@ -14,6 +14,7 @@ edits take effect with **no redeploy or git pull**.
 
 ```
 Slack ─slash cmd─▶ Rust API ─writes─▶ watches.json / entries_targets.json ─read─▶ cron jobs
+Slack ─/meet-run─▶ Rust API ─writes─▶ state/run_requests/<key>.json ─read─▶ run --requested cron ─▶ Slack review
 Slack ─button────▶ Rust API ─writes─▶ state/decisions/<run>.json ─read─▶ approve cron ─▶ Postgres + Convex
 ```
 
@@ -68,7 +69,7 @@ Create a Slack app (https://api.slack.com/apps) for your workspace:
    (The bot posts review messages and reads thread replies / posts confirmations.)
 3. **Slash Commands** — create these, all with Request URL
    `https://<your-api>/scrapers/slack/commands`:
-   - `/meet-list`, `/meet-add`, `/meet-delete`
+   - `/meet-list`, `/meet-add`, `/meet-delete`, `/meet-run`
    - `/entries-list`, `/entries-add`, `/entries-delete`
 4. **Interactivity & Shortcuts** — turn **on**; Request URL
    `https://<your-api>/scrapers/slack/interactions` (powers the Approve/Reject
@@ -127,6 +128,8 @@ Use the venv's python and `PYTHONPATH=<repo>/scrapers`.
 ```cron
 # Meet pipeline: detect new/changed PDFs → scrape → validate → stage → Slack review
 0 8 * * *   cd /path/meetcal-backend/scrapers && PYTHONPATH=. usaw/meet_automation/.venv/bin/python -m usaw.meet_automation.pipeline run --all       >> logs/meet-automation.log 2>&1
+# On-demand /meet-run requests: drain Slack-triggered runs every couple minutes
+*/2 * * * * cd /path/meetcal-backend/scrapers && PYTHONPATH=. usaw/meet_automation/.venv/bin/python -m usaw.meet_automation.pipeline run --requested  >> logs/meet-automation-requests.log 2>&1
 # Act on button clicks / replies → dual-write + per-DB confirmations
 */5 * * * * cd /path/meetcal-backend/scrapers && PYTHONPATH=. usaw/meet_automation/.venv/bin/python -m usaw.meet_automation.pipeline approve --all-pending >> logs/meet-automation-approve.log 2>&1
 ```
@@ -146,7 +149,11 @@ from your phone.
 1. `/meet-add 2026-nationals | <meet name> | <usaw page url>` in Slack.
 2. The `run` cron sees the page's start-list + schedule PDFs, scrapes + validates,
    posts a Slack review with counts, warnings, a preview link, and **Approve /
-   Reject** buttons. No DB writes yet.
+   Reject** buttons. No DB writes yet. To trigger this immediately instead of
+   waiting for the daily run, use `/meet-run 2026-nationals` (or `/meet-run all`);
+   it queues the run for the `run --requested` cron, which stages it within a
+   couple minutes and posts the same review. Forces a fresh stage even if the
+   PDFs haven't changed.
 3. Tap **Approve & publish** (or reply `okay`). The `approve` cron publishes to
    Postgres + Convex and posts one confirmation **per DB**.
 4. For entries: `/entries-add <label> | <sport80 entries url>`. The nightly

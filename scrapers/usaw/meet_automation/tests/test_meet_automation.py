@@ -227,6 +227,63 @@ class RunGuardTests(unittest.TestCase):
         self.assertTrue(calls["seen"])
 
 
+class RunRequestTests(unittest.TestCase):
+    """`/meet-run` drops a request file; `run --requested` drains it."""
+
+    def _watches(self):
+        return {
+            "a": config.MeetWatch(key="a", meet_name="A", page_url="https://e.com/a"),
+            "b": config.MeetWatch(key="b", meet_name="B", page_url="https://e.com/b"),
+        }
+
+    def test_resolve_single_key(self):
+        watches, force = pipeline._resolve_run_request(
+            {"key": "a", "all": False, "force": True}, "a", self._watches()
+        )
+        self.assertEqual([w.key for w in watches], ["a"])
+        self.assertTrue(force)
+
+    def test_resolve_all(self):
+        watches, _ = pipeline._resolve_run_request(
+            {"all": True}, "__all__", self._watches()
+        )
+        self.assertEqual({w.key for w in watches}, {"a", "b"})
+
+    def test_resolve_falls_back_to_filename_stem(self):
+        watches, _ = pipeline._resolve_run_request({}, "b", self._watches())
+        self.assertEqual([w.key for w in watches], ["b"])
+
+    def test_resolve_unknown_key_is_empty(self):
+        watches, _ = pipeline._resolve_run_request(
+            {"key": "gone"}, "gone", self._watches()
+        )
+        self.assertEqual(watches, [])
+
+    def test_requested_drains_and_consumes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            req_dir = tmp_path / config.RUN_REQUESTS_DIRNAME
+            req_dir.mkdir()
+            (req_dir / "a.json").write_text(json.dumps({"key": "a", "force": True}))
+            (req_dir / "gone.json").write_text(json.dumps({"key": "gone"}))
+
+            ran = []
+            args = pipeline.build_parser().parse_args(["run", "--requested", "--no-slack"])
+            original = config.STATE_DIR
+            config.STATE_DIR = tmp_path
+            try:
+                with mock.patch.object(config, "load_watches", return_value=list(self._watches().values())), \
+                    mock.patch.object(pipeline, "_run_one", side_effect=lambda w, a, c: ran.append(w.key)):
+                    pipeline._run_requested(args, SlackConfig())
+            finally:
+                config.STATE_DIR = original
+
+            self.assertEqual(ran, ["a"])  # only the real watch ran
+            # Both request files are consumed, including the stale one.
+            self.assertFalse((req_dir / "a.json").exists())
+            self.assertFalse((req_dir / "gone.json").exists())
+
+
 class WatchesPathTests(unittest.TestCase):
     def test_default_load_honors_configured_path(self):
         with tempfile.TemporaryDirectory() as tmp:

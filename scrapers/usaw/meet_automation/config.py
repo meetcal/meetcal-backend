@@ -19,6 +19,11 @@ STATE_DIR = Path(os.getenv("MEET_AUTOMATION_STATE_DIR", MODULE_DIR / "state"))
 RUNS_DIR = STATE_DIR / "runs"
 SEEN_PATH = STATE_DIR / "seen.json"
 
+# `/meet-run` (Rust API) drops "run this watch now" requests here; the
+# `run --requested` cron drains them. Shared with the API via
+# MEET_AUTOMATION_STATE_DIR, like the decisions dir.
+RUN_REQUESTS_DIRNAME = "run_requests"
+
 # Shared with the Rust API's /meet-* commands. Both sides must agree on this
 # path so Slack-managed watches are visible to the pipeline (especially in a
 # separate-checkout setup where it points at a shared location).

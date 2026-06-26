@@ -117,12 +117,18 @@ them across channels):
 
 | Command group | Edits | Forms |
 | --- | --- | --- |
-| `/meet-*` | [`watches.json`](scrapers/usaw/meet_automation/watches.json) | `add <key> \| <meet name> \| <page url> [\| <start-list url> \| <schedule url>]`, `delete <key>`, `list` |
+| `/meet-*` | [`watches.json`](scrapers/usaw/meet_automation/watches.json) | `add <key> \| <meet name> \| <page url> [\| <start-list url> \| <schedule url>]`, `delete <key>`, `list`, `run <key>` |
 | `/entries-*` | [`entries_targets.json`](scrapers/usaw/entry_scraper/entries_targets.example.json) | `add <label> \| <entries url>`, `delete <label>`, `list` |
 
 Channels (`SLACK_MEET_AUTOMATION_CHANNEL`, `SLACK_ENTRIES_CHANNEL`) act as an
 optional allowlist. The entries job (`run_scraper_job.sh entries`) reads
 `entries_targets.json` each run, falling back to a built-in list when absent.
+
+`/meet-run <key>` (or `/meet-run all`) triggers the pipeline on demand: it drops
+a request under `MEET_AUTOMATION_STATE_DIR/run_requests/`, which the pipeline's
+`run --requested` cron drains within a couple minutes and posts the usual Slack
+review. The API never runs the scrape itself — same file-handshake reasoning as
+the buttons below.
 
 **`POST /scrapers/slack/interactions`** — receives the *Approve & publish* /
 *Reject* buttons the meet-automation pipeline posts. A click records a decision

@@ -19,6 +19,7 @@ Manual operation:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -64,6 +65,8 @@ def cmd_detect(args) -> int:
 
 def cmd_run(args) -> int:
     slack_cfg = SlackConfig.from_env()
+    if getattr(args, "requested", False):
+        return _run_requested(args, slack_cfg)
     failures = 0
     for watch in _watches(args):
         try:
@@ -72,6 +75,76 @@ def cmd_run(args) -> int:
             failures += 1
             print(f"[{watch.key}] FAILED: {exc}", file=sys.stderr)
     return 1 if failures else 0
+
+
+def _run_requests_dir() -> Path:
+    """Resolved at call time so tests can redirect ``config.STATE_DIR``."""
+    return config.STATE_DIR / config.RUN_REQUESTS_DIRNAME
+
+
+def _resolve_run_request(data: dict, stem: str, watches_by_key: dict):
+    """Turn one run-request file into (watches, force).
+
+    The Rust ``/meet-run`` endpoint writes ``{key, all, force}``; ``all`` runs
+    every watch, otherwise the single ``key`` (falling back to the filename
+    stem). Returns ``([], force)`` if a named watch no longer exists so the
+    caller can drop the stale request.
+    """
+    force = bool(data.get("force", True))
+    if data.get("all"):
+        return list(watches_by_key.values()), force
+    key = data.get("key") or stem
+    watch = watches_by_key.get(key)
+    return ([watch] if watch else []), force
+
+
+def _run_requested(args, slack_cfg: SlackConfig) -> int:
+    """Drain `/meet-run` requests dropped by the Slack command. Each request
+    file is consumed (deleted) whether or not its run succeeds, so a stuck watch
+    can't wedge the queue; the requester just re-runs `/meet-run`."""
+    req_dir = _run_requests_dir()
+    paths = sorted(req_dir.glob("*.json")) if req_dir.exists() else []
+    if not paths:
+        print("no run requests")
+        return 0
+
+    watches_by_key = {w.key: w for w in config.load_watches()}
+    failures = 0
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[{path.name}] bad request file: {exc}", file=sys.stderr)
+            _unlink(path)
+            continue
+
+        watches, force = _resolve_run_request(data, path.stem, watches_by_key)
+        if not watches:
+            print(f"[{path.stem}] no matching watch; dropping request", file=sys.stderr)
+            _unlink(path)
+            continue
+
+        # Per-request overrides; a manual trigger forces a fresh stage.
+        req_args = argparse.Namespace(
+            force=force,
+            allow_empty=bool(data.get("allow_empty", False)),
+            no_slack=getattr(args, "no_slack", False),
+        )
+        for watch in watches:
+            try:
+                _run_one(watch, req_args, slack_cfg)
+            except Exception as exc:  # noqa: BLE001
+                failures += 1
+                print(f"[{watch.key}] FAILED: {exc}", file=sys.stderr)
+        _unlink(path)
+    return 1 if failures else 0
+
+
+def _unlink(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _run_one(watch: MeetWatch, args, slack_cfg: SlackConfig) -> None:
@@ -225,8 +298,6 @@ def _read_decision(run_id: str):
     if not path.exists():
         return None, None
     try:
-        import json
-
         data = json.loads(path.read_text(encoding="utf-8"))
         return data.get("decision"), path
     except Exception:  # noqa: BLE001
@@ -330,6 +401,11 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("run", help="detect -> scrape -> validate -> stage -> notify")
     r.add_argument("--watch")
     r.add_argument("--all", action="store_true")
+    r.add_argument(
+        "--requested",
+        action="store_true",
+        help="drain `/meet-run` requests dropped by the Slack command",
+    )
     r.add_argument("--force", action="store_true", help="stage even if unchanged")
     r.add_argument("--no-slack", action="store_true")
     r.add_argument("--allow-empty", action="store_true")

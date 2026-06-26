@@ -226,6 +226,7 @@ run_selected_job() {
     intl-rankings) python_job "${SCRAPERS_DIR}/usaw/rankings_scraper" intl_rankings_scraper.py --all ;;
     iwf-world-records) python_job "${SCRAPERS_DIR}/iwf/world-records" scraper.py ;;
     meet-automation-approve) meet_automation "$JOB" approve --all-pending ;;
+    meet-automation-requests) meet_automation "$JOB" run --requested ;;
     meet-automation-run) meet_automation_run ;;
     meet-sync) meet_sync ;;
     records) python_job "${SCRAPERS_DIR}/usaw/records_scraper" records_scraper.py ;;
