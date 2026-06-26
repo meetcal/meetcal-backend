@@ -55,3 +55,18 @@ jobs:
 
       - name: Unit tests
         run: cargo test
+
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scrapers
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Meet automation unit tests
+        run: PYTHONPATH=. python -m unittest usaw.meet_automation.tests.test_meet_automation

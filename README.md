@@ -97,8 +97,42 @@ The server listens on `http://127.0.0.1:3000` by default.
 | `DELETE` | `/users/me/saved-sessions` | Clear saved sessions |
 | `GET`  | `/users/me/preferences` | Preferences for authenticated user |
 | `PATCH` | `/users/me/preferences/auto-unsave` | Toggle auto-unsave preference |
+| `POST` | `/scrapers/slack/commands` | Slack slash commands to manage scraper lists |
+| `POST` | `/scrapers/slack/interactions` | Slack Approve/Reject buttons for staged meet uploads |
 
 Responses are gzip- and Brotli-compressed.
+
+### Slack control surfaces (scraper lists + approvals)
+
+The API exposes two Slack endpoints — its only mutating surfaces. They edit JSON
+files on the server's disk and drop approval decisions; they touch no database.
+Because those files live next to the cron jobs that read them, changes take
+effect on the running server with **no redeploy or git pull**. Both are disabled
+(HTTP 503) until `SLACK_SIGNING_SECRET` is set, and every request is
+signature-verified (optionally restricted to a user allowlist).
+
+**`POST /scrapers/slack/commands`** — `list` / `add` / `delete`, routed by the
+**command name** (so one Slack channel can host both lists, or you can split
+them across channels):
+
+| Command group | Edits | Forms |
+| --- | --- | --- |
+| `/meet-*` | [`watches.json`](scrapers/usaw/meet_automation/watches.json) | `add <key> \| <meet name> \| <page url> [\| <start-list url> \| <schedule url>]`, `delete <key>`, `list` |
+| `/entries-*` | [`entries_targets.json`](scrapers/usaw/entry_scraper/entries_targets.example.json) | `add <label> \| <entries url>`, `delete <label>`, `list` |
+
+Channels (`SLACK_MEET_AUTOMATION_CHANNEL`, `SLACK_ENTRIES_CHANNEL`) act as an
+optional allowlist. The entries job (`run_scraper_job.sh entries`) reads
+`entries_targets.json` each run, falling back to a built-in list when absent.
+
+**`POST /scrapers/slack/interactions`** — receives the *Approve & publish* /
+*Reject* buttons the meet-automation pipeline posts. A click records a decision
+under `MEET_AUTOMATION_STATE_DIR/decisions/`, which the pipeline's `approve`
+cron consumes to perform the dual-write to Postgres + Convex. The DB write stays
+in the Python pipeline, so this API keeps no database credentials.
+
+Full server setup — Slack app config, env vars, cron, preview hosting, testing —
+is in [`docs/meet-automation-setup.md`](docs/meet-automation-setup.md). See also
+the Slack-related variables in [`.env.example`](.env.example).
 
 ## Development
 

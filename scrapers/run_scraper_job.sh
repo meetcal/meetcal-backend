@@ -102,18 +102,39 @@ entry_scrapers() {
     (cd "${dir}" && npm ci && npx playwright install chromium)
   fi
 
-  local urls=(
-    "https://usaweightlifting.sport80.com/public/events/14711/entries/21593?bl="
-    "https://usaweightlifting.sport80.com/public/events/14508/entries/21398?bl="
-    "https://usaweightlifting.sport80.com/public/events/14372/entries/21259?bl=locator"
-    "https://usaweightlifting.sport80.com/public/events/14712/entries/21595?bl="
-    "https://usaweightlifting.sport80.com/public/events/14522/entries/21416?bl="
-    "https://usaweightlifting.sport80.com/public/events/14725/entries/21608?bl="
-    "https://usaweightlifting.sport80.com/public/events/14723/entries/21606?bl="
-    "https://usaweightlifting.sport80.com/public/events/14772/entries/21653?bl="
-    "https://usaweightlifting.sport80.com/public/events/14510/entries/21402?bl="
-    "https://usaweightlifting.sport80.com/public/events/14849/entries/21724?bl=locator"
-  )
+  # Managed entry targets: edited live via the Slack /entries-* commands on the
+  # API server (writes entries_targets.json). The cron just reads whatever is in
+  # that file each run -- no redeploy/git pull needed. Falls back to the built-in
+  # list when the file is absent or empty so nothing breaks before adoption.
+  local targets_file="${ENTRIES_TARGETS_PATH:-${dir}/entries_targets.json}"
+  local urls=()
+  if [[ -f "${targets_file}" ]]; then
+    mapfile -t urls < <(python3 -c "import json,sys
+try:
+    data=json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+for item in (data if isinstance(data,list) else []):
+    url=item.get('url') if isinstance(item,dict) else None
+    if url: print(url)
+" "${targets_file}" 2>/dev/null) || true
+  fi
+
+  if [[ ${#urls[@]} -eq 0 ]]; then
+    echo "entries: no managed targets in ${targets_file}; using built-in fallback list"
+    urls=(
+      "https://usaweightlifting.sport80.com/public/events/14711/entries/21593?bl="
+      "https://usaweightlifting.sport80.com/public/events/14508/entries/21398?bl="
+      "https://usaweightlifting.sport80.com/public/events/14372/entries/21259?bl=locator"
+      "https://usaweightlifting.sport80.com/public/events/14712/entries/21595?bl="
+      "https://usaweightlifting.sport80.com/public/events/14522/entries/21416?bl="
+      "https://usaweightlifting.sport80.com/public/events/14725/entries/21608?bl="
+      "https://usaweightlifting.sport80.com/public/events/14723/entries/21606?bl="
+      "https://usaweightlifting.sport80.com/public/events/14772/entries/21653?bl="
+      "https://usaweightlifting.sport80.com/public/events/14510/entries/21402?bl="
+      "https://usaweightlifting.sport80.com/public/events/14849/entries/21724?bl=locator"
+    )
+  fi
 
   export SLACK_WEBHOOK_URL="${SLACK_ENTRY_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
   for url in "${urls[@]}"; do

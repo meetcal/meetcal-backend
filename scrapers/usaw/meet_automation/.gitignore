@@ -1,0 +1,5 @@
+# Runtime state: staged runs, seen-PDF hashes, previews. Never commit.
+state/
+# Real watch config (may contain meet-specific URLs you don't want tracked).
+watches.json
+.venv/
