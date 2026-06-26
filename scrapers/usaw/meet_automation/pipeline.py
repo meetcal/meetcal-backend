@@ -92,6 +92,14 @@ def _run_one(watch: MeetWatch, args, slack_cfg: SlackConfig) -> None:
     )
     report = validate(athletes, schedule, watch.meet_name)
 
+    if not athletes and not getattr(args, "allow_empty", False):
+        print(
+            f"[{watch.key}] parsed 0 athletes; not staging "
+            f"(use --force --allow-empty to stage anyway)",
+            file=sys.stderr,
+        )
+        return
+
     run_id = stage.make_run_id(watch.key)
     bundle = StagedBundle(
         run_id=run_id,

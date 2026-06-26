@@ -122,7 +122,7 @@ fn write_decision(
         "decision": decision,
         "user_id": user_id,
         "user_name": user_name,
-        "decided_at": now_iso(),
+        "decided_at_unix": now_unix_secs(),
     });
     let path = dir.join(format!("{run_id}.json"));
     let tmp = path.with_extension("json.tmp");
@@ -147,18 +147,23 @@ async fn update_message(response_url: Option<String>, text: &str) {
 fn is_safe_run_id(run_id: &str) -> bool {
     !run_id.is_empty()
         && run_id.len() <= 200
+        // Reject `.`/`..` outright: with the `.json` suffix they can't escape the
+        // decisions dir, but they're never valid run ids and shouldn't write a file.
+        && run_id != "."
+        && run_id != ".."
         && run_id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
-fn now_iso() -> String {
-    // RFC3339-ish UTC without pulling in a date crate.
-    let secs = std::time::SystemTime::now()
+// Unix epoch seconds — the decision file is informational only (the Python
+// approve cron reads `decision`, not the timestamp), so we avoid pulling in a
+// date crate just to format this.
+fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format!("{secs}")
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -169,6 +174,8 @@ mod tests {
     fn run_id_safety() {
         assert!(is_safe_run_id("2026-nationals-20260625-195426"));
         assert!(!is_safe_run_id(""));
+        assert!(!is_safe_run_id("."));
+        assert!(!is_safe_run_id(".."));
         assert!(!is_safe_run_id("../../etc/passwd"));
         assert!(!is_safe_run_id("a/b"));
     }

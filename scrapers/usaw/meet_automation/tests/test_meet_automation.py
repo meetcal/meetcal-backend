@@ -181,6 +181,52 @@ class CliTests(unittest.TestCase):
         self.assertIsNone(args.run_id)
 
 
+class RunGuardTests(unittest.TestCase):
+    """`run` must not stage (or mark-seen) a parse that produced 0 athletes
+    unless --allow-empty is passed, so a broken parse is retried next run."""
+
+    def _watch(self):
+        return config.MeetWatch(key="k", meet_name=MEET, page_url="https://e.com")
+
+    def _detect_result(self):
+        return detect.DetectResult(
+            watch_key="k",
+            changed=True,
+            start_list_url="https://e.com/s.pdf",
+            schedule_url="https://e.com/c.pdf",
+            reasons=["new"],
+        )
+
+    def _run(self, allow_empty: bool):
+        args = pipeline.build_parser().parse_args(
+            ["run", "--watch", "k", "--no-slack"] + (["--allow-empty"] if allow_empty else [])
+        )
+        calls = {"staged": False, "seen": False}
+
+        def fake_write_run(*a, **k):
+            calls["staged"] = True
+            return Path(tempfile.gettempdir())
+
+        with mock.patch.object(detect, "detect", return_value=self._detect_result()), \
+            mock.patch.object(detect, "fetch_bytes", return_value=b""), \
+            mock.patch.object(pipeline.scrape, "scrape", return_value=([], [], {})), \
+            mock.patch.object(pipeline.stage, "write_run", side_effect=fake_write_run), \
+            mock.patch.object(detect, "mark_seen",
+                              side_effect=lambda *a, **k: calls.update(seen=True)):
+            pipeline._run_one(self._watch(), args, SlackConfig())
+        return calls
+
+    def test_empty_parse_is_skipped_by_default(self):
+        calls = self._run(allow_empty=False)
+        self.assertFalse(calls["staged"])
+        self.assertFalse(calls["seen"])
+
+    def test_allow_empty_stages_anyway(self):
+        calls = self._run(allow_empty=True)
+        self.assertTrue(calls["staged"])
+        self.assertTrue(calls["seen"])
+
+
 class WatchesPathTests(unittest.TestCase):
     def test_default_load_honors_configured_path(self):
         with tempfile.TemporaryDirectory() as tmp:
