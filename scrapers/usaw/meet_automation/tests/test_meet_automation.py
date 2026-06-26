@@ -279,9 +279,33 @@ class RunRequestTests(unittest.TestCase):
                 config.STATE_DIR = original
 
             self.assertEqual(ran, ["a"])  # only the real watch ran
-            # Both request files are consumed, including the stale one.
-            self.assertFalse((req_dir / "a.json").exists())
-            self.assertFalse((req_dir / "gone.json").exists())
+            # Both request files are consumed, including the stale one, with no
+            # leftover ".processing" claim files.
+            self.assertEqual(list(req_dir.iterdir()), [])
+
+    def test_unconsumable_request_is_skipped_not_rerun(self):
+        """If the request file can't be claimed (e.g. owned by another user and
+        the dir isn't writable), skip it — never run + re-run forever."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            req_dir = tmp_path / config.RUN_REQUESTS_DIRNAME
+            req_dir.mkdir()
+            (req_dir / "a.json").write_text(json.dumps({"key": "a"}))
+
+            ran = []
+            args = pipeline.build_parser().parse_args(["run", "--requested", "--no-slack"])
+            original = config.STATE_DIR
+            config.STATE_DIR = tmp_path
+            try:
+                with mock.patch.object(config, "load_watches", return_value=list(self._watches().values())), \
+                    mock.patch.object(pipeline, "_run_one", side_effect=lambda w, a, c: ran.append(w.key)), \
+                    mock.patch.object(Path, "rename", side_effect=PermissionError("EACCES")):
+                    pipeline._run_requested(args, SlackConfig())
+            finally:
+                config.STATE_DIR = original
+
+            self.assertEqual(ran, [])  # nothing ran — no wasted scrape, no loop
+            self.assertTrue((req_dir / "a.json").exists())  # left for the operator to fix
 
 
 class WatchesPathTests(unittest.TestCase):

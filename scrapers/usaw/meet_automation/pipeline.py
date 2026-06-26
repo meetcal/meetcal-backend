@@ -111,17 +111,34 @@ def _run_requested(args, slack_cfg: SlackConfig) -> int:
     watches_by_key = {w.key: w for w in config.load_watches()}
     failures = 0
     for path in paths:
+        # Claim the request by renaming it out of the *.json glob *before* doing
+        # any work. The rename also proves we can write the directory; if we
+        # can't (e.g. the API wrote the file as a different user and the shared
+        # dir isn't writable by us), skip it instead of re-scraping on every
+        # tick forever. The fix for that is to align the writer/reader user, not
+        # to keep retrying.
+        claim = path.with_name(path.name + ".processing")
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            path.rename(claim)
+        except OSError as exc:
+            print(
+                f"[{path.stem}] cannot claim request ({exc}); skipping. "
+                f"Ensure {req_dir} is writable by this user.",
+                file=sys.stderr,
+            )
+            continue
+
+        try:
+            data = json.loads(claim.read_text(encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001
             print(f"[{path.name}] bad request file: {exc}", file=sys.stderr)
-            _unlink(path)
+            _unlink(claim)
             continue
 
         watches, force = _resolve_run_request(data, path.stem, watches_by_key)
         if not watches:
             print(f"[{path.stem}] no matching watch; dropping request", file=sys.stderr)
-            _unlink(path)
+            _unlink(claim)
             continue
 
         # Per-request overrides; a manual trigger forces a fresh stage.
@@ -136,7 +153,7 @@ def _run_requested(args, slack_cfg: SlackConfig) -> int:
             except Exception as exc:  # noqa: BLE001
                 failures += 1
                 print(f"[{watch.key}] FAILED: {exc}", file=sys.stderr)
-        _unlink(path)
+        _unlink(claim)
     return 1 if failures else 0
 
 
@@ -145,6 +162,8 @@ def _unlink(path: Path) -> None:
         path.unlink()
     except FileNotFoundError:
         pass
+    except OSError as exc:  # e.g. EACCES if the file was written by another user
+        print(f"could not remove {path}: {exc}", file=sys.stderr)
 
 
 def _run_one(watch: MeetWatch, args, slack_cfg: SlackConfig) -> None:
@@ -306,10 +325,11 @@ def _read_decision(run_id: str):
 
 def _consume_decision(decision_path) -> None:
     if decision_path is not None:
-        try:
-            decision_path.unlink()
-        except FileNotFoundError:
-            pass
+        # A failure to delete here is dangerous: the decision survives and the
+        # next approve tick re-ingests the same run. Surface it loudly rather
+        # than swallowing it. (Root cause is usually the API writing the file as
+        # a different user than this cron — align the users.)
+        _unlink(decision_path)
 
 
 def cmd_approve(args) -> int:
