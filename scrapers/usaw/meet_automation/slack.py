@@ -176,6 +176,10 @@ def poll_approval(cfg: SlackConfig, bundle: StagedBundle) -> Optional[str]:
             continue  # the root review message itself
         if msg.get("bot_id"):
             continue  # ignore the bot's own posts
+        # Same allowlist the button endpoint enforces: when set, only these users
+        # can approve/reject by reply.
+        if cfg.allowed_users and msg.get("user") not in cfg.allowed_users:
+            continue
         text = (msg.get("text") or "").strip().lower()
         words = set(text.replace(".", " ").replace("!", " ").split())
         if words & set(cfg.reject_words):

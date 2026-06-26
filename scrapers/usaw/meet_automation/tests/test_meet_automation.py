@@ -11,9 +11,11 @@ button-decision file handshake. They do not touch a database or the network.
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from usaw.meet_automation import config, detect, pipeline, slack
 from usaw.meet_automation.config import SlackConfig
@@ -169,6 +171,79 @@ class DecisionFileTests(unittest.TestCase):
                 self.assertEqual(pipeline._read_decision("nope"), (None, None))
             finally:
                 config.STATE_DIR = original
+
+
+class CliTests(unittest.TestCase):
+    def test_approve_accepts_all_pending(self):
+        # Regression: the documented cron flag must parse without erroring.
+        args = pipeline.build_parser().parse_args(["approve", "--all-pending"])
+        self.assertTrue(args.all_pending)
+        self.assertIsNone(args.run_id)
+
+
+class WatchesPathTests(unittest.TestCase):
+    def test_default_load_honors_configured_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shared = Path(tmp) / "shared_watches.json"
+            shared.write_text(
+                json.dumps([{"key": "k", "meet_name": "M", "page_url": "https://e.com"}])
+            )
+            original = config.WATCHES_PATH
+            config.WATCHES_PATH = shared
+            try:
+                # load_watches() with no explicit path must read the shared file.
+                watches = config.load_watches()
+                self.assertEqual([w.key for w in watches], ["k"])
+            finally:
+                config.WATCHES_PATH = original
+
+
+class _FakeResp:
+    def __init__(self, data):
+        self._data = data
+
+    def json(self):
+        return self._data
+
+    def raise_for_status(self):
+        pass
+
+
+class _FakeRequests:
+    def __init__(self, data):
+        self._data = data
+
+    def get(self, *a, **k):
+        return _FakeResp(self._data)
+
+    def post(self, *a, **k):
+        return _FakeResp({"ok": True})
+
+
+class ReplyAllowlistTests(unittest.TestCase):
+    def _poll(self, allowed_users, reply_user):
+        bundle = StagedBundle(
+            run_id="r", watch_key="w", meet_name=MEET, slack=SlackRef(channel="C1", ts="root")
+        )
+        cfg = SlackConfig(bot_token="x", allowed_users=allowed_users)
+        data = {
+            "ok": True,
+            "messages": [
+                {"ts": "root"},  # the review message itself
+                {"user": reply_user, "text": "okay"},
+            ],
+        }
+        with mock.patch.dict(sys.modules, {"requests": _FakeRequests(data)}):
+            return slack.poll_approval(cfg, bundle)
+
+    def test_non_allowlisted_reply_ignored(self):
+        self.assertIsNone(self._poll(["U_OK"], reply_user="U_OTHER"))
+
+    def test_allowlisted_reply_approves(self):
+        self.assertEqual(self._poll(["U_OK"], reply_user="U_OK"), "approved")
+
+    def test_empty_allowlist_allows_anyone(self):
+        self.assertEqual(self._poll([], reply_user="U_ANY"), "approved")
 
 
 if __name__ == "__main__":

@@ -19,6 +19,11 @@ STATE_DIR = Path(os.getenv("MEET_AUTOMATION_STATE_DIR", MODULE_DIR / "state"))
 RUNS_DIR = STATE_DIR / "runs"
 SEEN_PATH = STATE_DIR / "seen.json"
 
+# Shared with the Rust API's /meet-* commands. Both sides must agree on this
+# path so Slack-managed watches are visible to the pipeline (especially in a
+# separate-checkout setup where it points at a shared location).
+WATCHES_PATH = Path(os.getenv("MEET_AUTOMATION_WATCHES_PATH", MODULE_DIR / "watches.json"))
+
 # Repo root: scrapers/usaw/meet_automation -> repo root is 3 parents up.
 REPO_ROOT = MODULE_DIR.parents[2]
 SCRAPERS_DIR = REPO_ROOT / "scrapers"
@@ -111,19 +116,26 @@ class SlackConfig:
     """If set, preview links become ``{preview_base_url}/{run_id}/preview.html``.
     Otherwise the Slack message references the local preview path only."""
 
+    allowed_users: List[str] = field(default_factory=list)
+    """Slack user ids permitted to approve. Empty = anyone in the channel. Mirrors
+    the Rust button endpoint's MEET_AUTOMATION_SLACK_ALLOWED_USERS allowlist so
+    reply-based approval enforces the same restriction."""
+
     @classmethod
     def from_env(cls) -> "SlackConfig":
+        allowed = os.getenv("MEET_AUTOMATION_SLACK_ALLOWED_USERS", "")
         return cls(
             webhook_url=os.getenv("SLACK_MEET_AUTOMATION_WEBHOOK_URL")
             or os.getenv("SLACK_MEET_WEBHOOK_URL"),
             bot_token=os.getenv("SLACK_BOT_TOKEN"),
             channel=os.getenv("SLACK_MEET_AUTOMATION_CHANNEL"),
             preview_base_url=os.getenv("MEET_AUTOMATION_PREVIEW_BASE_URL"),
+            allowed_users=[u for u in allowed.replace(",", " ").split() if u],
         )
 
 
 def load_watches(path: Optional[Path] = None) -> List[MeetWatch]:
-    path = path or (MODULE_DIR / "watches.json")
+    path = path or WATCHES_PATH
     if not path.exists():
         return []
     data = json.loads(path.read_text(encoding="utf-8"))

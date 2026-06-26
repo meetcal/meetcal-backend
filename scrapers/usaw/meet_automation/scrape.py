@@ -78,8 +78,14 @@ def scrape(
     watch: MeetWatch,
     start_list_bytes: bytes,
     schedule_bytes: bytes,
+    start_list_url: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
-    """Return (athletes, schedule, stats)."""
+    """Return (athletes, schedule, stats).
+
+    ``start_list_url`` is the resolved start-list PDF URL (from auto-discovery);
+    the schedule scraper uses it to fill weight-class labels for schedules that
+    don't carry classes directly. Falls back to the watch's explicit override.
+    """
     athletes = scrape_start_list(
         start_list_bytes,
         meet_name=watch.meet_name,
@@ -89,7 +95,7 @@ def scrape(
     schedule = scrape_schedule(
         schedule_bytes,
         meet_name=watch.meet_name,
-        start_list_url=watch.start_list_url,
+        start_list_url=start_list_url or watch.start_list_url,
         start_id=watch.schedule_start_id,
     )
     stats = {

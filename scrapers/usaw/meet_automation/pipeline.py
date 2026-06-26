@@ -87,7 +87,9 @@ def _run_one(watch: MeetWatch, args, slack_cfg: SlackConfig) -> None:
     start_bytes = detect.fetch_bytes(result.start_list_url)
     sched_bytes = detect.fetch_bytes(result.schedule_url)
 
-    athletes, schedule, scrape_stats = scrape.scrape(watch, start_bytes, sched_bytes)
+    athletes, schedule, scrape_stats = scrape.scrape(
+        watch, start_bytes, sched_bytes, start_list_url=result.start_list_url
+    )
     report = validate(athletes, schedule, watch.meet_name)
 
     run_id = stage.make_run_id(watch.key)
@@ -325,8 +327,13 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--allow-empty", action="store_true")
     r.set_defaults(func=cmd_run)
 
-    a = sub.add_parser("approve", help="poll Slack replies and publish approved runs")
+    a = sub.add_parser("approve", help="poll Slack replies/buttons and publish approved runs")
     a.add_argument("run_id", nargs="?")
+    a.add_argument(
+        "--all-pending",
+        action="store_true",
+        help="process every pending run (the default when no run_id is given)",
+    )
     add_target(a)
     a.set_defaults(func=cmd_approve)
 
