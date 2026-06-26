@@ -45,12 +45,16 @@ done
 
 docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
-# Run as the host user that owns the repo (and the cron jobs), not root, so the
-# files the API writes into the bind-mounted state dir (run requests + button
-# decision files) are owned by that user. Otherwise the scraper cron — which
-# runs as the host user and must delete those files — gets EACCES, the request
-# is never consumed, and the job re-runs every tick. Override with API_RUN_USER.
-API_RUN_USER="${API_RUN_USER:-$(id -u):$(id -g)}"
+# Run as the host user that owns the repo, not root, so the files the API writes
+# into the bind-mounted state dir (run requests + button decision files) are
+# owned by that user. The scraper cron runs as the repo owner and must delete
+# those files to consume them; if they're owned by anyone else it gets EACCES,
+# the request is never consumed, and the job re-runs every tick.
+#
+# Key off the repo owner (not `id -u`): this deploy is run by a self-hosted CI
+# runner that may execute under a different account than the cron. Override with
+# API_RUN_USER if the API and cron should run as someone else.
+API_RUN_USER="${API_RUN_USER:-$(stat -c '%u:%g' "${ROOT}")}"
 
 docker run -d \
   --name "${CONTAINER_NAME}" \
