@@ -71,6 +71,7 @@ Create a Slack app (https://api.slack.com/apps) for your workspace:
    `https://<your-api>/scrapers/slack/commands`:
    - `/meet-list`, `/meet-add`, `/meet-delete`, `/meet-run`
    - `/entries-list`, `/entries-add`, `/entries-delete`
+   - `/url-list`, `/url-add`, `/url-delete` (manage `urls.yaml` for urlwatch)
 4. **Interactivity & Shortcuts** — turn **on**; Request URL
    `https://<your-api>/scrapers/slack/interactions` (powers the Approve/Reject
    buttons).

@@ -6,3 +6,6 @@ venv/
 dist/
 *.egg
 .env
+# Runtime URL-watch list, managed live via the Slack /url-* commands.
+# Seeded from urls.example.yaml by run_scraper_job.sh.
+urls.yaml

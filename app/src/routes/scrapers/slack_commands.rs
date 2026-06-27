@@ -1,10 +1,11 @@
 //! Slack slash-command handler for managing scraper lists.
 //!
 //! One route backs all commands across all channels; it verifies the Slack
-//! signature, routes the request to the list bound to the originating channel
-//! (meet watches or entry targets), and dispatches `list` / `add` / `delete`.
-//! The action is taken from the command name (e.g. `/meet-add`, `/entries-add`)
-//! or the first word of the command text. Replies are ephemeral.
+//! signature, routes the request to the list named by the command (meet
+//! watches, entry targets, or urlwatch pages), and dispatches
+//! `list` / `add` / `delete` (plus `run` for meet watches). The action is taken
+//! from the command name (e.g. `/meet-add`, `/entries-add`, `/url-add`) or the
+//! first word of the command text. Replies are ephemeral.
 
 use axum::{
     Json,
@@ -16,7 +17,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::store::{JsonListStore, require_http_url, validate_slug};
+use super::store::{ListStore, require_http_url, validate_slug};
 use super::{ListKind, now_unix_secs, signature};
 use crate::AppState;
 
@@ -37,8 +38,15 @@ const ENTRIES_USAGE: &str = "*Entry targets*\n\
     • `add <label> | <entries url>`\n\
     • `delete <label>`";
 
-const GENERIC_USAGE: &str = "Use a meet or entries command, e.g. `/meet-list`, \
-    `/meet-add`, `/meet-run`, `/entries-list`, `/entries-add`.";
+const URLWATCH_USAGE: &str = "*URL watches*\n\
+    • `list` — show pages watched for changes\n\
+    • `add <name> | <url> [| <css selector>]` — defaults to full-page text; a \
+    CSS selector narrows what's diffed\n\
+    • `delete <name>`";
+
+const GENERIC_USAGE: &str = "Use a meet, entries, or url command, e.g. \
+    `/meet-list`, `/meet-add`, `/meet-run`, `/entries-list`, `/entries-add`, \
+    `/url-list`, `/url-add`.";
 
 #[derive(Deserialize, Default)]
 struct SlackCommand {
@@ -98,22 +106,27 @@ pub async fn slack_commands(
         // Running the pipeline is a meet-watch concept; it needs the shared
         // state dir, so it gets `cfg` rather than just the list store.
         (ListKind::Watches, Action::Run) => run_reply(cfg, &args, &cmd.user_id),
-        (ListKind::Entries, Action::Run) => {
+        (_, Action::Run) => {
             ":information_source: `run` applies to meet watches. Try `/meet-run <key>`.".to_string()
         }
         (ListKind::Watches, action) => watches_reply(action, &args, &cfg.store_for(kind)),
         (ListKind::Entries, action) => entries_reply(action, &args, &cfg.store_for(kind)),
+        (ListKind::UrlWatch, action) => urlwatch_reply(action, &args, &cfg.store_for(kind)),
     };
     ephemeral(&text)
 }
 
 /// Decide which list a command targets from its name (and, as a fallback, the
 /// first word of its text): `/meet-*` / `/watch-*` → watches, `/entries-*` /
-/// `/entry-*` → entries.
+/// `/entry-*` → entries, `/url-*` → urlwatch.
 fn route_kind(command: &str, text: &str) -> Option<ListKind> {
     let name = command.trim_start_matches('/').to_ascii_lowercase();
     if name.contains("entr") {
         return Some(ListKind::Entries);
+    }
+    // Check `url` before `watch`: `/urlwatch-*` contains both, and it's urlwatch.
+    if name.contains("url") {
+        return Some(ListKind::UrlWatch);
     }
     if name.contains("watch") || name.contains("meet") {
         return Some(ListKind::Watches);
@@ -121,13 +134,14 @@ fn route_kind(command: &str, text: &str) -> Option<ListKind> {
     // Generic command (e.g. `/scraper entries list`): look at the first word.
     match text.split_whitespace().next().unwrap_or("") {
         "entries" | "entry" => Some(ListKind::Entries),
+        "url" | "urls" | "urlwatch" => Some(ListKind::UrlWatch),
         "meet" | "meets" | "watch" | "watches" => Some(ListKind::Watches),
         _ => None,
     }
 }
 
 // --- meet watches ---------------------------------------------------------
-fn watches_reply(action: Action, args: &str, store: &JsonListStore) -> String {
+fn watches_reply(action: Action, args: &str, store: &ListStore) -> String {
     match action {
         Action::List => match store.items() {
             Ok(items) if items.is_empty() => "No meet pages are being watched.".to_string(),
@@ -277,7 +291,7 @@ fn run_request_body(key: Option<&str>, user_id: &str) -> Value {
 }
 
 // --- entry targets --------------------------------------------------------
-fn entries_reply(action: Action, args: &str, store: &JsonListStore) -> String {
+fn entries_reply(action: Action, args: &str, store: &ListStore) -> String {
     match action {
         Action::List => match store.items() {
             Ok(items) if items.is_empty() => "No meet entries are being scraped.".to_string(),
@@ -319,8 +333,60 @@ fn build_entry(args: &str) -> Result<Value, String> {
     Ok(json!({ "label": label, "url": url }))
 }
 
+// --- url watches ----------------------------------------------------------
+fn urlwatch_reply(action: Action, args: &str, store: &ListStore) -> String {
+    match action {
+        Action::List => match store.items() {
+            Ok(items) if items.is_empty() => "No pages are being watched for changes.".to_string(),
+            Ok(items) => {
+                let mut out = format!("*Watching {} page(s) for changes:*", items.len());
+                for u in items {
+                    out.push_str(&format!("\n• `{}` — {}", field(&u, "name"), field(&u, "url")));
+                }
+                out
+            }
+            Err(msg) => format!(":warning: {msg}"),
+        },
+        Action::Add => match build_urlwatch(args) {
+            Ok(obj) => {
+                let name = field(&obj, "name");
+                match store.add(obj) {
+                    Ok(()) => format!(":white_check_mark: Now watching `{name}` for changes."),
+                    Err(msg) => format!(":warning: {msg}"),
+                }
+            }
+            Err(msg) => format!(":warning: {msg}\n\n{URLWATCH_USAGE}"),
+        },
+        Action::Delete => delete_reply(args, store, "url watch", URLWATCH_USAGE),
+        Action::Run => {
+            ":information_source: `run` applies to meet watches. Try `/meet-run <key>`.".to_string()
+        }
+        Action::Help => URLWATCH_USAGE.to_string(),
+    }
+}
+
+/// Build one urlwatch job from `name | url [| css selector]`. The `filter`
+/// chain mirrors the hand-written `urls.yaml`: an optional CSS narrowing, then
+/// `html2text` so diffs are over rendered text rather than raw HTML.
+fn build_urlwatch(args: &str) -> Result<Value, String> {
+    let fields: Vec<String> = args.split('|').map(|s| s.trim().to_string()).collect();
+    let get = |i: usize| fields.get(i).filter(|s| !s.is_empty()).cloned();
+
+    let name = get(0).ok_or("missing <name>")?;
+    let url = get(1).ok_or("missing <url>")?;
+    require_http_url("url", Some(&url))?;
+
+    let mut filter: Vec<Value> = Vec::new();
+    if let Some(css) = get(2) {
+        filter.push(json!({ "css": css }));
+    }
+    filter.push(json!("html2text"));
+
+    Ok(json!({ "name": name, "url": url, "filter": filter }))
+}
+
 // --- shared ---------------------------------------------------------------
-fn delete_reply(args: &str, store: &JsonListStore, noun: &str, usage: &str) -> String {
+fn delete_reply(args: &str, store: &ListStore, noun: &str, usage: &str) -> String {
     let key = args.trim();
     if key.is_empty() {
         return format!(":warning: usage: `delete <key>`\n\n{usage}");
@@ -388,9 +454,15 @@ mod tests {
         assert_eq!(route_kind("/entries-add", "a|b"), Some(ListKind::Entries));
         assert_eq!(route_kind("/entry-list", ""), Some(ListKind::Entries));
         assert_eq!(route_kind("/watch-delete", "k"), Some(ListKind::Watches));
+        assert_eq!(route_kind("/url-list", ""), Some(ListKind::UrlWatch));
+        assert_eq!(route_kind("/url-add", "n|u"), Some(ListKind::UrlWatch));
+        assert_eq!(route_kind("/url-delete", "n"), Some(ListKind::UrlWatch));
+        // `/urlwatch-*` carries both "url" and "watch"; url wins (it's urlwatch).
+        assert_eq!(route_kind("/urlwatch-add", "n|u"), Some(ListKind::UrlWatch));
         // Generic command falls back to the first word of the text.
         assert_eq!(route_kind("/scraper", "entries list"), Some(ListKind::Entries));
         assert_eq!(route_kind("/scraper", "meet list"), Some(ListKind::Watches));
+        assert_eq!(route_kind("/scraper", "url add n | u"), Some(ListKind::UrlWatch));
         assert_eq!(route_kind("/scraper", "huh"), None);
     }
 
@@ -472,5 +544,21 @@ mod tests {
         assert_eq!(field(&e, "label"), "Masters Nats");
         assert!(build_entry("no url").is_err());
         assert!(build_entry("label | ftp://nope").is_err());
+    }
+
+    #[test]
+    fn build_urlwatch_parsing() {
+        // Without a selector: whole-page text diff.
+        let u = build_urlwatch("Masters Results | https://usamasters.net/results").unwrap();
+        assert_eq!(field(&u, "name"), "Masters Results");
+        assert_eq!(field(&u, "url"), "https://usamasters.net/results");
+        assert_eq!(u["filter"], json!(["html2text"]));
+
+        // With a CSS selector: narrow, then html2text.
+        let scoped = build_urlwatch("Records | https://usamasters.net/x | .kv-ee-content").unwrap();
+        assert_eq!(scoped["filter"], json!([{ "css": ".kv-ee-content" }, "html2text"]));
+
+        assert!(build_urlwatch("name only").is_err());
+        assert!(build_urlwatch("name | ftp://nope").is_err());
     }
 }

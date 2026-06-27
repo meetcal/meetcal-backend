@@ -216,7 +216,16 @@ urlwatch_job() {
   local runtime="${dir}/.runtime"
   mkdir -p "${runtime}/config/urlwatch" "${runtime}/cache"
   sed "s|\${SLACK_URLWATCH_WEBHOOK_URL}|${SLACK_URLWATCH_WEBHOOK_URL:-}|g" "${dir}/urlwatch.yaml" > "${runtime}/config/urlwatch/urlwatch.yaml"
-  cp "${dir}/urls.yaml" "${runtime}/config/urlwatch/urls.yaml"
+
+  # urls.yaml is a runtime file: managed live via the Slack /url-* commands
+  # (the API edits this same multi-doc YAML) and gitignored so it never collides
+  # with the deploy's `git checkout`. Seed it from the committed template the
+  # first time, so the built-in watches exist before anything is added.
+  local urls_file="${URLWATCH_URLS_PATH:-${dir}/urls.yaml}"
+  if [[ ! -s "${urls_file}" && -f "${dir}/urls.example.yaml" ]]; then
+    cp "${dir}/urls.example.yaml" "${urls_file}"
+  fi
+  cp "${urls_file}" "${runtime}/config/urlwatch/urls.yaml"
   XDG_CONFIG_HOME="${runtime}/config" XDG_CACHE_HOME="${runtime}/cache" "${venv}/bin/urlwatch"
 }
 

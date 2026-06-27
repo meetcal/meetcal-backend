@@ -20,7 +20,7 @@ pub mod store;
 
 use std::path::PathBuf;
 
-use store::JsonListStore;
+use store::{ListFormat, ListStore};
 
 /// Which managed list a command targets.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -29,6 +29,8 @@ pub enum ListKind {
     Watches,
     /// Meet entry URLs scraped by the entries job (`entries_targets.json`).
     Entries,
+    /// Pages watched for changes by urlwatch (`urls.yaml`, multi-doc YAML).
+    UrlWatch,
 }
 
 impl ListKind {
@@ -37,6 +39,15 @@ impl ListKind {
         match self {
             ListKind::Watches => "key",
             ListKind::Entries => "label",
+            ListKind::UrlWatch => "name",
+        }
+    }
+
+    /// How the list is encoded on disk.
+    pub fn format(self) -> ListFormat {
+        match self {
+            ListKind::Watches | ListKind::Entries => ListFormat::Json,
+            ListKind::UrlWatch => ListFormat::Yaml,
         }
     }
 }
@@ -51,6 +62,7 @@ pub struct SlackConfig {
     pub allowed_channels: Vec<String>,
     watches_path: PathBuf,
     entries_path: PathBuf,
+    urlwatch_path: PathBuf,
     /// Where staged runs + approval decisions live (shared with the Python
     /// pipeline via `MEET_AUTOMATION_STATE_DIR`).
     pub state_dir: PathBuf,
@@ -66,6 +78,10 @@ impl SlackConfig {
         let entries_path = env_path(
             "ENTRIES_TARGETS_PATH",
             app_dir.join("../scrapers/usaw/entry_scraper/entries_targets.json"),
+        );
+        let urlwatch_path = env_path(
+            "URLWATCH_URLS_PATH",
+            app_dir.join("../scrapers/urlwatch/urls.yaml"),
         );
         let state_dir = env_path(
             "MEET_AUTOMATION_STATE_DIR",
@@ -88,6 +104,7 @@ impl SlackConfig {
             allowed_channels,
             watches_path,
             entries_path,
+            urlwatch_path,
             state_dir,
         }
     }
@@ -104,12 +121,13 @@ impl SlackConfig {
         self.allowed_users.is_empty() || self.allowed_users.iter().any(|u| u == user_id)
     }
 
-    pub fn store_for(&self, kind: ListKind) -> JsonListStore {
+    pub fn store_for(&self, kind: ListKind) -> ListStore {
         let path = match kind {
             ListKind::Watches => self.watches_path.clone(),
             ListKind::Entries => self.entries_path.clone(),
+            ListKind::UrlWatch => self.urlwatch_path.clone(),
         };
-        JsonListStore::new(path, kind.key_field())
+        ListStore::new(path, kind.key_field(), kind.format())
     }
 
     pub fn decisions_dir(&self) -> PathBuf {
