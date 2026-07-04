@@ -152,6 +152,31 @@ meet_sync() {
   node_job "${dir}" scripts/sync-virus-meets.js
 }
 
+complete_ended_meets() {
+  if [[ -z "${DATABASE_URL:-}" ]]; then
+    echo >&2 "DATABASE_URL is required for complete-ended-meets"
+    exit 2
+  fi
+
+  local updated_count
+  updated_count="$(
+    psql "${DATABASE_URL}" -X -q -t -A -c "
+      WITH updated AS (
+        UPDATE meets
+        SET
+          status = 'completed',
+          updated_at = (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
+        WHERE status <> 'completed'
+          AND end_date < CURRENT_DATE
+        RETURNING id
+      )
+      SELECT COUNT(*) FROM updated;
+    "
+  )"
+
+  echo "Marked ${updated_count:-0} ended meet(s) completed."
+}
+
 wso_scrapers() {
   local dir="${SCRAPERS_DIR}/usaw/wso_sheets_scraper"
   export SLACK_WEBHOOK_URL="${SLACK_WSO_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
@@ -222,6 +247,7 @@ urlwatch_job() {
 
 run_selected_job() {
   case "${JOB}" in
+    complete-ended-meets) complete_ended_meets ;;
     entries) entry_scrapers ;;
     intl-rankings) python_job "${SCRAPERS_DIR}/usaw/rankings_scraper" intl_rankings_scraper.py --all ;;
     iwf-world-records) python_job "${SCRAPERS_DIR}/iwf/world-records" scraper.py ;;
