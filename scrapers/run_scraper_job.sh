@@ -206,6 +206,17 @@ usamw_events() {
   python_job "${SCRAPERS_DIR}/usamw/meets" scrape_events.py
 }
 
+usamw_national_records() {
+  export SLACK_WEBHOOK_URL="${SLACK_USAMW_RECORDS_WEBHOOK_URL:-${SLACK_RECORDS_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}}"
+  python_job "${SCRAPERS_DIR}/usamw/records" national_records.py
+}
+
+usamw_results_requests() {
+  export SLACK_WEBHOOK_URL="${SLACK_USAMW_RESULTS_WEBHOOK_URL:-${SLACK_RESULTS_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}}"
+  export USAMW_RESULTS_REQUESTS_DIR="${USAMW_RESULTS_REQUESTS_DIR:-${MEET_AUTOMATION_STATE_DIR:-${SCRAPERS_DIR}/usaw/meet_automation/state}/usamw_results_requests}"
+  python_job "${SCRAPERS_DIR}/usamw/results" usamw_results.py --requested
+}
+
 meet_automation() {
   local dir="${SCRAPERS_DIR}/usaw/meet_automation"
   shift || true
@@ -262,6 +273,8 @@ run_selected_job() {
     upcoming-meets-slack) node "${SCRAPERS_DIR}/upcoming-meets-slack/slack-upcoming-meets.js" ;;
     urlwatch) urlwatch_job ;;
     usamw-events) usamw_events ;;
+    usamw-national-records) usamw_national_records ;;
+    usamw-results-requests) usamw_results_requests ;;
     wso-records) wso_scrapers ;;
     *)
       echo >&2 "Unknown scraper job: ${JOB}"

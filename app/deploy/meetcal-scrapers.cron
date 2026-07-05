@@ -11,6 +11,7 @@ MEETCAL_BACKEND_ROOT=/home/maddisen/dev/meetcal-llc/meetcal-backend
 15 23 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh standards >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/standards.log 2>&1
 35 23 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh records >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/records.log 2>&1
 55 23 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh umwf-records >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/umwf-records.log 2>&1
+5 0 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh usamw-national-records >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/usamw-national-records.log 2>&1
 15 0 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh iwf-world-records >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/iwf-world-records.log 2>&1
 35 0 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh intl-rankings >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/intl-rankings.log 2>&1
 5 1 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh meet-sync >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/meet-sync.log 2>&1
@@ -19,6 +20,8 @@ MEETCAL_BACKEND_ROOT=/home/maddisen/dev/meetcal-llc/meetcal-backend
 */5 * * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh meet-automation-approve >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/meet-automation-approve.log 2>&1
 # On-demand `/meet-run` requests: drain Slack-triggered runs every 2 minutes
 */2 * * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh meet-automation-requests >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/meet-automation-requests.log 2>&1
+# On-demand `/usamw-results` requests: drain Slack-triggered PDF result imports every 2 minutes
+*/2 * * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh usamw-results-requests >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/usamw-results-requests.log 2>&1
 35 1 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh usamw-events >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/usamw-events.log 2>&1
 5 2 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh results-sport80 >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/results-sport80.log 2>&1
 40 2 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh wso-records >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/wso-records.log 2>&1

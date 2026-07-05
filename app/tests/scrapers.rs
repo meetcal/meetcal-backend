@@ -56,7 +56,10 @@ async fn slack_scraper_control_endpoints() {
     let mut tmp = std::env::temp_dir();
     tmp.push(format!(
         "meetcal-itest-{}",
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     ));
     std::fs::create_dir_all(&tmp).unwrap();
     let watches_path = tmp.join("watches.json");
@@ -81,7 +84,14 @@ async fn slack_scraper_control_endpoints() {
 
     // --- bad signature is rejected -------------------------------------
     let ts = now();
-    let resp = post(&client, &cmd_url, "command=%2Fmeet-list", &ts, "v0=deadbeef").await;
+    let resp = post(
+        &client,
+        &cmd_url,
+        "command=%2Fmeet-list",
+        &ts,
+        "v0=deadbeef",
+    )
+    .await;
     assert_eq!(resp.status(), 401, "bad signature must be rejected");
 
     // --- watches list starts empty -------------------------------------
@@ -94,10 +104,12 @@ async fn slack_scraper_control_endpoints() {
     let add = "command=%2Fmeet-add&text=2026-itest+%7C+2026+Itest+Meet+%7C+https%3A%2F%2Fe.com%2Fp";
     let resp = post_signed(&client, &cmd_url, add).await;
     assert_eq!(resp.status(), 200);
-    assert!(resp.json::<serde_json::Value>().await.unwrap()["text"]
-        .as_str()
-        .unwrap()
-        .contains("Added watch"));
+    assert!(
+        resp.json::<serde_json::Value>().await.unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .contains("Added watch")
+    );
 
     let watches: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&watches_path).unwrap()).unwrap();
@@ -105,7 +117,8 @@ async fn slack_scraper_control_endpoints() {
     assert_eq!(watches[0]["start_member_id"], 3100);
 
     // --- add an entry target in the SAME workspace (different command) --
-    let add_e = "command=%2Fentries-add&text=Masters+%7C+https%3A%2F%2Fe.com%2Fevents%2F1%2Fentries%2F2";
+    let add_e =
+        "command=%2Fentries-add&text=Masters+%7C+https%3A%2F%2Fe.com%2Fevents%2F1%2Fentries%2F2";
     let resp = post_signed(&client, &cmd_url, add_e).await;
     assert_eq!(resp.status(), 200);
     let entries: serde_json::Value =
@@ -118,6 +131,31 @@ async fn slack_scraper_control_endpoints() {
     let watches: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&watches_path).unwrap()).unwrap();
     assert!(watches.as_array().unwrap().is_empty());
+
+    // --- queue a USAMW results import ----------------------------------
+    let usamw_body = "command=%2Fusamw-results&text=2026+USA+Masters+Nationals+%7C+2026-03-29+%7C+https%3A%2F%2Fe.com%2Fa.pdf+https%3A%2F%2Fe.com%2Fb.pdf+%7C+adaptive";
+    let resp = post_signed(&client, &cmd_url, usamw_body).await;
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.json::<serde_json::Value>().await.unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .contains("Queued USAMW results import")
+    );
+
+    let request_dir = tmp.join("usamw_results_requests");
+    let request_file = std::fs::read_dir(&request_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let request: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(request_file).unwrap()).unwrap();
+    assert_eq!(request["meet"], "2026 USA Masters Nationals");
+    assert_eq!(request["date"], "2026-03-29");
+    assert_eq!(request["adaptive"], true);
+    assert_eq!(request["pdf_urls"].as_array().unwrap().len(), 2);
 
     // --- a button click records a decision file ------------------------
     let payload = serde_json::json!({

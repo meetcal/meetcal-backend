@@ -121,6 +121,12 @@ impl SlackConfig {
     pub fn run_requests_dir(&self) -> PathBuf {
         self.state_dir.join("run_requests")
     }
+
+    /// Where `/usamw-results` drops PDF result import requests for the scraper
+    /// worker to drain.
+    pub fn usamw_results_requests_dir(&self) -> PathBuf {
+        self.state_dir.join("usamw_results_requests")
+    }
 }
 
 /// Unix epoch seconds. Used to stamp decision / run-request files dropped on the

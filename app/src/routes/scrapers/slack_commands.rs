@@ -37,8 +37,12 @@ const ENTRIES_USAGE: &str = "*Entry targets*\n\
     • `add <label> | <entries url>`\n\
     • `delete <label>`";
 
+const USAMW_RESULTS_USAGE: &str = "*USAMW results*\n\
+    • `/usamw-results <meet name> | <YYYY-MM-DD> | <pdf url> [<pdf url> ...]`\n\
+    • Add `| adaptive` to mark the imported results as adaptive.";
+
 const GENERIC_USAGE: &str = "Use a meet or entries command, e.g. `/meet-list`, \
-    `/meet-add`, `/meet-run`, `/entries-list`, `/entries-add`.";
+    `/meet-add`, `/meet-run`, `/entries-list`, `/entries-add`, `/usamw-results`.";
 
 #[derive(Deserialize, Default)]
 struct SlackCommand {
@@ -87,6 +91,10 @@ pub async fn slack_commands(
     }
     if !cfg.user_allowed(&cmd.user_id) {
         return ephemeral("You're not authorized to manage scraper lists.");
+    }
+
+    if is_usamw_results_command(&cmd.command) {
+        return ephemeral(&usamw_results_reply(cfg, &cmd.text, &cmd.user_id));
     }
 
     // The command name decides which list (one channel can host both).
@@ -205,7 +213,11 @@ fn run_reply(cfg: &super::SlackConfig, args: &str, user_id: &str) -> String {
     if let Some(key) = &target {
         let store = cfg.store_for(ListKind::Watches);
         match store.items() {
-            Ok(items) if !items.iter().any(|i| store.key_of(i).eq_ignore_ascii_case(key)) => {
+            Ok(items)
+                if !items
+                    .iter()
+                    .any(|i| store.key_of(i).eq_ignore_ascii_case(key)) =>
+            {
                 return format!(
                     ":mag: No meet watch matching `{key}`. Add it with `/meet-add` first, \
                      or run every watch with `/meet-run all`."
@@ -251,8 +263,11 @@ fn queue_run(cfg: &super::SlackConfig, key: Option<&str>, user_id: &str) -> Resu
     let body = run_request_body(key, user_id);
     let path = dir.join(run_request_filename(key));
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&body).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("write: {e}"))?;
+    std::fs::write(
+        &tmp,
+        serde_json::to_vec_pretty(&body).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("write: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
     Ok(())
 }
@@ -276,6 +291,134 @@ fn run_request_body(key: Option<&str>, user_id: &str) -> Value {
     })
 }
 
+// --- USAMW results --------------------------------------------------------
+fn is_usamw_results_command(command: &str) -> bool {
+    matches!(
+        command
+            .trim_start_matches('/')
+            .to_ascii_lowercase()
+            .as_str(),
+        "usamw-results" | "usamw-results-scrape" | "usamwresultsscraper"
+    )
+}
+
+fn usamw_results_reply(cfg: &super::SlackConfig, text: &str, user_id: &str) -> String {
+    match build_usamw_results_request(text, user_id) {
+        Ok(body) => match queue_usamw_results(cfg, &body) {
+            Ok(()) => {
+                let count = body["pdf_urls"].as_array().map(Vec::len).unwrap_or(0);
+                format!(
+                    ":hourglass_flowing_sand: Queued USAMW results import for `{}` \
+                     ({} PDF link{}). The worker will scrape and write to Postgres + Convex.",
+                    field(&body, "meet"),
+                    count,
+                    if count == 1 { "" } else { "s" }
+                )
+            }
+            Err(msg) => format!(":warning: Could not queue USAMW results import: {msg}"),
+        },
+        Err(msg) => format!(":warning: {msg}\n\n{USAMW_RESULTS_USAGE}"),
+    }
+}
+
+fn build_usamw_results_request(text: &str, user_id: &str) -> Result<Value, String> {
+    let fields: Vec<String> = text
+        .split('|')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if fields.len() < 3 {
+        return Err("missing meet name, date, or PDF URL".to_string());
+    }
+
+    let meet = fields[0].clone();
+    let date = fields[1].clone();
+    validate_date(&date)?;
+
+    let adaptive = fields[2..]
+        .iter()
+        .any(|field| field.eq_ignore_ascii_case("adaptive") || field.eq_ignore_ascii_case("true"));
+
+    let mut urls = Vec::new();
+    for field in &fields[2..] {
+        for token in field.split_whitespace() {
+            let token = token.trim_matches(|c: char| matches!(c, ',' | '<' | '>' | '"'));
+            if token.eq_ignore_ascii_case("adaptive") || token.eq_ignore_ascii_case("true") {
+                continue;
+            }
+            if token.starts_with("http://") || token.starts_with("https://") {
+                require_http_url("PDF URL", Some(token))?;
+                urls.push(token.to_string());
+            }
+        }
+    }
+
+    if urls.is_empty() {
+        return Err("missing PDF URL".to_string());
+    }
+
+    Ok(json!({
+        "meet": meet,
+        "date": date,
+        "adaptive": adaptive,
+        "pdf_urls": urls,
+        "requested_by_id": user_id,
+        "requested_at_unix": now_unix_secs(),
+    }))
+}
+
+fn validate_date(date: &str) -> Result<(), String> {
+    let bytes = date.as_bytes();
+    if bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit())
+    {
+        Ok(())
+    } else {
+        Err("date must be YYYY-MM-DD".to_string())
+    }
+}
+
+fn queue_usamw_results(cfg: &super::SlackConfig, body: &Value) -> Result<(), String> {
+    let dir = cfg.usamw_results_requests_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
+    let file_name = format!(
+        "{}-{}.json",
+        slugify(&field(body, "meet")),
+        body["requested_at_unix"]
+            .as_u64()
+            .unwrap_or_else(now_unix_secs)
+    );
+    let path = dir.join(file_name);
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(
+        &tmp,
+        serde_json::to_vec_pretty(body).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("write: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
+    Ok(())
+}
+
+fn slugify(value: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for c in value.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
 // --- entry targets --------------------------------------------------------
 fn entries_reply(action: Action, args: &str, store: &JsonListStore) -> String {
     match action {
@@ -284,7 +427,11 @@ fn entries_reply(action: Action, args: &str, store: &JsonListStore) -> String {
             Ok(items) => {
                 let mut out = format!("*Scraping entries for {} target(s):*", items.len());
                 for e in items {
-                    out.push_str(&format!("\n• `{}` — {}", field(&e, "label"), field(&e, "url")));
+                    out.push_str(&format!(
+                        "\n• `{}` — {}",
+                        field(&e, "label"),
+                        field(&e, "url")
+                    ));
                 }
                 out
             }
@@ -333,7 +480,11 @@ fn delete_reply(args: &str, store: &JsonListStore, noun: &str, usage: &str) -> S
 }
 
 fn field(value: &Value, key: &str) -> String {
-    value.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn ephemeral(text: &str) -> Response {
@@ -389,7 +540,10 @@ mod tests {
         assert_eq!(route_kind("/entry-list", ""), Some(ListKind::Entries));
         assert_eq!(route_kind("/watch-delete", "k"), Some(ListKind::Watches));
         // Generic command falls back to the first word of the text.
-        assert_eq!(route_kind("/scraper", "entries list"), Some(ListKind::Entries));
+        assert_eq!(
+            route_kind("/scraper", "entries list"),
+            Some(ListKind::Entries)
+        );
         assert_eq!(route_kind("/scraper", "meet list"), Some(ListKind::Watches));
         assert_eq!(route_kind("/scraper", "huh"), None);
     }
@@ -397,15 +551,44 @@ mod tests {
     #[test]
     fn dispatch_by_command_name() {
         assert!(matches!(parse_action("/meet-list", ""), (Action::List, _)));
-        assert!(matches!(parse_action("/entries-add", "a|b"), (Action::Add, _)));
-        assert!(matches!(parse_action("/meet-delete", "k"), (Action::Delete, _)));
-        assert!(matches!(parse_action("/meet-run", "2026-nats"), (Action::Run, _)));
+        assert!(matches!(
+            parse_action("/entries-add", "a|b"),
+            (Action::Add, _)
+        ));
+        assert!(matches!(
+            parse_action("/meet-delete", "k"),
+            (Action::Delete, _)
+        ));
+        assert!(matches!(
+            parse_action("/meet-run", "2026-nats"),
+            (Action::Run, _)
+        ));
     }
 
     #[test]
     fn run_routes_to_watches() {
         // `/meet-run` carries "meet", so it targets the watches list.
-        assert_eq!(route_kind("/meet-run", "2026-nats"), Some(ListKind::Watches));
+        assert_eq!(
+            route_kind("/meet-run", "2026-nats"),
+            Some(ListKind::Watches)
+        );
+    }
+
+    #[test]
+    fn usamw_results_request_parsing() {
+        let body = build_usamw_results_request(
+            "2026 USA Masters Nationals | 2026-03-29 | https://e.com/a.pdf https://e.com/b.pdf | adaptive",
+            "U1",
+        )
+        .unwrap();
+        assert_eq!(field(&body, "meet"), "2026 USA Masters Nationals");
+        assert_eq!(field(&body, "date"), "2026-03-29");
+        assert_eq!(body["adaptive"], true);
+        assert_eq!(body["pdf_urls"].as_array().unwrap().len(), 2);
+        assert_eq!(field(&body, "requested_by_id"), "U1");
+
+        assert!(build_usamw_results_request("Meet | nope | https://e.com/a.pdf", "U1").is_err());
+        assert!(build_usamw_results_request("Meet | 2026-03-29", "U1").is_err());
     }
 
     #[test]
@@ -421,9 +604,15 @@ mod tests {
         assert_eq!(parse_run_target("   ").unwrap(), None);
         assert_eq!(parse_run_target("all").unwrap(), None);
         assert_eq!(parse_run_target("ALL").unwrap(), None);
-        assert_eq!(parse_run_target("2026-nats").unwrap(), Some("2026-nats".to_string()));
+        assert_eq!(
+            parse_run_target("2026-nats").unwrap(),
+            Some("2026-nats".to_string())
+        );
         // Only the first token is taken as the key.
-        assert_eq!(parse_run_target("2026-nats now").unwrap(), Some("2026-nats".to_string()));
+        assert_eq!(
+            parse_run_target("2026-nats now").unwrap(),
+            Some("2026-nats".to_string())
+        );
         assert!(parse_run_target("bad/key").is_err());
     }
 
@@ -459,7 +648,8 @@ mod tests {
         assert_eq!(w["start_member_id"], 3100);
         assert!(w["start_list_url"].is_null());
 
-        let full = build_watch("k | n | https://e.com/p | https://e.com/s | https://e.com/c").unwrap();
+        let full =
+            build_watch("k | n | https://e.com/p | https://e.com/s | https://e.com/c").unwrap();
         assert_eq!(field(&full, "start_list_url"), "https://e.com/s");
 
         assert!(build_watch("only-key").is_err());
@@ -468,7 +658,10 @@ mod tests {
 
     #[test]
     fn build_entry_parsing() {
-        let e = build_entry("Masters Nats | https://usaweightlifting.sport80.com/public/events/1/entries/2").unwrap();
+        let e = build_entry(
+            "Masters Nats | https://usaweightlifting.sport80.com/public/events/1/entries/2",
+        )
+        .unwrap();
         assert_eq!(field(&e, "label"), "Masters Nats");
         assert!(build_entry("no url").is_err());
         assert!(build_entry("label | ftp://nope").is_err());
