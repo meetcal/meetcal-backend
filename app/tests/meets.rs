@@ -121,7 +121,7 @@ async fn success_get_sessions_for_athletes() {
     let body: Vec<SessionsAthletes> = response.json().await.unwrap();
 
     assert!(!body.is_empty());
-    assert!(body.iter().all(|row| row.session_number == 45.0));
+    assert!(body.iter().all(|row| row.session_number == Some(45.0)));
 }
 
 #[tokio::test]
@@ -140,8 +140,51 @@ async fn success_get_sessions_for_athletes_filtered() {
     assert!(!body.is_empty());
     assert!(
         body.iter()
-            .all(|row| row.session_number == 45.0 && row.session_platform == "Red")
+            .all(|row| row.session_number == Some(45.0) && row.session_platform.as_deref() == Some("Red"))
     );
+}
+
+#[tokio::test]
+async fn success_get_sessions_for_athletes_without_schedule() {
+    let app = support::spawn_test_app().await;
+
+    let database_url =
+        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+    let db = sqlx::PgPool::connect(&database_url).await.unwrap();
+
+    // An athlete registered before sessions are assigned must still appear
+    // in the start list (LEFT JOIN), with null session fields.
+    sqlx::query(
+        r#"
+        INSERT INTO athletes (convex_id, member_id, name, age, club, gender, weight_class, entry_total, meet)
+        VALUES ('test-unassigned-athlete', '0', 'Test Unassigned', 25, 'Test Club', 'Male', '89', 200,
+                '2026 USA Weightlifting National Championships, Powered by Rogue Fitness')
+        ON CONFLICT (convex_id) DO NOTHING
+        "#,
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let url = format!(
+        "{}/meets/athletes-sessions?meet=2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness",
+        app.address
+    );
+    let response = reqwest::get(&url).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Vec<SessionsAthletes> = response.json().await.unwrap();
+
+    sqlx::query("DELETE FROM athletes WHERE convex_id = 'test-unassigned-athlete'")
+        .execute(&db)
+        .await
+        .unwrap();
+
+    let unassigned = body
+        .iter()
+        .find(|row| row.name == "Test Unassigned")
+        .expect("athlete without a session must be returned");
+    assert_eq!(unassigned.session_number, None);
+    assert_eq!(unassigned.date, None);
 }
 
 #[tokio::test]
