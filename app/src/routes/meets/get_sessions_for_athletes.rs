@@ -22,11 +22,11 @@ pub struct SessionsAthletes {
     pub weight_class: String,
     pub entry_total: f64,
     pub adaptive: bool,
-    pub session_number: f64,
-    pub session_platform: String,
-    pub date: String,
-    pub start_time: String,
-    pub weigh_in_time: String,
+    pub session_number: Option<f64>,
+    pub session_platform: Option<String>,
+    pub date: Option<String>,
+    pub start_time: Option<String>,
+    pub weigh_in_time: Option<String>,
 }
 
 /// /meets/athletes-sessions endpoint
@@ -176,7 +176,7 @@ pub async fn get_sessions_for_athletes(
             s.start_time,
             s.weigh_in_time
         FROM athletes a
-        JOIN session_schedule s
+        LEFT JOIN session_schedule s
             ON s.meet = a.meet
             AND s.session_id = a.session_number
             AND s.platform = a.session_platform
