@@ -44,6 +44,13 @@ const USAMW_RESULTS_USAGE: &str = "*USAMW results*\n\
 const GENERIC_USAGE: &str = "Use a meet or entries command, e.g. `/meet-list`, \
     `/meet-add`, `/meet-run`, `/entries-list`, `/entries-add`, `/usamw-results`.";
 
+const VENUE_MAP_USAGE: &str = "*Venue map links*\n\
+    • `/meets-add-pdf \"MEET NAME\" <url>` — set the venue map PDF link\n\
+    • `/meets-add-map \"MEET NAME\" <url>` — set the Apple Maps link\n\
+    • `/meets-remove-pdf \"MEET NAME\"` — clear the venue map PDF link\n\
+    • `/meets-remove-map \"MEET NAME\"` — clear the Apple Maps link\n\
+    Meet names contain spaces, so quote them; copy exact names from `/meets-list`.";
+
 #[derive(Deserialize, Default)]
 struct SlackCommand {
     #[serde(default)]
@@ -91,6 +98,10 @@ pub async fn slack_commands(
     }
     if !cfg.user_allowed(&cmd.user_id) {
         return ephemeral("You're not authorized to manage scraper lists.");
+    }
+
+    if let Some(vm) = venue_map_command(&cmd.command) {
+        return ephemeral(&venue_map_reply(&state.db, vm, &cmd.text).await);
     }
 
     if is_usamw_results_command(&cmd.command) {
@@ -289,6 +300,134 @@ fn run_request_body(key: Option<&str>, user_id: &str) -> Value {
         "requested_by_id": user_id,
         "requested_at_unix": now_unix_secs(),
     })
+}
+
+// --- venue map links --------------------------------------------------------
+/// The `/meets-*` venue-map commands write straight to the `meets` table in
+/// Postgres (unlike the file-backed scraper lists above).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum VenueMapCommand {
+    AddPdf,
+    AddMap,
+    RemovePdf,
+    RemoveMap,
+}
+
+impl VenueMapCommand {
+    /// The UPDATE statement for this command's column. Static strings keep
+    /// sqlx's injection-safety bound satisfied (no dynamic SQL).
+    fn update_sql(self) -> &'static str {
+        match self {
+            Self::AddPdf | Self::RemovePdf => {
+                "UPDATE meets SET venue_map_pdf_url = $2 WHERE name = $1"
+            }
+            Self::AddMap | Self::RemoveMap => {
+                "UPDATE meets SET venue_map_apple_url = $2 WHERE name = $1"
+            }
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::AddPdf | Self::RemovePdf => "venue map PDF link",
+            Self::AddMap | Self::RemoveMap => "Apple Maps link",
+        }
+    }
+
+    fn is_add(self) -> bool {
+        matches!(self, Self::AddPdf | Self::AddMap)
+    }
+}
+
+fn venue_map_command(command: &str) -> Option<VenueMapCommand> {
+    match command
+        .trim_start_matches('/')
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "meets-add-pdf" => Some(VenueMapCommand::AddPdf),
+        "meets-add-map" => Some(VenueMapCommand::AddMap),
+        "meets-remove-pdf" => Some(VenueMapCommand::RemovePdf),
+        "meets-remove-map" => Some(VenueMapCommand::RemoveMap),
+        _ => None,
+    }
+}
+
+async fn venue_map_reply(db: &sqlx::PgPool, cmd: VenueMapCommand, text: &str) -> String {
+    let (meet_name, value) = match parse_venue_map_args(cmd, text) {
+        Ok(parsed) => parsed,
+        Err(msg) => return format!(":warning: {msg}\n\n{VENUE_MAP_USAGE}"),
+    };
+
+    // Overwrites silently by design; the meet name must match exactly.
+    let result = sqlx::query(cmd.update_sql())
+        .bind(&meet_name)
+        .bind(&value)
+        .execute(db)
+        .await;
+
+    match result {
+        Ok(done) if done.rows_affected() == 0 => format!(
+            ":mag: No meet named `{meet_name}`. Names must match exactly — \
+             copy the name from `/meets-list`."
+        ),
+        Ok(_) => match value {
+            Some(url) => format!(
+                ":white_check_mark: Set the {} for `{meet_name}` to {url}.",
+                cmd.label()
+            ),
+            None => format!(
+                ":white_check_mark: Removed the {} for `{meet_name}`.",
+                cmd.label()
+            ),
+        },
+        Err(e) => format!(":warning: Database error: {e}"),
+    }
+}
+
+/// Parse `"MEET NAME" [url]`: a quoted meet name (names contain spaces), then a
+/// URL for the add commands. Accepts straight or Slack "smart" quotes.
+fn parse_venue_map_args(
+    cmd: VenueMapCommand,
+    text: &str,
+) -> Result<(String, Option<String>), String> {
+    let text = text.trim();
+    let mut chars = text.chars();
+    if !matches!(chars.next(), Some('"' | '\u{201C}' | '\u{201D}')) {
+        return Err("the meet name must be wrapped in quotes, e.g. \
+             `\"2026 Ohio WSO Championships\"`"
+            .to_string());
+    }
+    let after_open = chars.as_str();
+    let Some(close) = after_open.find(['"', '\u{201C}', '\u{201D}']) else {
+        return Err("missing closing quote on the meet name".to_string());
+    };
+    let meet_name = after_open[..close].trim().to_string();
+    if meet_name.is_empty() {
+        return Err("missing meet name".to_string());
+    }
+    let rest = after_open[close..]
+        .trim_start_matches(['"', '\u{201C}', '\u{201D}'])
+        .trim();
+
+    if cmd.is_add() {
+        if rest.is_empty() {
+            return Err("missing <url> after the meet name".to_string());
+        }
+        // Slack wraps pasted links in <...>; unwrap before storing.
+        let url = rest
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .trim_matches(['<', '>'])
+            .to_string();
+        if url.is_empty() {
+            return Err("missing <url> after the meet name".to_string());
+        }
+        Ok((meet_name, Some(url)))
+    } else {
+        Ok((meet_name, None))
+    }
 }
 
 // --- USAMW results --------------------------------------------------------
@@ -654,6 +793,60 @@ mod tests {
 
         assert!(build_watch("only-key").is_err());
         assert!(build_watch("bad key | n | https://e.com").is_err());
+    }
+
+    #[test]
+    fn venue_map_command_routing() {
+        assert_eq!(
+            venue_map_command("/meets-add-pdf"),
+            Some(VenueMapCommand::AddPdf)
+        );
+        assert_eq!(
+            venue_map_command("/meets-add-map"),
+            Some(VenueMapCommand::AddMap)
+        );
+        assert_eq!(
+            venue_map_command("/meets-remove-pdf"),
+            Some(VenueMapCommand::RemovePdf)
+        );
+        assert_eq!(
+            venue_map_command("/meets-remove-map"),
+            Some(VenueMapCommand::RemoveMap)
+        );
+        // Existing commands must not be swallowed.
+        assert_eq!(venue_map_command("/meet-add"), None);
+        assert_eq!(venue_map_command("/meets-list"), None);
+    }
+
+    #[test]
+    fn venue_map_args_parsing() {
+        let (name, url) = parse_venue_map_args(
+            VenueMapCommand::AddPdf,
+            "\"2026 Ohio WSO Championships\" https://e.com/map.pdf",
+        )
+        .unwrap();
+        assert_eq!(name, "2026 Ohio WSO Championships");
+        assert_eq!(url.as_deref(), Some("https://e.com/map.pdf"));
+
+        // Slack smart quotes and <...>-wrapped links.
+        let (name, url) = parse_venue_map_args(
+            VenueMapCommand::AddMap,
+            "\u{201C}2026 Nationals\u{201D} <https://maps.apple.com/?q=1>",
+        )
+        .unwrap();
+        assert_eq!(name, "2026 Nationals");
+        assert_eq!(url.as_deref(), Some("https://maps.apple.com/?q=1"));
+
+        // Remove takes just the quoted name.
+        let (name, url) =
+            parse_venue_map_args(VenueMapCommand::RemovePdf, "\"2026 Nationals\"").unwrap();
+        assert_eq!(name, "2026 Nationals");
+        assert_eq!(url, None);
+
+        assert!(parse_venue_map_args(VenueMapCommand::AddPdf, "no quotes here").is_err());
+        assert!(parse_venue_map_args(VenueMapCommand::AddPdf, "\"unclosed name").is_err());
+        assert!(parse_venue_map_args(VenueMapCommand::AddPdf, "\"2026 Nationals\"").is_err());
+        assert!(parse_venue_map_args(VenueMapCommand::AddPdf, "\"\" https://e.com").is_err());
     }
 
     #[test]

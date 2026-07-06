@@ -19,6 +19,8 @@ pub struct Meets {
     pub venue_street: String,
     pub venue_zip: String,
     pub status: String,
+    pub venue_map_pdf_url: Option<String>,
+    pub venue_map_apple_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]

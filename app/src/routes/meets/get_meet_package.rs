@@ -90,6 +90,8 @@ pub struct PackageMeet {
     pub venue_city: String,
     pub venue_state: String,
     pub venue_zip: String,
+    pub venue_map_pdf_url: Option<String>,
+    pub venue_map_apple_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -327,7 +329,9 @@ pub async fn get_meet_package(
             venue_street,
             venue_city,
             venue_state,
-            venue_zip
+            venue_zip,
+            venue_map_pdf_url,
+            venue_map_apple_url
         FROM meets
         WHERE name = $1
         "#,
