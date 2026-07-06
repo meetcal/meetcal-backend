@@ -34,7 +34,7 @@ pub async fn get_meet_details(
 ) -> Result<Json<Meets>, AppError> {
     let rows = sqlx::query_as::<_, Meets>(
         r#"
-        SELECT name, start_date::text as start_date, end_date::text as end_date, time_zone, venue_city, venue_state, venue_name, venue_street, venue_zip, federation, status
+        SELECT name, start_date::text as start_date, end_date::text as end_date, time_zone, venue_city, venue_state, venue_name, venue_street, venue_zip, federation, status, venue_map_pdf_url, venue_map_apple_url
         FROM meets
         WHERE name = $1
         "#,

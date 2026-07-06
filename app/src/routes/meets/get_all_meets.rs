@@ -28,7 +28,7 @@ pub async fn list_meets_next_3months(
 ) -> Result<Json<Vec<Meets>>, AppError> {
     let rows = sqlx::query_as::<_, Meets>(
         r#"
-        SELECT name, start_date::text as start_date, end_date::text as end_date, time_zone, venue_city, venue_state, venue_name, venue_street, venue_zip, federation, status FROM meets 
+        SELECT name, start_date::text as start_date, end_date::text as end_date, time_zone, venue_city, venue_state, venue_name, venue_street, venue_zip, federation, status, venue_map_pdf_url, venue_map_apple_url FROM meets
         WHERE status != 'completed' 
             AND start_date <= CURRENT_DATE + INTERVAL '3 months' 
         ORDER BY start_date asc 

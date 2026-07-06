@@ -157,6 +157,94 @@ async fn slack_scraper_control_endpoints() {
     assert_eq!(request["adaptive"], true);
     assert_eq!(request["pdf_urls"].as_array().unwrap().len(), 2);
 
+    // --- venue map links (writes to the meets table) --------------------
+    let meet = "2026 Ohio WSO Championships";
+    let details_url = format!(
+        "{}/meets/details?meet=2026%20Ohio%20WSO%20Championships",
+        app.address
+    );
+
+    // Set the PDF link and confirm it shows up in the meets API.
+    let body = serde_urlencoded::to_string([
+        ("command", "/meets-add-pdf"),
+        ("text", &format!("\"{meet}\" https://e.com/venue-map.pdf")),
+    ])
+    .unwrap();
+    let resp = post_signed(&client, &cmd_url, &body).await;
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.json::<serde_json::Value>().await.unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .contains("Set the venue map PDF link")
+    );
+    let details: serde_json::Value = reqwest::get(&details_url)
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(details["venue_map_pdf_url"], "https://e.com/venue-map.pdf");
+
+    // Set the Apple Maps link (smart quotes + <...>-wrapped URL, as Slack sends).
+    let body = serde_urlencoded::to_string([
+        ("command", "/meets-add-map"),
+        (
+            "text",
+            &format!("\u{201C}{meet}\u{201D} <https://maps.apple.com/?q=venue>"),
+        ),
+    ])
+    .unwrap();
+    let resp = post_signed(&client, &cmd_url, &body).await;
+    assert_eq!(resp.status(), 200);
+    let details: serde_json::Value = reqwest::get(&details_url)
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        details["venue_map_apple_url"],
+        "https://maps.apple.com/?q=venue"
+    );
+
+    // A name that doesn't match exactly is an error.
+    let body = serde_urlencoded::to_string([
+        ("command", "/meets-add-pdf"),
+        ("text", "\"No Such Meet\" https://e.com/x.pdf"),
+    ])
+    .unwrap();
+    let resp = post_signed(&client, &cmd_url, &body).await;
+    assert!(
+        resp.json::<serde_json::Value>().await.unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .contains("No meet named")
+    );
+
+    // Remove both links and confirm they're null again.
+    for command in ["/meets-remove-pdf", "/meets-remove-map"] {
+        let body =
+            serde_urlencoded::to_string([("command", command), ("text", &format!("\"{meet}\""))])
+                .unwrap();
+        let resp = post_signed(&client, &cmd_url, &body).await;
+        assert_eq!(resp.status(), 200);
+        assert!(
+            resp.json::<serde_json::Value>().await.unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .contains("Removed the")
+        );
+    }
+    let details: serde_json::Value = reqwest::get(&details_url)
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(details["venue_map_pdf_url"].is_null());
+    assert!(details["venue_map_apple_url"].is_null());
+
     // --- a button click records a decision file ------------------------
     let payload = serde_json::json!({
         "type": "block_actions",
