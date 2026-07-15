@@ -116,6 +116,34 @@ def to_age_category(age_code: str, weight_category: str) -> str | None:
     return f"{gender} Masters ({start}-{start + 4}) {weight_category}kg"
 
 
+def to_age_group(age_code: str) -> str | None:
+    match = re.match(r"^([MW])(\d+)$", age_code)
+    if not match:
+        return None
+    gender = "Women's" if match.group(1) == "W" else "Men's"
+    start = (int(match.group(2)) // 5) * 5
+    return f"{gender} Masters ({start}-{start + 4})"
+
+
+def infer_weight_category(age_code: str, body_weight: float, date: str) -> str | None:
+    match = re.match(r"^([MW])\d+$", age_code)
+    if not match:
+        return None
+
+    after_class_change = date >= "2026-08-01"
+    classes = {
+        ("M", False): [60, 65, 71, 79, 88, 94, 110],
+        ("W", False): [48, 53, 58, 63, 69, 77, 86],
+        ("M", True): [60, 65, 70, 75, 85, 95, 110],
+        ("W", True): [49, 53, 57, 61, 69, 77, 86],
+    }[(match.group(1), after_class_change)]
+
+    for weight_class in classes:
+        if body_weight <= weight_class:
+            return str(weight_class)
+    return f"{classes[-1]}+"
+
+
 def normalize_name(raw_name: str) -> str | None:
     clean_name = re.sub(r"\s*\(ADT\d*\)|\[ADT\]\s*|\s*\(adaptive\)", " ", raw_name, flags=re.I).strip()
     parts = [part for part in clean_name.split() if part]
@@ -168,6 +196,99 @@ def parse_attempt_item(item: PdfTextItem) -> int:
     if item.text == "-":
         return 0
     return parse_attempt(item.text, item.is_red)
+
+
+def parse_qmasters_attempt_results_from_lines(
+    pages: dict[int, list[PdfTextItem]],
+    meet: str,
+    date: str,
+    adaptive: bool,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    event_id = slug_event_id(meet, date)
+
+    for items in pages.values():
+        current_age_category: str | None = None
+        current_age_code: str | None = None
+
+        for line in group_lines(items):
+            texts = [item.text for item in line]
+            line_text = " ".join(texts)
+
+            age_match = re.search(r"\bAge Group ([MW]\d+)\b", line_text)
+            if age_match:
+                current_age_code = age_match.group(1)
+                current_age_category = to_age_group(current_age_code)
+                continue
+
+            if not current_age_category or not current_age_code or len(line) < 13:
+                continue
+            if not re.match(r"^\d{1,3}$", texts[0]) or not re.match(r"^\d{1,4}$", texts[1]):
+                continue
+
+            body_weight_index = next(
+                (
+                    index
+                    for index, item in enumerate(line[2:], start=2)
+                    if item.x >= 275 and re.match(r"^\d+\.\d+$", item.text)
+                ),
+                None,
+            )
+            if body_weight_index is None or body_weight_index < 4:
+                continue
+
+            name_items = [item for item in line[2:body_weight_index] if item.x < 185]
+            name = normalize_name(" ".join(item.text for item in name_items))
+            if not name:
+                continue
+
+            data = line[body_weight_index:]
+            if len(data) < 10:
+                continue
+
+            try:
+                body_weight = float(data[0].text)
+                int(data[1].text)
+                snatch1 = parse_attempt_item(data[2])
+                snatch2 = parse_attempt_item(data[3])
+                snatch3 = parse_attempt_item(data[4])
+                cj1 = parse_attempt_item(data[5])
+                cj2 = parse_attempt_item(data[6])
+                cj3 = parse_attempt_item(data[7])
+                total = int(float(data[8].text))
+            except (ValueError, IndexError):
+                continue
+
+            inferred_weight_category = infer_weight_category(current_age_code, body_weight, date)
+            age_category = (
+                to_age_category(current_age_code, inferred_weight_category)
+                if inferred_weight_category
+                else current_age_category
+            )
+
+            results.append(
+                {
+                    "adaptive": adaptive,
+                    "age": age_category,
+                    "bodyWeight": body_weight,
+                    "cj1": cj1,
+                    "cj2": cj2,
+                    "cj3": cj3,
+                    "cjBest": best_positive([cj1, cj2, cj3]),
+                    "date": date,
+                    "eventId": event_id,
+                    "federation": "USAMW",
+                    "meet": meet,
+                    "name": name,
+                    "snatch1": snatch1,
+                    "snatch2": snatch2,
+                    "snatch3": snatch3,
+                    "snatchBest": best_positive([snatch1, snatch2, snatch3]),
+                    "total": total,
+                }
+            )
+
+    return results
 
 
 def parse_results_from_lines(
@@ -261,6 +382,10 @@ def parse_results_from_pages(
     line_results = parse_results_from_lines(pages, meet, date, adaptive)
     if line_results:
         return line_results
+
+    qmasters_results = parse_qmasters_attempt_results_from_lines(pages, meet, date, adaptive)
+    if qmasters_results:
+        return qmasters_results
 
     results: list[dict[str, Any]] = []
     event_id = slug_event_id(meet, date)

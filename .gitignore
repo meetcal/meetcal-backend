@@ -8,6 +8,7 @@
 /scrapers/**/.runtime/
 /scrapers/**/.venv/
 /scrapers/**/node_modules/
+/scrapers/iwf/world-records/world_records_latest.csv
 __pycache__/
 *.py[cod]
 *$py.class
