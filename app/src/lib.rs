@@ -27,6 +27,7 @@ use crate::routes::scrapers::{
     SlackConfig, interactions::slack_interactions, slack_commands::slack_commands,
 };
 use axum::{
+    http::{HeaderValue, Method},
     Router,
     routing::{get, patch, post, put},
 };
@@ -53,6 +54,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tower_http::compression::CompressionLayer;
+use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
 
 #[derive(Clone)]
@@ -69,6 +71,15 @@ pub fn load_env() {
 }
 
 pub async fn run(listener: TcpListener, db: PgPool) {
+    let cors = CorsLayer::new()
+        .allow_origin([
+            "https://meetcal.app".parse::<HeaderValue>().unwrap(),
+            "https://www.meetcal.app".parse::<HeaderValue>().unwrap(),
+            "http://localhost:3000".parse::<HeaderValue>().unwrap(),
+            "http://127.0.0.1:3000".parse::<HeaderValue>().unwrap(),
+        ])
+        .allow_methods([Method::GET]);
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/clubs", get(get_all_clubs))
@@ -112,6 +123,7 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .route("/scrapers/slack/commands", post(slack_commands))
         .route("/scrapers/slack/interactions", post(slack_interactions))
         .layer(CompressionLayer::new())
+        .layer(cors)
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(15),
