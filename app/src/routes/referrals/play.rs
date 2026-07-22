@@ -176,12 +176,14 @@ impl PlayBilling for GooglePlayBilling {
 
         let desired = req.current_expiry_ms + super::REWARD_DAYS * 24 * 60 * 60 * 1000;
 
-        // LEGACY androidpublisher v3 defer endpoint (see module warning).
+        // LEGACY androidpublisher v3 defer endpoint (see module warning). Path
+        // segments (purchase tokens especially) can contain reserved characters,
+        // so percent-encode each one.
         let url = format!(
             "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{pkg}/purchases/subscriptions/{sub}/tokens/{token}:defer",
-            pkg = req.package_name,
-            sub = req.subscription_id,
-            token = req.purchase_token,
+            pkg = encode_segment(&req.package_name),
+            sub = encode_segment(&req.subscription_id),
+            token = encode_segment(&req.purchase_token),
         );
 
         let body = serde_json::json!({
@@ -222,5 +224,33 @@ impl PlayBilling for GooglePlayBilling {
             .unwrap_or(desired);
 
         Ok(DeferOutcome { new_expiry_ms })
+    }
+}
+
+/// Percent-encode a single URL path segment (encode everything outside the
+/// unreserved set `A-Z a-z 0-9 - . _ ~`), so reserved characters in a purchase
+/// token or product id can't break out of the segment.
+fn encode_segment(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for &byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_segment;
+
+    #[test]
+    fn encodes_reserved_path_characters() {
+        assert_eq!(encode_segment("abcABC123-._~"), "abcABC123-._~");
+        assert_eq!(encode_segment("a/b?c#d"), "a%2Fb%3Fc%23d");
+        assert_eq!(encode_segment("tok+en=x"), "tok%2Ben%3Dx");
     }
 }

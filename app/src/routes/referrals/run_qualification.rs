@@ -125,13 +125,15 @@ async fn mint_for(
     .fetch_one(&mut **tx)
     .await?;
 
-    // Annual cap counts non-reversed rewards earned this calendar year.
+    // Annual cap counts non-reversed rewards earned this calendar year. Pin the
+    // year boundary to UTC so it doesn't drift with the session/server timezone.
     let minted_this_year = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(*)::BIGINT FROM reward_ledger
         WHERE user_id = $1
           AND status <> 'reversed'
-          AND date_part('year', earned_at) = date_part('year', now())
+          AND date_part('year', earned_at AT TIME ZONE 'UTC')
+              = date_part('year', now() AT TIME ZONE 'UTC')
         "#,
     )
     .bind(referrer)

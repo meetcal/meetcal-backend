@@ -13,14 +13,13 @@ pub struct Settings {
 
 /// Clerk JWT verification settings.
 ///
-/// `jwt_verification_enabled` is the master switch. It ships DISABLED in the
-/// checked-in `configuration.yaml` so the integration tests (which sign nothing)
-/// keep working; production MUST enable it — see `configuration.yaml` for how.
-#[derive(Deserialize, Clone, Default)]
+/// `jwt_verification_enabled` is the master switch and DEFAULTS TO TRUE (fail
+/// closed): a config that omits it, or sets it false without the explicit
+/// `APP_ALLOW_UNVERIFIED_JWT=1` escape hatch, makes startup PANIC rather than
+/// silently run unauthenticated. The test harness sets that env var.
+#[derive(Deserialize, Clone)]
 pub struct AuthSettings {
-    // Defaults (via `Default`): verification OFF, empty url/issuer. Safe for
-    // tests; production must set these in configuration.local.yaml.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub jwt_verification_enabled: bool,
     /// Clerk JWKS endpoint, e.g. `https://<subdomain>.clerk.accounts.dev/.well-known/jwks.json`.
     #[serde(default)]
@@ -28,6 +27,20 @@ pub struct AuthSettings {
     /// Expected `iss` claim, e.g. `https://<subdomain>.clerk.accounts.dev`.
     #[serde(default)]
     pub issuer: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for AuthSettings {
+    fn default() -> Self {
+        Self {
+            jwt_verification_enabled: true,
+            jwks_url: String::new(),
+            issuer: String::new(),
+        }
+    }
 }
 
 #[derive(Deserialize)]

@@ -11,7 +11,8 @@
 use crate::{
     AppState,
     routes::referrals::{
-        ct_eq, is_disqualifying, is_paid_conversion, is_web_store, rewards_to_reverse,
+        ct_eq, is_disqualifying, is_paid_conversion, is_promo_redemption, is_web_store,
+        rewards_to_reverse,
     },
     routes::users::auth::set_backend_context,
 };
@@ -119,20 +120,35 @@ async fn handle(state: &AppState, event: &Value, event_id: &str) -> Result<(), c
     }
 
     // 3. First paid (NORMAL) period -> promote a pending referral to qualifying.
+    //    Anchor the 30-day hold to the event's purchase time (fallback the event
+    //    timestamp, then now()) so a delayed / retried webhook does not shift it.
     if is_paid_conversion(event_type, period_type) {
+        let started_at = event_millis(event, &["purchased_at_ms", "event_timestamp_ms"])
+            .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis);
         sqlx::query(
             r#"
             UPDATE referrals
             SET status = 'qualifying',
-                subscription_started_at = COALESCE(subscription_started_at, now()),
+                subscription_started_at = COALESCE(subscription_started_at, $2, now()),
                 updated_at = now()
             WHERE referred_user_id = $1
               AND status = 'pending'
             "#,
         )
         .bind(app_user_id)
+        .bind(started_at)
         .execute(&mut *tx)
         .await?;
+    }
+
+    // 3b. Promotional free month applied -> confirm delivery of the OLDEST earned
+    //     reward for this user (iOS delivery confirmation for the C1 redesign).
+    //     Idempotent: the event_id dedup above guarantees this body runs once per
+    //     unique event, so exactly one reward is delivered per redemption and a
+    //     duplicate event delivers none.
+    let price = event_f64(event, &["price_in_purchased_currency", "price"]);
+    if is_promo_redemption(event_type, period_type, price) {
+        deliver_ios_reward_for(&mut tx, app_user_id, event_id).await?;
     }
 
     // 4. Refund / chargeback / fraud -> disqualify + reverse earned rewards.
@@ -226,6 +242,69 @@ async fn reverse_rewards_for(
     Ok(())
 }
 
+/// Confirm delivery of the oldest still-`earned` reward for `app_user_id`,
+/// tagging it with the redemption `event_id`. `FOR UPDATE SKIP LOCKED` keeps two
+/// concurrent (distinct) redemption events from both claiming the same row.
+async fn deliver_ios_reward_for(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    app_user_id: &str,
+    event_id: &str,
+) -> Result<(), crate::AppError> {
+    sqlx::query(
+        r#"
+        UPDATE reward_ledger
+        SET status = 'delivered',
+            platform = COALESCE(platform, 'ios'),
+            store_transaction_id = $2,
+            delivered_at = now(),
+            updated_at = now()
+        WHERE id = (
+            SELECT id FROM reward_ledger
+            WHERE user_id = $1 AND status = 'earned'
+            ORDER BY earned_at ASC, id ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        )
+        "#,
+    )
+    .bind(app_user_id)
+    .bind(event_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 fn opt(value: &str) -> Option<&str> {
     if value.is_empty() { None } else { Some(value) }
+}
+
+/// First present integer-valued millis field among `keys` (accepts number or
+/// numeric string).
+fn event_millis(event: &Value, keys: &[&str]) -> Option<i64> {
+    for key in keys {
+        if let Some(v) = event.get(*key) {
+            if let Some(n) = v.as_i64() {
+                return Some(n);
+            }
+            if let Some(n) = v.as_str().and_then(|s| s.parse::<i64>().ok()) {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// First present numeric field among `keys` (accepts number or numeric string).
+fn event_f64(event: &Value, keys: &[&str]) -> Option<f64> {
+    for key in keys {
+        if let Some(v) = event.get(*key) {
+            if let Some(n) = v.as_f64() {
+                return Some(n);
+            }
+            if let Some(n) = v.as_str().and_then(|s| s.parse::<f64>().ok()) {
+                return Some(n);
+            }
+        }
+    }
+    None
 }

@@ -170,6 +170,23 @@ pub fn is_paid_conversion(event_type: &str, period_type: &str) -> bool {
     )
 }
 
+/// Does this event look like the referrer's promotional free month being
+/// redeemed (iOS delivery confirmation)?
+///
+/// Discriminator: a renewal-type event (`RENEWAL` / `PRODUCT_CHANGE`) with
+/// `period_type == NORMAL` that cost nothing (`price == 0`). RevenueCat's webhook
+/// does not consistently surface a distinct promotional-offer identifier for
+/// StoreKit promotional offers, so a $0 paid renewal is the most robust signal
+/// the payload reliably supports. ASSUMPTION to sandbox-validate in Phase 3:
+/// the promo month arrives as a $0 NORMAL renewal (not a $0 TRIAL/INTRO).
+pub fn is_promo_redemption(event_type: &str, period_type: &str, price: Option<f64>) -> bool {
+    let renewal = matches!(
+        event_type.trim().to_ascii_uppercase().as_str(),
+        "RENEWAL" | "PRODUCT_CHANGE"
+    );
+    renewal && period_type.trim().eq_ignore_ascii_case("NORMAL") && price == Some(0.0)
+}
+
 /// Does this event disqualify a referral (refund / chargeback / fraud)? Note a
 /// plain CANCELLATION (auto-renew off) does NOT disqualify.
 pub fn is_disqualifying(event_type: &str) -> bool {
@@ -267,6 +284,24 @@ mod tests {
         // Auto-renew off is NOT disqualifying.
         assert!(!is_disqualifying("CANCELLATION"));
         assert!(!is_disqualifying("RENEWAL"));
+    }
+
+    #[test]
+    fn promo_redemption_discriminator() {
+        // $0 NORMAL renewal = promo month applied.
+        assert!(is_promo_redemption("RENEWAL", "NORMAL", Some(0.0)));
+        assert!(is_promo_redemption("PRODUCT_CHANGE", "normal", Some(0.0)));
+        // A paid renewal is not a promo redemption.
+        assert!(!is_promo_redemption("RENEWAL", "NORMAL", Some(9.99)));
+        // Unknown price is not a redemption (avoid false positives).
+        assert!(!is_promo_redemption("RENEWAL", "NORMAL", None));
+        // Non-renewal / non-normal.
+        assert!(!is_promo_redemption(
+            "INITIAL_PURCHASE",
+            "NORMAL",
+            Some(0.0)
+        ));
+        assert!(!is_promo_redemption("RENEWAL", "TRIAL", Some(0.0)));
     }
 
     #[test]

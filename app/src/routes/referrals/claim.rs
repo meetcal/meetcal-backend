@@ -1,13 +1,17 @@
 //! POST /users/me/rewards/{id}/claim — claim a reward month.
 //!
 //! iOS: returns an Apple promotional-offer signature bundle (applied at next
-//! renewal). Android: defers the Google Play subscription renewal by 30 days.
+//! renewal) WITHOUT consuming the reward. The reward stays `earned` and only
+//! transitions to `delivered` when the RevenueCat webhook observes the promo
+//! renewal actually applied (see `webhook::is_promo_redemption`). This avoids
+//! permanently burning a reward if the user cancels the Apple purchase sheet.
 //!
-//! Both paths are idempotent: only a reward in `earned` status can be claimed,
-//! and the status transition is guarded (`WHERE ... status = 'earned' RETURNING`)
-//! so a concurrent or retried claim gets 409 rather than a second delivery. If
-//! the relevant platform credentials are unconfigured, the endpoint returns 503
-//! and leaves the reward untouched — it never fakes success.
+//! Android: transitions `earned` -> `delivering` (guarded, so a concurrent claim
+//! gets 409), defers the Google Play renewal by 30 days, then `delivered`. On any
+//! delivery error the whole transaction rolls back to `earned` (retryable).
+//!
+//! If the relevant platform credentials are unconfigured, the endpoint returns
+//! 503 and leaves the reward untouched — it never fakes success.
 
 use crate::{
     AppState,
@@ -155,7 +159,7 @@ async fn claim_ios(
             .into_response());
     };
 
-    let bundle = match apple.sign_offer(&product_id, caller) {
+    let bundle = match apple.sign_offer(&product_id) {
         Ok(bundle) => bundle,
         Err(crate::routes::referrals::apple::AppleError::NoOfferForProduct) => {
             return Ok(not_configured(
@@ -167,11 +171,15 @@ async fn claim_ios(
         }
     };
 
-    // Guarded transition: only an `earned` reward becomes `claimed`.
+    // IMPORTANT: do NOT consume the reward here. The client runs the Apple
+    // purchase after this; if it fails or is cancelled, the reward must remain
+    // claimable. We only stamp an audit timestamp. Delivery (earned ->
+    // delivered) is confirmed later by the RevenueCat webhook. Guarded on
+    // status = 'earned' so we don't stamp an already-delivered reward.
     let updated = sqlx::query_scalar::<_, i64>(
         r#"
         UPDATE reward_ledger
-        SET status = 'claimed', platform = 'ios', claimed_at = now(), updated_at = now()
+        SET ios_offer_issued_at = now(), updated_at = now()
         WHERE id = $1 AND user_id = $2 AND status = 'earned'
         RETURNING id
         "#,
@@ -191,13 +199,20 @@ async fn claim_ios(
 
     tx.commit().await?;
 
+    // Flattened, top-level response (the app reads these directly, not under
+    // `.offer`). Status stays `earned`; the app keys off HTTP 200.
     Ok((
         StatusCode::OK,
         Json(json!({
             "id": reward_id,
-            "status": "claimed",
+            "status": "earned",
             "platform": "ios",
-            "offer": bundle,
+            "product_id": bundle.product_id,
+            "offer_id": bundle.offer_id,
+            "key_id": bundle.key_id,
+            "nonce": bundle.nonce,
+            "timestamp": bundle.timestamp,
+            "signature": bundle.signature,
         })),
     )
         .into_response())
@@ -282,24 +297,28 @@ async fn claim_android(
     let req = DeferRequest {
         package_name: play_cfg.package_name.clone(),
         subscription_id: product_id,
-        purchase_token,
+        purchase_token: purchase_token.clone(),
         current_expiry_ms,
     };
 
     match billing.defer(&req).await {
         Ok(outcome) => {
+            // store_transaction_id = the Play purchase token (the real store
+            // transaction identifier); the new expiry gets its own column.
             sqlx::query(
                 r#"
                 UPDATE reward_ledger
                 SET status = 'delivered',
                     store_transaction_id = $2,
+                    delivered_expiry_ms = $3,
                     delivered_at = now(),
                     updated_at = now()
                 WHERE id = $1
                 "#,
             )
             .bind(reward_id)
-            .bind(outcome.new_expiry_ms.to_string())
+            .bind(&purchase_token)
+            .bind(outcome.new_expiry_ms)
             .execute(&mut *tx)
             .await?;
             tx.commit().await?;
@@ -310,7 +329,8 @@ async fn claim_android(
                     "id": reward_id,
                     "status": "delivered",
                     "platform": "android",
-                    "store_transaction_id": outcome.new_expiry_ms.to_string(),
+                    "store_transaction_id": purchase_token,
+                    "new_expiry_ms": outcome.new_expiry_ms,
                 })),
             )
                 .into_response())

@@ -77,12 +77,15 @@ impl AppleConfig {
         })
     }
 
-    /// Generate a promotional-offer signature for `product_id` and `app_username`.
-    pub fn sign_offer(
-        &self,
-        product_id: &str,
-        app_username: &str,
-    ) -> Result<OfferBundle, AppleError> {
+    /// Generate a promotional-offer signature for `product_id`.
+    ///
+    /// The `applicationUsername` segment is signed as an EMPTY string. This is
+    /// deliberate: the installed `react-native-purchases` / `purchases-ios`
+    /// (`purchaseDiscountedProduct`) never sets `SKPayment.applicationUsername`,
+    /// so StoreKit submits an empty username and Apple validates the signature
+    /// against an empty segment. Signing over the Clerk id would be rejected.
+    /// MUST be sandbox-validated in Phase 3.
+    pub fn sign_offer(&self, product_id: &str) -> Result<OfferBundle, AppleError> {
         let offer_id = self
             .offers
             .get(product_id)
@@ -91,16 +94,16 @@ impl AppleConfig {
 
         let nonce = uuid::Uuid::new_v4().to_string(); // lowercase, hyphenated
         let timestamp = chrono::Utc::now().timestamp_millis();
-        // Apple recommends a lowercased application username; the app must match.
-        let username = app_username.to_ascii_lowercase();
 
+        // Empty applicationUsername segment (see doc comment above): the two
+        // separators around `user` sit adjacent with nothing between them.
         let payload = format!(
             "{bundle}{SEP}{key}{SEP}{product}{SEP}{offer}{SEP}{user}{SEP}{nonce}{SEP}{ts}",
             bundle = self.bundle_id,
             key = self.key_id,
             product = product_id,
             offer = offer_id,
-            user = username,
+            user = "",
             nonce = nonce,
             ts = timestamp,
         );
@@ -156,15 +159,15 @@ mod tests {
     #[test]
     fn signs_and_verifies() {
         let (cfg, verifying) = test_config();
-        let bundle = cfg.sign_offer("com.meetcal.monthly", "USER_2xYz").unwrap();
+        let bundle = cfg.sign_offer("com.meetcal.monthly").unwrap();
 
         assert_eq!(bundle.offer_id, "free_month");
         assert_eq!(bundle.key_id, "ABC123");
         assert!(!bundle.signature.is_empty());
 
-        // Rebuild the exact payload and verify the DER signature.
+        // Rebuild the exact payload (EMPTY applicationUsername segment) and verify.
         let payload = format!(
-            "app.meetcal{SEP}ABC123{SEP}com.meetcal.monthly{SEP}free_month{SEP}user_2xyz{SEP}{}{SEP}{}",
+            "app.meetcal{SEP}ABC123{SEP}com.meetcal.monthly{SEP}free_month{SEP}{SEP}{}{SEP}{}",
             bundle.nonce, bundle.timestamp,
         );
         let der = STANDARD.decode(&bundle.signature).unwrap();
@@ -179,7 +182,7 @@ mod tests {
     fn unknown_product_is_rejected() {
         let (cfg, _) = test_config();
         assert!(matches!(
-            cfg.sign_offer("com.meetcal.unknown", "user"),
+            cfg.sign_offer("com.meetcal.unknown"),
             Err(AppleError::NoOfferForProduct)
         ));
     }

@@ -54,20 +54,56 @@ struct KeyCache {
 /// flood of bogus tokens can't turn into a fetch storm.
 const JWKS_MIN_REFRESH: Duration = Duration::from_secs(60);
 
+/// Proactively re-fetch JWKS once the cache is older than this, so rotated keys
+/// are picked up even without an unknown-kid miss.
+const JWKS_TTL: Duration = Duration::from_secs(15 * 60);
+
+/// Explicit dev/test escape hatch that permits running WITHOUT JWT verification.
+/// Absent this, a config with verification disabled PANICS at startup — the
+/// service fails closed rather than silently accepting forged tokens.
+const ALLOW_UNVERIFIED_ENV: &str = "APP_ALLOW_UNVERIFIED_JWT";
+
+/// Pure startup decision, split out for testing. `Ok(true)` => verify,
+/// `Ok(false)` => explicitly unverified (dev/test), `Err(_)` => refuse to start.
+fn decide_verification(
+    verification_enabled: bool,
+    allow_unverified: bool,
+    jwks_url: &str,
+    issuer: &str,
+) -> Result<bool, &'static str> {
+    if allow_unverified {
+        // Explicit opt-out (test harness / local dev only).
+        return Ok(false);
+    }
+    if !verification_enabled {
+        return Err(
+            "JWT verification is disabled but APP_ALLOW_UNVERIFIED_JWT is not set — refusing to \
+             start (fail closed). Enable auth.jwt_verification_enabled in production.",
+        );
+    }
+    if jwks_url.is_empty() || issuer.is_empty() {
+        return Err(
+            "auth.jwt_verification_enabled is true but auth.jwks_url / auth.issuer are not set",
+        );
+    }
+    Ok(true)
+}
+
 impl AuthConfig {
     pub fn from_settings(settings: &AuthSettings) -> Self {
-        if settings.jwt_verification_enabled
-            && (settings.jwks_url.is_empty() || settings.issuer.is_empty())
-        {
-            // Fail loud at startup rather than silently accepting unverified
-            // tokens in production.
-            panic!(
-                "auth.jwt_verification_enabled is true but auth.jwks_url / auth.issuer are not set"
-            );
-        }
+        let allow_unverified = std::env::var(ALLOW_UNVERIFIED_ENV).as_deref() == Ok("1");
+        let enabled = match decide_verification(
+            settings.jwt_verification_enabled,
+            allow_unverified,
+            &settings.jwks_url,
+            &settings.issuer,
+        ) {
+            Ok(enabled) => enabled,
+            Err(reason) => panic!("{reason}"),
+        };
 
         Self {
-            enabled: settings.jwt_verification_enabled,
+            enabled,
             issuer: settings.issuer.clone(),
             jwks_url: settings.jwks_url.clone(),
             keys: Arc::new(RwLock::new(KeyCache::default())),
@@ -100,6 +136,13 @@ impl AuthConfig {
         validation.validate_aud = false;
         validation.validate_exp = true;
 
+        // Proactively refresh a stale cache (TTL), so rotated keys are picked up
+        // even without an unknown-kid miss. Ignore refresh errors here and fall
+        // back to whatever is cached.
+        if self.cache_is_stale() {
+            let _ = self.refresh_keys().await;
+        }
+
         // Try the cached key first, then refresh once on a miss (key rotation).
         for attempt in 0..2 {
             let key = self.key_for(&kid);
@@ -125,6 +168,17 @@ impl AuthConfig {
 
     fn key_for(&self, kid: &str) -> Option<DecodingKey> {
         self.keys.read().ok()?.keys.get(kid).cloned()
+    }
+
+    /// True when the JWKS cache has never been fetched or is older than the TTL.
+    fn cache_is_stale(&self) -> bool {
+        match self.keys.read() {
+            Ok(cache) => match cache.last_refresh {
+                Some(last) => last.elapsed() >= JWKS_TTL,
+                None => true,
+            },
+            Err(_) => true,
+        }
     }
 
     async fn refresh_keys(&self) -> Result<(), AppError> {
@@ -219,4 +273,40 @@ pub async fn set_backend_context(tx: &mut Transaction<'_, Postgres>) -> Result<(
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decide_verification;
+
+    #[test]
+    fn verify_when_enabled_with_config() {
+        assert_eq!(
+            decide_verification(true, false, "https://jwks", "https://iss"),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn fails_closed_when_disabled_without_hatch() {
+        // The critical case: disabled config, no escape hatch -> refuse to start.
+        assert!(decide_verification(false, false, "", "").is_err());
+    }
+
+    #[test]
+    fn escape_hatch_allows_unverified() {
+        // Test harness path: explicit opt-out runs unverified.
+        assert_eq!(decide_verification(false, true, "", ""), Ok(false));
+        // Hatch wins even if config says enabled (keeps shared config usable).
+        assert_eq!(
+            decide_verification(true, true, "https://jwks", "https://iss"),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn enabled_but_missing_jwks_or_issuer_refuses() {
+        assert!(decide_verification(true, false, "", "https://iss").is_err());
+        assert!(decide_verification(true, false, "https://jwks", "").is_err());
+    }
 }

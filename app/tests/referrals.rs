@@ -62,6 +62,35 @@ fn paid_event(event_id: &str, app_user_id: &str) -> Value {
     })
 }
 
+/// A $0 NORMAL renewal = the promotional free month applied.
+fn promo_renewal_event(event_id: &str, app_user_id: &str) -> Value {
+    json!({
+        "event": {
+            "id": event_id,
+            "type": "RENEWAL",
+            "app_user_id": app_user_id,
+            "store": "APP_STORE",
+            "period_type": "NORMAL",
+            "product_id": "com.meetcal.monthly",
+            "price": 0,
+            "price_in_purchased_currency": 0,
+        },
+        "api_version": "1.0",
+    })
+}
+
+async fn mint_reward(db: &PgPool, user: &str) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO reward_ledger (user_id, status, idempotency_key) \
+         VALUES ($1, 'earned', $2) RETURNING id",
+    )
+    .bind(user)
+    .bind(uid("mint"))
+    .fetch_one(db)
+    .await
+    .unwrap()
+}
+
 async fn post_webhook(client: &reqwest::Client, addr: &str, auth: &str, body: &Value) -> u16 {
     client
         .post(format!("{addr}/webhooks/revenuecat"))
@@ -298,50 +327,187 @@ async fn qualification_minting_and_reversal() {
 }
 
 #[tokio::test]
-async fn claim_returns_503_when_platform_unconfigured() {
+async fn android_claim_returns_503_when_unconfigured() {
+    // GOOGLE_PLAY_* is never configured in the test env, so this is deterministic
+    // regardless of whether another test has configured Apple.
     configure_secrets();
     let app = support::spawn_test_app().await;
     let client = reqwest::Client::new();
     let db = pool().await;
 
-    // Mint a reward directly for a user (backend-only insert; superuser bypasses RLS).
     let user = uid("claimer");
-    let reward_id: i64 = sqlx::query_scalar(
-        "INSERT INTO reward_ledger (user_id, status, idempotency_key) \
-         VALUES ($1, 'earned', $2) RETURNING id",
-    )
-    .bind(&user)
-    .bind(uid("mint"))
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let reward_id = mint_reward(&db, &user).await;
 
-    // No APPLE_* / GOOGLE_PLAY_* env configured -> 503, and the reward is untouched.
-    for platform in ["ios", "android"] {
-        let resp = client
-            .post(format!(
-                "{}/users/me/rewards/{reward_id}/claim",
-                app.address
-            ))
-            .bearer_auth(token(&user))
-            .json(&json!({ "platform": platform }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), 503, "unconfigured {platform} must 503");
-        assert_eq!(
-            resp.json::<Value>().await.unwrap()["error"],
-            "not_configured"
-        );
-    }
+    let resp = client
+        .post(format!(
+            "{}/users/me/rewards/{reward_id}/claim",
+            app.address
+        ))
+        .bearer_auth(token(&user))
+        .json(&json!({ "platform": "android" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+    assert_eq!(
+        resp.json::<Value>().await.unwrap()["error"],
+        "not_configured"
+    );
 
-    // Status unchanged.
     let status: String = sqlx::query_scalar("SELECT status FROM reward_ledger WHERE id = $1")
         .bind(reward_id)
         .fetch_one(&db)
         .await
         .unwrap();
     assert_eq!(status, "earned");
+}
+
+/// Configure Apple signing globally for the test binary (a runtime-generated
+/// P-256 key). Only GOOGLE_PLAY_* is left unset, so the Android 503 test stays
+/// deterministic.
+fn configure_apple() {
+    use p256::ecdsa::SigningKey;
+    use p256::pkcs8::EncodePrivateKey;
+    let pem = SigningKey::from_bytes(&[9u8; 32].into())
+        .unwrap()
+        .to_pkcs8_pem(Default::default())
+        .unwrap()
+        .to_string();
+    // SAFETY: set to constant values before the app under test spawns.
+    unsafe {
+        std::env::set_var("APPLE_IAP_KEY_ID", "TESTKEY");
+        std::env::set_var("APPLE_BUNDLE_ID", "app.meetcal");
+        std::env::set_var("APPLE_IAP_PRIVATE_KEY", &pem);
+        std::env::set_var("APPLE_IAP_OFFER_IDS", "com.meetcal.monthly=free_month");
+    }
+}
+
+/// C1/C2: the iOS claim returns a flattened signature bundle but does NOT consume
+/// the reward — it stays `earned` so a cancelled Apple purchase doesn't burn it.
+#[tokio::test]
+async fn ios_claim_leaves_reward_earned_and_returns_flattened_signature() {
+    configure_secrets();
+    configure_apple();
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+    let db = pool().await;
+
+    let user = uid("ios");
+    let reward_id = mint_reward(&db, &user).await;
+
+    // The claim needs a known non-web product to attach the offer to.
+    sqlx::query(
+        "INSERT INTO subscription_events (event_id, app_user_id, store, type, period_type, product_id, event) \
+         VALUES ($1, $2, 'APP_STORE', 'INITIAL_PURCHASE', 'NORMAL', 'com.meetcal.monthly', '{}'::jsonb)",
+    )
+    .bind(uid("evt"))
+    .bind(&user)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let resp = client
+        .post(format!(
+            "{}/users/me/rewards/{reward_id}/claim",
+            app.address
+        ))
+        .bearer_auth(token(&user))
+        .json(&json!({ "platform": "ios" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.json::<Value>().await.unwrap();
+
+    // Flattened, top-level fields (not nested under `.offer`).
+    assert_eq!(body["status"], "earned");
+    assert_eq!(body["platform"], "ios");
+    assert_eq!(body["product_id"], "com.meetcal.monthly");
+    assert_eq!(body["offer_id"], "free_month");
+    assert_eq!(body["key_id"], "TESTKEY");
+    assert!(!body["signature"].as_str().unwrap().is_empty());
+    assert!(body["nonce"].is_string());
+    assert!(body["timestamp"].is_number());
+    assert!(
+        body.get("offer").is_none(),
+        "must not be nested under .offer"
+    );
+
+    // Reward is NOT consumed: still earned, with an audit timestamp.
+    let (status, issued): (String, Option<chrono::DateTime<chrono::Utc>>) =
+        sqlx::query_as("SELECT status, ios_offer_issued_at FROM reward_ledger WHERE id = $1")
+            .bind(reward_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(status, "earned");
+    assert!(issued.is_some());
+}
+
+/// C1: iOS delivery is confirmed by the webhook. A promo-redemption event
+/// delivers exactly one reward; a duplicate event delivers none.
+#[tokio::test]
+async fn webhook_promo_redemption_delivers_one_reward_idempotently() {
+    configure_secrets();
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+    let db = pool().await;
+
+    let user = uid("promo");
+    // Two earned rewards so we can prove a duplicate event doesn't deliver a 2nd.
+    let r1 = mint_reward(&db, &user).await;
+    let _r2 = mint_reward(&db, &user).await;
+
+    let event_id = uid("evt");
+    let body = promo_renewal_event(&event_id, &user);
+
+    // First delivery: one reward -> delivered.
+    assert_eq!(
+        post_webhook(&client, &app.address, WEBHOOK_SECRET, &body).await,
+        200
+    );
+    // Duplicate event (same event_id): deduped, delivers none.
+    assert_eq!(
+        post_webhook(&client, &app.address, WEBHOOK_SECRET, &body).await,
+        200
+    );
+
+    let delivered: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::BIGINT FROM reward_ledger WHERE user_id = $1 AND status = 'delivered'",
+    )
+    .bind(&user)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(
+        delivered, 1,
+        "exactly one reward delivered, duplicate is a no-op"
+    );
+
+    // The oldest reward was the one delivered, tagged with the event id.
+    let (status, txn): (String, Option<String>) =
+        sqlx::query_as("SELECT status, store_transaction_id FROM reward_ledger WHERE id = $1")
+            .bind(r1)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(status, "delivered");
+    assert_eq!(txn.as_deref(), Some(event_id.as_str()));
+
+    // A DIFFERENT promo event delivers the second reward.
+    let body2 = promo_renewal_event(&uid("evt"), &user);
+    assert_eq!(
+        post_webhook(&client, &app.address, WEBHOOK_SECRET, &body2).await,
+        200
+    );
+    let delivered: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::BIGINT FROM reward_ledger WHERE user_id = $1 AND status = 'delivered'",
+    )
+    .bind(&user)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(delivered, 2);
 }
 
 async fn run_qualification(
