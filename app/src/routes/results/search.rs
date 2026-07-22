@@ -1,4 +1,6 @@
-use crate::{AppError, AppState, common::names::normalize_name, routes::results::types::LiftingResults};
+use crate::{
+    AppError, AppState, common::names::normalize_name, routes::results::types::LiftingResults,
+};
 use axum::{
     Json,
     extract::{Query, State},

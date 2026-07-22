@@ -361,6 +361,53 @@ async fn claim_android(
     }
 }
 
+/// POST /users/me/rewards/{id}/release-offer — release an outstanding iOS
+/// promotional-offer reservation.
+///
+/// The iOS claim stamps `ios_offer_issued_at` (the M2 re-issuance throttle)
+/// before the client runs Apple's purchase sheet. If the user backs out of that
+/// sheet, the reservation would otherwise linger for the throttle window —
+/// making the reward look "scheduled" and 409-ing re-claims. The client calls
+/// this on cancellation to clear the stamp so the reward is immediately
+/// re-claimable.
+///
+/// Only clears while the reward is still `earned`; if a real redemption already
+/// flipped it to delivered/delivering, this is a no-op. Idempotent, always 200.
+pub async fn release_ios_offer(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(reward_id): Path<i64>,
+) -> Response {
+    let caller = match state.auth.user_id(&headers).await {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
+    };
+
+    let result = async {
+        let mut tx = state.db.begin().await?;
+        set_request_user(&mut tx, &caller).await?;
+        sqlx::query(
+            r#"
+            UPDATE reward_ledger
+            SET ios_offer_issued_at = NULL, updated_at = now()
+            WHERE id = $1 AND user_id = $2 AND status = 'earned'
+            "#,
+        )
+        .bind(reward_id)
+        .bind(&caller)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok::<(), crate::AppError>(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => (StatusCode::OK, Json(json!({ "status": "released" }))).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
 fn not_configured(message: &str) -> Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,

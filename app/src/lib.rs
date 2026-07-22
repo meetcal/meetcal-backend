@@ -5,8 +5,8 @@ pub mod routes;
 
 use crate::configuration::get_configuration;
 use crate::routes::referrals::{
-    ReferralConfig, claim::claim_reward, get_referral::get_referral, redeem::redeem,
-    run_qualification::run_qualification, webhook::revenuecat_webhook,
+    ReferralConfig, claim::claim_reward, claim::release_ios_offer, get_referral::get_referral,
+    redeem::redeem, run_qualification::run_qualification, webhook::revenuecat_webhook,
 };
 use crate::routes::scrapers::{
     SlackConfig, interactions::slack_interactions, slack_commands::slack_commands,
@@ -149,6 +149,10 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .route("/users/me/referral", get(get_referral))
         .route("/users/me/referral/redeem", post(redeem))
         .route("/users/me/rewards/{reward_id}/claim", post(claim_reward))
+        .route(
+            "/users/me/rewards/{reward_id}/release-offer",
+            post(release_ios_offer),
+        )
         .route("/webhooks/revenuecat", post(revenuecat_webhook))
         .route(
             "/internal/referrals/run-qualification",

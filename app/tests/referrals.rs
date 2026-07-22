@@ -447,6 +447,69 @@ async fn ios_claim_leaves_reward_earned_and_returns_flattened_signature() {
     assert!(issued.is_some());
 }
 
+#[tokio::test]
+async fn release_ios_offer_clears_reservation_and_reenables_claim() {
+    configure_secrets();
+    configure_apple();
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+    let db = pool().await;
+
+    let user = uid("ios");
+    let reward_id = mint_reward(&db, &user).await;
+    sqlx::query(
+        "INSERT INTO subscription_events (event_id, app_user_id, store, type, period_type, product_id, event) \
+         VALUES ($1, $2, 'APP_STORE', 'INITIAL_PURCHASE', 'NORMAL', 'com.meetcal.monthly', '{}'::jsonb)",
+    )
+    .bind(uid("evt"))
+    .bind(&user)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let claim = |()| {
+        client
+            .post(format!(
+                "{}/users/me/rewards/{reward_id}/claim",
+                app.address
+            ))
+            .bearer_auth(token(&user))
+            .json(&json!({ "platform": "ios" }))
+            .send()
+    };
+
+    // First claim reserves the offer (stamps ios_offer_issued_at).
+    assert_eq!(claim(()).await.unwrap().status(), 200);
+    // Re-claim inside the throttle window is rejected.
+    assert_eq!(claim(()).await.unwrap().status(), 409);
+
+    // Release the reservation (as the client does on Apple-sheet cancellation).
+    let released = client
+        .post(format!(
+            "{}/users/me/rewards/{reward_id}/release-offer",
+            app.address
+        ))
+        .bearer_auth(token(&user))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(released.status(), 200);
+
+    // Reservation is cleared, reward still earned.
+    let (status, issued): (String, Option<chrono::DateTime<chrono::Utc>>) =
+        sqlx::query_as("SELECT status, ios_offer_issued_at FROM reward_ledger WHERE id = $1")
+            .bind(reward_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(status, "earned");
+    assert!(issued.is_none(), "reservation should be cleared");
+
+    // The reward is immediately claimable again (no 48h wait).
+    assert_eq!(claim(()).await.unwrap().status(), 200);
+}
+
 /// C1: iOS delivery is confirmed by the webhook. A promo-redemption event
 /// delivers exactly one reward; a duplicate event delivers none.
 #[tokio::test]
