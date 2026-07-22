@@ -78,11 +78,12 @@ CREATE TABLE IF NOT EXISTS reward_ledger (
     user_id TEXT NOT NULL,
 
     -- earned     -> minted, unclaimed
-    -- claimed    -> user picked a platform (iOS signature returned)
+    -- claimed    -> RESERVED (unused after the no-consume iOS redesign; the
+    --               constraint is tightened to drop it in 20260722120003)
     -- delivering -> Android defer in flight
     -- delivered  -> subscription extended by 30 days
     -- reversed   -> clawed back (only ever from earned status)
-    -- failed     -> delivery attempt failed, still owed, retryable
+    -- failed     -> RESERVED (unused; Android delivery errors roll back to earned)
     status TEXT NOT NULL DEFAULT 'earned'
         CHECK (status IN ('earned', 'claimed', 'delivering', 'delivered', 'reversed', 'failed')),
 

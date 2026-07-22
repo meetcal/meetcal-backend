@@ -13,6 +13,9 @@ pub struct RewardSummary {
     pub id: i64,
     pub status: String,
     pub earned_at: DateTime<Utc>,
+    /// When an iOS promotional-offer signature was last issued for this reward
+    /// (null if never). Lets the client render a persistent "scheduled" state.
+    pub ios_offer_issued_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,9 +76,9 @@ pub async fn get_referral(
     .fetch_one(&mut *tx)
     .await?;
 
-    let rewards = sqlx::query_as::<_, (i64, String, DateTime<Utc>)>(
+    let rewards = sqlx::query_as::<_, (i64, String, DateTime<Utc>, Option<DateTime<Utc>>)>(
         r#"
-        SELECT id, status, earned_at
+        SELECT id, status, earned_at, ios_offer_issued_at
         FROM reward_ledger
         WHERE user_id = $1
         ORDER BY earned_at DESC, id DESC
@@ -89,16 +92,19 @@ pub async fn get_referral(
 
     let reward_months_available = rewards
         .iter()
-        .filter(|(_, status, _)| status == "earned")
+        .filter(|(_, status, _, _)| status == "earned")
         .count() as i64;
 
     let rewards = rewards
         .into_iter()
-        .map(|(id, status, earned_at)| RewardSummary {
-            id,
-            status,
-            earned_at,
-        })
+        .map(
+            |(id, status, earned_at, ios_offer_issued_at)| RewardSummary {
+                id,
+                status,
+                earned_at,
+                ios_offer_issued_at,
+            },
+        )
         .collect();
 
     Ok(Json(ReferralResponse {

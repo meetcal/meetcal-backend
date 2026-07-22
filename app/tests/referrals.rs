@@ -301,8 +301,11 @@ async fn qualification_minting_and_reversal() {
     assert_eq!(run2.json::<Value>().await.unwrap()["minted"], 0);
 
     // Refund one qualified referral -> disqualify + reverse the earned reward.
+    // A real RevenueCat refund is a CANCELLATION with cancel_reason
+    // CUSTOMER_SUPPORT (there is no top-level REFUND event type).
     let mut refund = paid_event(&uid("evt"), &referred_users[0]);
-    refund["event"]["type"] = json!("REFUND");
+    refund["event"]["type"] = json!("CANCELLATION");
+    refund["event"]["cancel_reason"] = json!("CUSTOMER_SUPPORT");
     assert_eq!(
         post_webhook(&client, &app.address, WEBHOOK_SECRET, &refund).await,
         200

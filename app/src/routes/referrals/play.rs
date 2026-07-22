@@ -230,7 +230,7 @@ impl PlayBilling for GooglePlayBilling {
 /// Percent-encode a single URL path segment (encode everything outside the
 /// unreserved set `A-Z a-z 0-9 - . _ ~`), so reserved characters in a purchase
 /// token or product id can't break out of the segment.
-fn encode_segment(value: &str) -> String {
+pub(crate) fn encode_segment(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for &byte in value.as_bytes() {
         match byte {

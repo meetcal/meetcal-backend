@@ -13,7 +13,7 @@
 
 use crate::{
     AppState,
-    routes::referrals::{QUALIFICATION_HOLD_DAYS, ct_eq, rewards_to_mint, target_reward_count},
+    routes::referrals::{DISQUALIFYING_EVENT_SQL, QUALIFICATION_HOLD_DAYS, ct_eq, rewards_to_mint},
     routes::users::auth::set_backend_context,
 };
 use axum::{
@@ -61,9 +61,12 @@ async fn run(state: &AppState) -> Result<RunQualificationResponse, crate::AppErr
 
     // Phase 1: promote matured qualifying referrals. A disqualifying event would
     // already have moved the row to `disqualified`, but we also guard explicitly
-    // against any disqualifying subscription_event for the referred user.
+    // against any disqualifying subscription_event for the referred user, using
+    // the SAME predicate as the webhook (DISQUALIFYING_EVENT_SQL) so they can't
+    // drift. The fragment references subscription_events columns type +
+    // cancel_reason; it contains no user input.
     let hold = format!("{QUALIFICATION_HOLD_DAYS} days");
-    let promoted = sqlx::query_scalar::<_, i64>(
+    let promote_sql = format!(
         r#"
         WITH promoted AS (
             UPDATE referrals r
@@ -74,16 +77,20 @@ async fn run(state: &AppState) -> Result<RunQualificationResponse, crate::AppErr
               AND NOT EXISTS (
                   SELECT 1 FROM subscription_events e
                   WHERE e.app_user_id = r.referred_user_id
-                    AND upper(coalesce(e.type, '')) IN ('REFUND', 'CHARGEBACK', 'BILLING_FRAUD')
+                    AND ({DISQUALIFYING_EVENT_SQL})
               )
             RETURNING 1
         )
         SELECT COUNT(*)::BIGINT FROM promoted
-        "#,
-    )
-    .bind(&hold)
-    .fetch_one(&mut *tx)
-    .await?;
+        "#
+    );
+    // SAFETY: `promote_sql` interpolates only the compile-time constant
+    // DISQUALIFYING_EVENT_SQL; the sole runtime value (`$1`) is bound. No user
+    // input reaches the string, so asserting SQL-safety is correct here.
+    let promoted = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(promote_sql))
+        .bind(&hold)
+        .fetch_one(&mut *tx)
+        .await?;
 
     // Phase 2: mint. Process every referrer with at least one qualified referral.
     let referrers = sqlx::query_scalar::<_, String>(
@@ -144,8 +151,6 @@ async fn mint_for(
     if to_mint == 0 {
         return Ok(0);
     }
-    // Log the target for observability of the derived formula.
-    let _ = target_reward_count(qualified_count);
 
     // Idempotency keys must never be reused, even across reversals, so we base
     // the ordinal on ALL rows ever minted for this user (including reversed),

@@ -154,8 +154,10 @@ async fn redeem_inner(
             .await?
             .is_some();
 
-    // Any prior non-web paid (NORMAL) event makes the caller ineligible.
-    let has_prior_paid = sqlx::query_scalar::<_, i32>(
+    // Any prior non-web paid (NORMAL) event makes the caller ineligible. Local
+    // events only — blind before the webhook has any history, hence the remote
+    // screening below.
+    let local_prior_paid = sqlx::query_scalar::<_, i32>(
         r#"
         SELECT 1 FROM subscription_events
         WHERE app_user_id = $1
@@ -169,11 +171,25 @@ async fn redeem_inner(
     .await?
     .is_some();
 
+    // Best-effort remote screening: if a RevenueCat REST key is configured, ask
+    // whether the caller already has non-web paid history. Additive and fails
+    // OPEN (see RevenueCatApi) so a RevenueCat outage never blocks a redeem.
+    let remote_prior_paid = if !local_prior_paid {
+        match crate::routes::referrals::revenuecat_api::RevenueCatApi::from_key(
+            &state.referrals.revenuecat_secret_api_key,
+        ) {
+            Some(api) => api.has_non_web_paid_history(&caller).await,
+            None => false,
+        }
+    } else {
+        false
+    };
+
     let referrer = validate_redeem(
         &caller,
         code_owner.as_deref(),
         already_referred,
-        has_prior_paid,
+        local_prior_paid || remote_prior_paid,
     )
     .map_err(RedeemOutcome::Rejected)?;
 

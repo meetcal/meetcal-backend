@@ -25,6 +25,7 @@ pub mod code;
 pub mod get_referral;
 pub mod play;
 pub mod redeem;
+pub mod revenuecat_api;
 pub mod run_qualification;
 pub mod webhook;
 
@@ -38,6 +39,10 @@ pub const REFERRALS_PER_REWARD: i64 = 5;
 pub const ANNUAL_REWARD_CAP: i64 = 12;
 /// Qualification hold: a paid referral must survive this long to qualify.
 pub const QUALIFICATION_HOLD_DAYS: i64 = 30;
+/// Minimum gap before a fresh iOS promotional-offer signature is re-issued for
+/// the same (still-earned) reward, so a client can retry a failed/cancelled
+/// purchase after it lapses without unbounded re-issuance.
+pub const IOS_OFFER_REISSUE_HOLD_HOURS: i64 = 48;
 
 /// Runtime configuration for the referral domain, read from the environment at
 /// startup (mirrors `SlackConfig::from_env`). Held in `AppState`.
@@ -53,6 +58,9 @@ pub struct ReferralConfig {
     pub apple: Option<apple::AppleConfig>,
     /// Google Play delivery config; `None` when unconfigured.
     pub play: Option<play::PlayConfig>,
+    /// RevenueCat REST secret API key for the best-effort first-time-paid check
+    /// at redeem; empty when unconfigured (screening is skipped, fail-open).
+    pub revenuecat_secret_api_key: String,
 }
 
 impl ReferralConfig {
@@ -66,6 +74,7 @@ impl ReferralConfig {
                 .unwrap_or_else(|| "https://meetcal.app/invite".to_string()),
             apple: apple::AppleConfig::from_env(),
             play: play::PlayConfig::from_env(),
+            revenuecat_secret_api_key: env_str("REVENUECAT_SECRET_API_KEY"),
         }
     }
 
@@ -154,19 +163,26 @@ pub fn is_web_store(store: &str) -> bool {
     )
 }
 
-/// Does this event mark a paid (NORMAL) subscription period? Trials and intro
-/// offers do not count.
-pub fn is_paid_conversion(event_type: &str, period_type: &str) -> bool {
+/// Does this event mark a *paid* (NORMAL) subscription period? Trials and intro
+/// offers do not count, and — when a price is present — neither does a $0 period
+/// (that's a promotional free month, see [`is_promo_redemption`]). A missing
+/// price is treated as "unknown, allow", since not all stores populate it.
+///
+/// This gates whether an event is a candidate to promote a referral; the actual
+/// first-paid-after-attribution rule is enforced in the webhook (H2a) using the
+/// event type + local purchase history.
+pub fn is_paid_conversion(event_type: &str, period_type: &str, price: Option<f64>) -> bool {
     if !period_type.trim().eq_ignore_ascii_case("NORMAL") {
+        return false;
+    }
+    if let Some(price) = price
+        && price <= 0.0
+    {
         return false;
     }
     matches!(
         event_type.trim().to_ascii_uppercase().as_str(),
-        "INITIAL_PURCHASE"
-            | "RENEWAL"
-            | "NON_RENEWING_PURCHASE"
-            | "PRODUCT_CHANGE"
-            | "UNCANCELLATION"
+        "INITIAL_PURCHASE" | "RENEWAL" | "NON_RENEWING_PURCHASE" | "PRODUCT_CHANGE"
     )
 }
 
@@ -187,14 +203,31 @@ pub fn is_promo_redemption(event_type: &str, period_type: &str, price: Option<f6
     renewal && period_type.trim().eq_ignore_ascii_case("NORMAL") && price == Some(0.0)
 }
 
-/// Does this event disqualify a referral (refund / chargeback / fraud)? Note a
-/// plain CANCELLATION (auto-renew off) does NOT disqualify.
-pub fn is_disqualifying(event_type: &str) -> bool {
-    matches!(
-        event_type.trim().to_ascii_uppercase().as_str(),
-        "REFUND" | "CHARGEBACK" | "SUBSCRIPTION_PAUSED_FRAUD" | "BILLING_FRAUD"
-    )
+/// Does this event disqualify a referral?
+///
+/// RevenueCat vocabulary (see <https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields>):
+/// a customer-service **refund** arrives as a `CANCELLATION` with
+/// `cancel_reason == "CUSTOMER_SUPPORT"` — that is the disqualifying case. Auto-
+/// renew-off (`UNSUBSCRIBE`) and failed billing (`BILLING_ERROR`, the user was
+/// not refunded) are benign. There is no `REFUND`/`CHARGEBACK` top-level type.
+///
+/// This MUST stay in sync with [`DISQUALIFYING_EVENT_SQL`], the SQL form of the
+/// same predicate used by the qualification cron's guard.
+pub fn is_disqualifying(event_type: &str, cancel_reason: &str) -> bool {
+    match event_type.trim().to_ascii_uppercase().as_str() {
+        "CANCELLATION" => cancel_reason
+            .trim()
+            .eq_ignore_ascii_case("CUSTOMER_SUPPORT"),
+        _ => false,
+    }
 }
+
+/// SQL boolean — the exact mirror of [`is_disqualifying`] — evaluated over the
+/// `subscription_events` columns `type` and `cancel_reason`. Kept as ONE shared
+/// definition so the webhook (Rust) and the cron's `NOT EXISTS` guard (SQL)
+/// cannot drift. Contains no user input; safe to interpolate.
+pub const DISQUALIFYING_EVENT_SQL: &str = "upper(coalesce(type, '')) = 'CANCELLATION' \
+     AND upper(coalesce(cancel_reason, '')) = 'CUSTOMER_SUPPORT'";
 
 #[cfg(test)]
 mod tests {
@@ -268,22 +301,29 @@ mod tests {
 
     #[test]
     fn paid_conversion_requires_normal_period() {
-        assert!(is_paid_conversion("INITIAL_PURCHASE", "NORMAL"));
-        assert!(is_paid_conversion("RENEWAL", "normal"));
+        assert!(is_paid_conversion("INITIAL_PURCHASE", "NORMAL", None));
+        assert!(is_paid_conversion("RENEWAL", "normal", Some(9.99)));
         // Trials / intro do not count.
-        assert!(!is_paid_conversion("INITIAL_PURCHASE", "TRIAL"));
-        assert!(!is_paid_conversion("INITIAL_PURCHASE", "INTRO"));
+        assert!(!is_paid_conversion("INITIAL_PURCHASE", "TRIAL", None));
+        assert!(!is_paid_conversion("INITIAL_PURCHASE", "INTRO", None));
         // Non-purchase events don't convert.
-        assert!(!is_paid_conversion("CANCELLATION", "NORMAL"));
+        assert!(!is_paid_conversion("CANCELLATION", "NORMAL", None));
+        // A $0 NORMAL period is a promo month, not a paid conversion.
+        assert!(!is_paid_conversion("RENEWAL", "NORMAL", Some(0.0)));
     }
 
     #[test]
     fn disqualifying_events() {
-        assert!(is_disqualifying("REFUND"));
-        assert!(is_disqualifying("chargeback"));
-        // Auto-renew off is NOT disqualifying.
-        assert!(!is_disqualifying("CANCELLATION"));
-        assert!(!is_disqualifying("RENEWAL"));
+        // Real refund: CANCELLATION + CUSTOMER_SUPPORT.
+        assert!(is_disqualifying("CANCELLATION", "CUSTOMER_SUPPORT"));
+        assert!(is_disqualifying("cancellation", "customer_support"));
+        // Auto-renew off and benign billing errors do NOT disqualify.
+        assert!(!is_disqualifying("CANCELLATION", "UNSUBSCRIBE"));
+        assert!(!is_disqualifying("CANCELLATION", "BILLING_ERROR"));
+        // Invented / non-existent RevenueCat types do not disqualify.
+        assert!(!is_disqualifying("REFUND", ""));
+        assert!(!is_disqualifying("RENEWAL", ""));
+        assert!(!is_disqualifying("REFUND_REVERSED", ""));
     }
 
     #[test]

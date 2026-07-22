@@ -58,6 +58,9 @@ const JWKS_MIN_REFRESH: Duration = Duration::from_secs(60);
 /// are picked up even without an unknown-kid miss.
 const JWKS_TTL: Duration = Duration::from_secs(15 * 60);
 
+/// Hard timeout on the JWKS fetch, so an unreachable Clerk can't stall requests.
+const JWKS_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Explicit dev/test escape hatch that permits running WITHOUT JWT verification.
 /// Absent this, a config with verification disabled PANICS at startup — the
 /// service fails closed rather than silently accepting forged tokens.
@@ -102,12 +105,19 @@ impl AuthConfig {
             Err(reason) => panic!("{reason}"),
         };
 
+        // Explicit short timeout so a slow/unreachable JWKS endpoint can't hang
+        // request handling (it fails to a 503 instead).
+        let http = reqwest::Client::builder()
+            .timeout(JWKS_HTTP_TIMEOUT)
+            .build()
+            .unwrap_or_default();
+
         Self {
             enabled,
             issuer: settings.issuer.clone(),
             jwks_url: settings.jwks_url.clone(),
             keys: Arc::new(RwLock::new(KeyCache::default())),
-            http: reqwest::Client::new(),
+            http,
         }
     }
 
@@ -190,15 +200,17 @@ impl AuthConfig {
             return Ok(());
         }
 
+        // A JWKS fetch/parse failure is an UPSTREAM problem, not a bad token —
+        // surface it as 503 so clients don't treat it as "signed out".
         let jwks: jsonwebtoken::jwk::JwkSet = self
             .http
             .get(&self.jwks_url)
             .send()
             .await
-            .map_err(|_| AppError::Unauthorized)?
+            .map_err(|e| AppError::Unavailable(format!("JWKS fetch failed: {e}")))?
             .json()
             .await
-            .map_err(|_| AppError::Unauthorized)?;
+            .map_err(|e| AppError::Unavailable(format!("JWKS parse failed: {e}")))?;
 
         let mut fresh = HashMap::new();
         for jwk in &jwks.keys {
@@ -241,14 +253,6 @@ fn unverified_sub(token: &str) -> Result<String, AppError> {
     }
 
     Ok(claims.sub)
-}
-
-/// Legacy free-function extractor kept for callers that only need the unverified
-/// `sub` (none currently do the verified path without `AuthConfig`). Prefer
-/// `AuthConfig::user_id`.
-pub fn user_id_from_headers(headers: &HeaderMap) -> Result<String, AppError> {
-    let token = bearer_token(headers)?;
-    unverified_sub(token)
 }
 
 pub async fn set_request_user(

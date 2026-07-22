@@ -66,8 +66,11 @@ pub async fn ensure_referral_code(
                     return Ok(code);
                 }
             }
-            // Likely a code-uniqueness violation: try a fresh code.
-            Err(sqlx::Error::Database(_)) => continue,
+            // Only a UNIQUE violation (SQLSTATE 23505) on the code column is a
+            // retryable collision; anything else is a real error to propagate.
+            Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("23505") => {
+                continue;
+            }
             Err(other) => return Err(other.into()),
         }
     }

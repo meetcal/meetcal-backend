@@ -174,25 +174,38 @@ async fn claim_ios(
     // IMPORTANT: do NOT consume the reward here. The client runs the Apple
     // purchase after this; if it fails or is cancelled, the reward must remain
     // claimable. We only stamp an audit timestamp. Delivery (earned ->
-    // delivered) is confirmed later by the RevenueCat webhook. Guarded on
-    // status = 'earned' so we don't stamp an already-delivered reward.
+    // delivered) is confirmed later by the RevenueCat webhook.
+    //
+    // Re-issuance hold (M2): only stamp/return a fresh signature when the reward
+    // is `earned` AND no signature was issued within the last
+    // IOS_OFFER_REISSUE_HOLD_HOURS. This bounds unlimited re-issuance while still
+    // letting the client retry after the hold lapses (covers a failed purchase).
+    let hold = format!(
+        "{} hours",
+        crate::routes::referrals::IOS_OFFER_REISSUE_HOLD_HOURS
+    );
     let updated = sqlx::query_scalar::<_, i64>(
         r#"
         UPDATE reward_ledger
         SET ios_offer_issued_at = now(), updated_at = now()
         WHERE id = $1 AND user_id = $2 AND status = 'earned'
+          AND (ios_offer_issued_at IS NULL
+               OR ios_offer_issued_at < now() - $3::interval)
         RETURNING id
         "#,
     )
     .bind(reward_id)
     .bind(caller)
+    .bind(&hold)
     .fetch_optional(&mut *tx)
     .await?;
 
     if updated.is_none() {
+        // open_claimable already confirmed the reward exists and is `earned`, so
+        // a miss here means a signature was issued within the hold window.
         return Ok((
             StatusCode::CONFLICT,
-            Json(json!({ "error": "reward is not claimable" })),
+            Json(json!({ "error": "offer_recently_issued" })),
         )
             .into_response());
     }
