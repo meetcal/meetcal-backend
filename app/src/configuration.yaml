@@ -5,3 +5,22 @@ database:
   port: 5432
   username: "postgres"
   database_name: "meetcal"
+auth:
+  # !!! SECURITY !!!
+  # This is the DEV/TEST default and is DISABLED so the integration-test suite —
+  # which sends unsigned Clerk-shaped tokens — keeps passing. It must NEVER ship
+  # to production as false: a forged token would let anyone claim referral
+  # rewards or farm attribution. Production enables verification by overriding
+  # this file with `src/configuration.local.yaml` (git-ignored), e.g.:
+  #
+  #   auth:
+  #     jwt_verification_enabled: true
+  #     jwks_url: "https://<subdomain>.clerk.accounts.dev/.well-known/jwks.json"
+  #     issuer:   "https://<subdomain>.clerk.accounts.dev"
+  #
+  # (Do not rely on APP_AUTH__* env overrides for the bool: the `config` crate
+  # does not coerce env strings to bools without try_parsing, which would break
+  # the string settings. Use configuration.local.yaml for the toggle.)
+  jwt_verification_enabled: false
+  jwks_url: ""
+  issuer: ""

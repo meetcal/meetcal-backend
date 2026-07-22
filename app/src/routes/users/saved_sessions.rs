@@ -1,7 +1,4 @@
-use crate::{
-    AppError, AppState,
-    routes::users::auth::{set_request_user, user_id_from_headers},
-};
+use crate::{AppError, AppState, routes::users::auth::set_request_user};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -91,7 +88,7 @@ pub async fn get_saved_sessions(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<SavedSessionsResponse>, AppError> {
-    let user_id = user_id_from_headers(&headers)?;
+    let user_id = state.auth.user_id(&headers).await?;
     let mut tx = state.db.begin().await?;
     set_request_user(&mut tx, &user_id).await?;
 
@@ -146,7 +143,7 @@ pub async fn put_saved_session(
         return Err(AppError::Validation("session_id is required".to_string()));
     }
 
-    let user_id = user_id_from_headers(&headers)?;
+    let user_id = state.auth.user_id(&headers).await?;
     let updated_at = now_millis()?;
     let athlete_names = body.athlete_names.unwrap_or_default();
     let convex_id = format!("saved_session:{user_id}:{session_id}");
@@ -223,7 +220,7 @@ pub async fn delete_saved_session(
     headers: HeaderMap,
     Path(session_id): Path<String>,
 ) -> Result<Json<DeleteSavedSessionResponse>, AppError> {
-    let user_id = user_id_from_headers(&headers)?;
+    let user_id = state.auth.user_id(&headers).await?;
     let mut tx = state.db.begin().await?;
     set_request_user(&mut tx, &user_id).await?;
 
@@ -262,7 +259,7 @@ pub async fn delete_saved_sessions(
     headers: HeaderMap,
     Query(params): Query<DeleteSavedSessionsParams>,
 ) -> Result<Json<DeleteSavedSessionsResponse>, AppError> {
-    let user_id = user_id_from_headers(&headers)?;
+    let user_id = state.auth.user_id(&headers).await?;
     let mut tx = state.db.begin().await?;
     set_request_user(&mut tx, &user_id).await?;
 

@@ -3,6 +3,7 @@ pub mod comp_data;
 pub mod health;
 pub mod lifting_results;
 pub mod meets;
+pub mod referrals;
 pub mod results;
 pub mod scrapers;
 pub mod users;

@@ -1,0 +1,358 @@
+//! Integration tests for the referral rewards program.
+//!
+//! These exercise the HTTP surface + the qualification/minting state machine
+//! against a live Postgres. They connect as the superuser (like the other
+//! integration tests), so RLS is bypassed; the app's explicit `user_id` filters
+//! and status guards are what's under test here. The RLS policies themselves are
+//! validated structurally by applying the migrations.
+
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde_json::{Value, json};
+use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
+
+mod support;
+
+const WEBHOOK_SECRET: &str = "test-webhook-secret";
+const JOB_SECRET: &str = "test-job-secret";
+
+/// Set the webhook/job secrets before spawning the app (ReferralConfig reads
+/// them from the environment at spawn time). Same values across tests, so
+/// concurrent set/read is harmless.
+fn configure_secrets() {
+    // SAFETY: tests only ever set these to the same constant values.
+    unsafe {
+        std::env::set_var("REVENUECAT_WEBHOOK_SECRET", WEBHOOK_SECRET);
+        std::env::set_var("INTERNAL_JOB_SECRET", JOB_SECRET);
+    }
+}
+
+/// Build an UNSIGNED Clerk-shaped JWT for `sub` (auth verification is disabled in
+/// the test config, matching the existing users tests).
+fn token(sub: &str) -> String {
+    let payload = URL_SAFE_NO_PAD.encode(json!({ "sub": sub }).to_string());
+    format!("e30.{payload}.sig")
+}
+
+fn uid(prefix: &str) -> String {
+    format!("{prefix}_{}", uuid::Uuid::new_v4().simple())
+}
+
+async fn pool() -> PgPool {
+    let url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5433/meetcal".to_string());
+    PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .expect("connect test db")
+}
+
+fn paid_event(event_id: &str, app_user_id: &str) -> Value {
+    json!({
+        "event": {
+            "id": event_id,
+            "type": "INITIAL_PURCHASE",
+            "app_user_id": app_user_id,
+            "store": "APP_STORE",
+            "period_type": "NORMAL",
+            "product_id": "com.meetcal.monthly",
+        },
+        "api_version": "1.0",
+    })
+}
+
+async fn post_webhook(client: &reqwest::Client, addr: &str, auth: &str, body: &Value) -> u16 {
+    client
+        .post(format!("{addr}/webhooks/revenuecat"))
+        .header("Authorization", auth)
+        .json(body)
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
+async fn get_referral(client: &reqwest::Client, addr: &str, sub: &str) -> Value {
+    client
+        .get(format!("{addr}/users/me/referral"))
+        .bearer_auth(token(sub))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn webhook_rejects_bad_auth() {
+    configure_secrets();
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+
+    let status = post_webhook(
+        &client,
+        &app.address,
+        "wrong-secret",
+        &paid_event(&uid("evt"), &uid("user")),
+    )
+    .await;
+    assert_eq!(status, 401);
+}
+
+#[tokio::test]
+async fn webhook_is_idempotent_on_duplicate_event_id() {
+    configure_secrets();
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+    let db = pool().await;
+
+    let event_id = uid("evt");
+    let user = uid("user");
+    let body = paid_event(&event_id, &user);
+
+    let first = post_webhook(&client, &app.address, WEBHOOK_SECRET, &body).await;
+    let second = post_webhook(&client, &app.address, WEBHOOK_SECRET, &body).await;
+    assert_eq!(first, 200);
+    assert_eq!(second, 200);
+
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*)::BIGINT FROM subscription_events WHERE event_id = $1")
+            .bind(&event_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(count, 1, "duplicate event_id must only be stored once");
+}
+
+#[tokio::test]
+async fn web_store_events_do_not_qualify() {
+    configure_secrets();
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+
+    let referrer = uid("referrer");
+    let referred = uid("referred");
+
+    // Referrer gets a code; referred redeems it (pending).
+    let code = get_referral(&client, &app.address, &referrer).await["code"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    redeem(&client, &app.address, &referred, &code).await;
+
+    // A web-billing paid event must NOT promote the referral.
+    let mut body = paid_event(&uid("evt"), &referred);
+    body["event"]["store"] = json!("rc_billing");
+    assert_eq!(
+        post_webhook(&client, &app.address, WEBHOOK_SECRET, &body).await,
+        200
+    );
+
+    let referral = get_referral(&client, &app.address, &referrer).await;
+    assert_eq!(referral["pending_count"], 1, "should still be pending");
+    assert_eq!(referral["qualifying_count"], 0);
+}
+
+async fn redeem(client: &reqwest::Client, addr: &str, sub: &str, code: &str) -> reqwest::Response {
+    client
+        .post(format!("{addr}/users/me/referral/redeem"))
+        .bearer_auth(token(sub))
+        .json(&json!({ "code": code }))
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn redeem_rejections() {
+    configure_secrets();
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+
+    let alice = uid("alice");
+    let bob = uid("bob");
+    let carol = uid("carol");
+
+    let alice_code = get_referral(&client, &app.address, &alice).await["code"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Self-referral.
+    let resp = redeem(&client, &app.address, &alice, &alice_code).await;
+    assert_eq!(resp.status(), 400);
+    assert_eq!(
+        resp.json::<Value>().await.unwrap()["error"],
+        "self_referral"
+    );
+
+    // Unknown code.
+    let resp = redeem(&client, &app.address, &bob, "ZZZZZZZZ").await;
+    assert_eq!(resp.status(), 404);
+    assert_eq!(resp.json::<Value>().await.unwrap()["error"], "invalid_code");
+
+    // Valid redeem, then double-redeem.
+    let resp = redeem(&client, &app.address, &carol, &alice_code).await;
+    assert_eq!(resp.status(), 200);
+    let resp = redeem(&client, &app.address, &carol, &alice_code).await;
+    assert_eq!(resp.status(), 409);
+    assert_eq!(
+        resp.json::<Value>().await.unwrap()["error"],
+        "already_redeemed"
+    );
+}
+
+/// Full lifecycle: 5 referred users pay, the hold clears, qualification runs,
+/// one reward month is minted. Then a refund on a qualified referral reverses
+/// the still-earned reward and does not double-mint.
+#[tokio::test]
+async fn qualification_minting_and_reversal() {
+    configure_secrets();
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+    let db = pool().await;
+
+    let referrer = uid("ref");
+    let code = get_referral(&client, &app.address, &referrer).await["code"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // 5 referred users redeem + pay.
+    let mut referred_users = Vec::new();
+    for _ in 0..5 {
+        let u = uid("rd");
+        assert_eq!(redeem(&client, &app.address, &u, &code).await.status(), 200);
+        assert_eq!(
+            post_webhook(
+                &client,
+                &app.address,
+                WEBHOOK_SECRET,
+                &paid_event(&uid("evt"), &u)
+            )
+            .await,
+            200
+        );
+        referred_users.push(u);
+    }
+
+    // All 5 should be qualifying now.
+    let referral = get_referral(&client, &app.address, &referrer).await;
+    assert_eq!(referral["qualifying_count"], 5);
+    assert_eq!(referral["qualified_count"], 0);
+
+    // Age the subscription starts past the 30-day hold.
+    sqlx::query(
+        "UPDATE referrals SET subscription_started_at = now() - interval '40 days' \
+         WHERE referrer_user_id = $1",
+    )
+    .bind(&referrer)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    // Run qualification: promote 5 -> qualified, mint 1 reward.
+    let run = run_qualification(&client, &app.address, JOB_SECRET).await;
+    assert_eq!(run.status(), 200);
+    let run_body = run.json::<Value>().await.unwrap();
+    assert_eq!(run_body["promoted"], 5);
+    assert_eq!(run_body["minted"], 1);
+
+    let referral = get_referral(&client, &app.address, &referrer).await;
+    assert_eq!(referral["qualified_count"], 5);
+    assert_eq!(referral["reward_months_available"], 1);
+    assert_eq!(referral["rewards"].as_array().unwrap().len(), 1);
+    assert_eq!(referral["rewards"][0]["status"], "earned");
+
+    // Re-running qualification must NOT mint again (derived formula).
+    let run2 = run_qualification(&client, &app.address, JOB_SECRET).await;
+    assert_eq!(run2.json::<Value>().await.unwrap()["minted"], 0);
+
+    // Refund one qualified referral -> disqualify + reverse the earned reward.
+    let mut refund = paid_event(&uid("evt"), &referred_users[0]);
+    refund["event"]["type"] = json!("REFUND");
+    assert_eq!(
+        post_webhook(&client, &app.address, WEBHOOK_SECRET, &refund).await,
+        200
+    );
+
+    let referral = get_referral(&client, &app.address, &referrer).await;
+    assert_eq!(referral["qualified_count"], 4);
+    assert_eq!(
+        referral["reward_months_available"], 0,
+        "earned reward should be clawed back"
+    );
+
+    // The reward row is now reversed, not deleted.
+    let reversed: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::BIGINT FROM reward_ledger WHERE user_id = $1 AND status = 'reversed'",
+    )
+    .bind(&referrer)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(reversed, 1);
+}
+
+#[tokio::test]
+async fn claim_returns_503_when_platform_unconfigured() {
+    configure_secrets();
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+    let db = pool().await;
+
+    // Mint a reward directly for a user (backend-only insert; superuser bypasses RLS).
+    let user = uid("claimer");
+    let reward_id: i64 = sqlx::query_scalar(
+        "INSERT INTO reward_ledger (user_id, status, idempotency_key) \
+         VALUES ($1, 'earned', $2) RETURNING id",
+    )
+    .bind(&user)
+    .bind(uid("mint"))
+    .fetch_one(&db)
+    .await
+    .unwrap();
+
+    // No APPLE_* / GOOGLE_PLAY_* env configured -> 503, and the reward is untouched.
+    for platform in ["ios", "android"] {
+        let resp = client
+            .post(format!(
+                "{}/users/me/rewards/{reward_id}/claim",
+                app.address
+            ))
+            .bearer_auth(token(&user))
+            .json(&json!({ "platform": platform }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 503, "unconfigured {platform} must 503");
+        assert_eq!(
+            resp.json::<Value>().await.unwrap()["error"],
+            "not_configured"
+        );
+    }
+
+    // Status unchanged.
+    let status: String = sqlx::query_scalar("SELECT status FROM reward_ledger WHERE id = $1")
+        .bind(reward_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(status, "earned");
+}
+
+async fn run_qualification(
+    client: &reqwest::Client,
+    addr: &str,
+    secret: &str,
+) -> reqwest::Response {
+    client
+        .post(format!("{addr}/internal/referrals/run-qualification"))
+        .header("X-Internal-Job-Secret", secret)
+        .send()
+        .await
+        .unwrap()
+}

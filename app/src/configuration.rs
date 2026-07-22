@@ -7,6 +7,27 @@ pub struct Settings {
     pub database: DatabaseSettings,
     pub application_host: String,
     pub application_port: u16,
+    #[serde(default)]
+    pub auth: AuthSettings,
+}
+
+/// Clerk JWT verification settings.
+///
+/// `jwt_verification_enabled` is the master switch. It ships DISABLED in the
+/// checked-in `configuration.yaml` so the integration tests (which sign nothing)
+/// keep working; production MUST enable it — see `configuration.yaml` for how.
+#[derive(Deserialize, Clone, Default)]
+pub struct AuthSettings {
+    // Defaults (via `Default`): verification OFF, empty url/issuer. Safe for
+    // tests; production must set these in configuration.local.yaml.
+    #[serde(default)]
+    pub jwt_verification_enabled: bool,
+    /// Clerk JWKS endpoint, e.g. `https://<subdomain>.clerk.accounts.dev/.well-known/jwks.json`.
+    #[serde(default)]
+    pub jwks_url: String,
+    /// Expected `iss` claim, e.g. `https://<subdomain>.clerk.accounts.dev`.
+    #[serde(default)]
+    pub issuer: String,
 }
 
 #[derive(Deserialize)]
