@@ -510,6 +510,9 @@ class RecordsScraper:
     
     def send_slack_notification(self, inserted: List[Dict[str, Any]], updated: List[Dict[str, Any]], is_dry_run: bool = False):
         """Send Slack notification with upsert summary."""
+        if is_dry_run or not inserted and not updated:
+            return
+
         if not self.slack_webhook_url:
             print("⚠ Slack webhook not configured, skipping notification")
             return
@@ -518,12 +521,8 @@ class RecordsScraper:
         title = "USA Weightlifting Records Postgres Update (DRY RUN)" if is_dry_run else "USA Weightlifting Records Postgres Update"
         
         # Summary
-        total_changes = len(inserted) + len(updated)
-        if total_changes == 0:
-            message = f"{title}\nNo changes detected" + (" (dry-run)" if is_dry_run else "")
-        else:
-            action = "would be " if is_dry_run else ""
-            message = f"{title}\n*{len(inserted)}* new records {action}inserted, *{len(updated)}* records {action}updated".strip()
+        action = "would be " if is_dry_run else ""
+        message = f"{title}\n*{len(inserted)}* new records {action}inserted, *{len(updated)}* records {action}updated".strip()
         
         # Inserted records
         if inserted:

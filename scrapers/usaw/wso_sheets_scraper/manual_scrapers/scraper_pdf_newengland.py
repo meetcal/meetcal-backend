@@ -286,7 +286,7 @@ class WSORecordsNewEnglandScraper:
         total_changes = len(inserted) + len(updated)
         
         if total_changes == 0:
-            message = f"*{title}*\n\nNo changes detected"
+            return
         else:
             message = f"*{title}*\n\n*{len(inserted)}* new records, *{len(updated)}* updated records"
         

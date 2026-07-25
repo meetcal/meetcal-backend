@@ -231,6 +231,13 @@ def format_stats(stats: dict[str, dict[str, int]]) -> str:
     )
 
 
+def has_database_changes(stats: dict[str, dict[str, int]]) -> bool:
+    return any(
+        value["inserted"] + value["updated"] > 0
+        for value in stats.values()
+    )
+
+
 def counts_by_gender(rows: list[dict[str, Any]]) -> dict[str, int]:
     counts: defaultdict[str, int] = defaultdict(int)
     for row in rows:
@@ -264,7 +271,8 @@ def main() -> int:
     stats = ingest(rows)
     message = f"USAMW national records update complete\n{len(rows)} parsed records\n{format_stats(stats)}"
     print(message)
-    post_slack(message)
+    if has_database_changes(stats):
+        post_slack(message)
     return 0
 
 

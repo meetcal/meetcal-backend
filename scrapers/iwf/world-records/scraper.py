@@ -391,11 +391,9 @@ class IWFWorldRecordsScraper:
             modified_records = changes.get('modified', [])
             new_count = len(new_records)
             modified_count = len(modified_records)
-            
-            # Build message text
+
             if new_count == 0 and modified_count == 0:
-                # No changes
-                message_text = "IWF Postgres scraper ran successfully. No new records or updates."
+                return False
             else:
                 # Build list of updated records
                 message_lines = []
