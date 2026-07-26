@@ -5,3 +5,20 @@ database:
   port: 5432
   username: "postgres"
   database_name: "meetcal"
+auth:
+  # !!! SECURITY — FAILS CLOSED !!!
+  # Verification is ON by default. The values below are PLACEHOLDERS; production
+  # MUST override jwks_url/issuer with the real Clerk instance values via
+  # `src/configuration.local.yaml` (git-ignored):
+  #
+  #   auth:
+  #     jwks_url: "https://<subdomain>.clerk.accounts.dev/.well-known/jwks.json"
+  #     issuer:   "https://<subdomain>.clerk.accounts.dev"
+  #
+  # Startup PANICS if verification is on while jwks_url/issuer are blank, and
+  # ALSO panics if verification is set false unless APP_ALLOW_UNVERIFIED_JWT=1 is
+  # explicitly set (test harness / local dev only) — so a missing prod override
+  # never degrades to running unauthenticated.
+  jwt_verification_enabled: true
+  jwks_url: "https://REPLACE-ME.clerk.accounts.dev/.well-known/jwks.json"
+  issuer: "https://REPLACE-ME.clerk.accounts.dev"

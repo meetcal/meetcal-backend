@@ -27,3 +27,6 @@ MEETCAL_BACKEND_ROOT=/home/maddisen/dev/meetcal-llc/meetcal-backend
 40 2 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh wso-records >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/wso-records.log 2>&1
 25 3 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh entries >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/entries.log 2>&1
 55 3 * * 1 /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh upcoming-meets-slack >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/upcoming-meets-slack.log 2>&1
+# Referral rewards: promote matured qualifying referrals to qualified and mint
+# reward months (idempotent; calls the API's internal endpoint). Runs daily.
+30 4 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/app/deploy/run-qualification.sh >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/run-qualification.log 2>&1

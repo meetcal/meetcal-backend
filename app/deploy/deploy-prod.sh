@@ -37,11 +37,38 @@ for optional_var in \
   SLACK_SIGNING_SECRET \
   SLACK_MEET_AUTOMATION_CHANNEL \
   SLACK_ENTRIES_CHANNEL \
-  MEET_AUTOMATION_SLACK_ALLOWED_USERS; do
+  MEET_AUTOMATION_SLACK_ALLOWED_USERS \
+  APP_AUTH__JWKS_URL \
+  APP_AUTH__ISSUER \
+  APP_AUTH__JWT_VERIFICATION_ENABLED \
+  APP_ALLOW_UNVERIFIED_JWT \
+  REVENUECAT_WEBHOOK_SECRET \
+  INTERNAL_JOB_SECRET \
+  REFERRAL_SHARE_BASE_URL \
+  REVENUECAT_SECRET_API_KEY \
+  APPLE_BUNDLE_ID \
+  APPLE_IAP_KEY_ID \
+  APPLE_IAP_PRIVATE_KEY \
+  APPLE_IAP_OFFER_IDS \
+  GOOGLE_PLAY_PACKAGE_NAME \
+  GOOGLE_PLAY_SERVICE_ACCOUNT_JSON; do
   if [[ -n "${!optional_var:-}" ]]; then
     env_args+=(-e "${optional_var}")
   fi
 done
+
+# Fail closed at deploy time: with JWT verification defaulting to on, the
+# container must receive real Clerk settings (via APP_AUTH__JWKS_URL /
+# APP_AUTH__ISSUER in the sourced .env), otherwise the API starts up trying to
+# fetch JWKS from the configuration.yaml placeholders and every authenticated
+# route fails. Catch that here rather than after the container is live.
+if [[ -z "${APP_AUTH__JWKS_URL:-}" || -z "${APP_AUTH__ISSUER:-}" ]] \
+  && [[ "${APP_ALLOW_UNVERIFIED_JWT:-}" != "1" ]]; then
+  echo >&2 "Error: APP_AUTH__JWKS_URL and APP_AUTH__ISSUER must be set in ${ENV_FILE}"
+  echo >&2 "       (Clerk JWKS + issuer). Set APP_ALLOW_UNVERIFIED_JWT=1 only for"
+  echo >&2 "       explicitly unauthenticated local/testing deploys."
+  exit 1
+fi
 
 docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 

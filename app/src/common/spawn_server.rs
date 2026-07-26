@@ -11,6 +11,15 @@ pub struct TestApp {
 pub async fn spawn_app() -> TestApp {
     crate::load_env();
 
+    // TEST HARNESS ONLY: explicitly opt out of Clerk JWT signature verification
+    // so the unsigned Clerk-shaped tokens the tests use are accepted. Production
+    // never sets this, and a config with verification disabled but this env unset
+    // fails closed (panics) at startup. See routes::users::auth.
+    // SAFETY: set once, to a constant, before any server starts.
+    unsafe {
+        std::env::set_var("APP_ALLOW_UNVERIFIED_JWT", "1");
+    }
+
     let database_url = match std::env::var("DATABASE_URL") {
         Ok(database_url) => database_url,
         Err(_) => {

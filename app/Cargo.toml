@@ -26,6 +26,11 @@ reqwest = { version = "0.13.4", default-features = false, features = [
   "json",
   "rustls",
 ] }
+jsonwebtoken = "9.3.1"
+chrono = { version = "0.4.42", features = ["clock", "serde"] }
+uuid = { version = "1.18.1", features = ["v4"] }
+# ECDSA (P-256) signing for Apple StoreKit promotional-offer signatures.
+p256 = { version = "0.13.2", features = ["ecdsa", "pkcs8", "pem"] }
 
 [dependencies.sqlx]
 version = "0.9.0"
@@ -37,6 +42,7 @@ features = [
   "postgres",
   "uuid",
   "chrono",
+  "json",
   "migrate",
 ]
 

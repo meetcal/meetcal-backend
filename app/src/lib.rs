@@ -3,6 +3,15 @@ pub mod configuration;
 pub mod error;
 pub mod routes;
 
+use crate::configuration::get_configuration;
+use crate::routes::referrals::{
+    ReferralConfig, claim::claim_reward, claim::release_ios_offer, get_referral::get_referral,
+    redeem::redeem, run_qualification::run_qualification, webhook::revenuecat_webhook,
+};
+use crate::routes::scrapers::{
+    SlackConfig, interactions::slack_interactions, slack_commands::slack_commands,
+};
+use crate::routes::users::auth::AuthConfig;
 use crate::routes::{
     clubs::{get_athletes_by_club::get_athletes_by_club, get_meet_stats::get_meet_stats},
     comp_data::{
@@ -23,12 +32,9 @@ use crate::routes::{
         },
     },
 };
-use crate::routes::scrapers::{
-    SlackConfig, interactions::slack_interactions, slack_commands::slack_commands,
-};
 use axum::{
-    http::{HeaderValue, Method},
     Router,
+    http::{HeaderValue, Method},
     routing::{get, patch, post, put},
 };
 pub use error::AppError;
@@ -61,6 +67,8 @@ use tower_http::timeout::TimeoutLayer;
 pub struct AppState {
     pub db: PgPool,
     pub slack: SlackConfig,
+    pub auth: AuthConfig,
+    pub referrals: ReferralConfig,
 }
 
 pub fn load_env() {
@@ -78,7 +86,23 @@ pub async fn run(listener: TcpListener, db: PgPool) {
             "http://localhost:3000".parse::<HeaderValue>().unwrap(),
             "http://127.0.0.1:3000".parse::<HeaderValue>().unwrap(),
         ])
-        .allow_methods([Method::GET]);
+        // Referral redeem + reward claim are browser-reachable POSTs, so allow
+        // POST (and the Authorization / Content-Type headers they carry).
+        // The webhook and internal-job POSTs are server-to-server (not CORS).
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+        ]);
+
+    // Load auth (Clerk JWT verification) settings from configuration. Referral
+    // secrets/creds come from the environment (mirrors SlackConfig::from_env).
+    let auth = AuthConfig::from_settings(
+        &get_configuration()
+            .expect("failed to read configuration for auth settings")
+            .auth,
+    );
+    let referrals = ReferralConfig::from_env();
 
     let app = Router::new()
         .route("/health", get(health))
@@ -122,6 +146,18 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         )
         .route("/scrapers/slack/commands", post(slack_commands))
         .route("/scrapers/slack/interactions", post(slack_interactions))
+        .route("/users/me/referral", get(get_referral))
+        .route("/users/me/referral/redeem", post(redeem))
+        .route("/users/me/rewards/{reward_id}/claim", post(claim_reward))
+        .route(
+            "/users/me/rewards/{reward_id}/release-offer",
+            post(release_ios_offer),
+        )
+        .route("/webhooks/revenuecat", post(revenuecat_webhook))
+        .route(
+            "/internal/referrals/run-qualification",
+            post(run_qualification),
+        )
         .layer(CompressionLayer::new())
         .layer(cors)
         .layer(TimeoutLayer::with_status_code(
@@ -131,6 +167,8 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .with_state(AppState {
             db,
             slack: SlackConfig::from_env(),
+            auth,
+            referrals,
         });
 
     axum::serve(listener, app).await.unwrap();

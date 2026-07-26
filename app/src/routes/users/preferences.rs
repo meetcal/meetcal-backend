@@ -1,7 +1,4 @@
-use crate::{
-    AppError, AppState,
-    routes::users::auth::{set_request_user, user_id_from_headers},
-};
+use crate::{AppError, AppState, routes::users::auth::set_request_user};
 use axum::{Json, extract::State, http::HeaderMap};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,7 +28,7 @@ pub async fn get_preferences(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<UserPreferencesResponse>, AppError> {
-    let user_id = user_id_from_headers(&headers)?;
+    let user_id = state.auth.user_id(&headers).await?;
     let mut tx = state.db.begin().await?;
     set_request_user(&mut tx, &user_id).await?;
 
@@ -72,7 +69,7 @@ pub async fn patch_auto_unsave(
     headers: HeaderMap,
     Json(body): Json<AutoUnsaveRequest>,
 ) -> Result<Json<UserPreferencesResponse>, AppError> {
-    let user_id = user_id_from_headers(&headers)?;
+    let user_id = state.auth.user_id(&headers).await?;
     let updated_at = now_millis()?;
     let convex_id = format!("user_preferences:{user_id}");
     let mut tx = state.db.begin().await?;
