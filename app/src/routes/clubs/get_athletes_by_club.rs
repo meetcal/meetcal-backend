@@ -24,7 +24,11 @@ pub struct ClubsAthletes {
 ///
 /// curl 'https://api.meetcal.app/clubs/athletes?&club=POWER%20AND%20GRACE%20PERFORMANCE%2E' | jq .
 ///
-/// This endpoint takes club name and returns athletes from club in the completed meets
+/// This endpoint takes a club name and returns every known meet registration for that club.
+///
+/// Registrations must not be restricted by the current meet status. Historical reporting
+/// uses this endpoint to associate results with the club an athlete represented at each meet,
+/// and imported result meets are not guaranteed to have a matching `meets` status row.
 ///
 /// {
 ///  "athletes": [
@@ -48,9 +52,6 @@ pub async fn get_athletes_by_club(
         SELECT name, meet, club, gender, weight_class, entry_total, member_id
         FROM athletes
         WHERE club = $1
-            AND meet IN (
-                SELECT name FROM meets WHERE status = 'completed'
-            )
         ORDER BY name desc
         "#,
     )

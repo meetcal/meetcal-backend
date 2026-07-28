@@ -3,6 +3,9 @@ pub mod configuration;
 pub mod error;
 pub mod routes;
 
+use crate::routes::scrapers::{
+    SlackConfig, interactions::slack_interactions, slack_commands::slack_commands,
+};
 use crate::routes::{
     clubs::{get_athletes_by_club::get_athletes_by_club, get_meet_stats::get_meet_stats},
     comp_data::{
@@ -22,13 +25,11 @@ use crate::routes::{
             delete_saved_session, delete_saved_sessions, get_saved_sessions, put_saved_session,
         },
     },
-};
-use crate::routes::scrapers::{
-    SlackConfig, interactions::slack_interactions, slack_commands::slack_commands,
+    wsos::get_athletes_by_wso::get_athletes_by_wso,
 };
 use axum::{
-    http::{HeaderValue, Method},
     Router,
+    http::{HeaderValue, Method},
     routing::{get, patch, post, put},
 };
 pub use error::AppError;
@@ -90,6 +91,7 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .route("/data/wso/", get(get_wso_list))
         .route("/data/wso/age-groups", get(get_wso_age_groups))
         .route("/data/wso/records", get(get_wso_records))
+        .route("/wsos/athletes", get(get_athletes_by_wso))
         .route("/data/standards", get(get_standards))
         .route("/data/qualifying-totals", get(get_qualifying_totals))
         .route("/data/intl-rankings", get(get_intl_rankings))
