@@ -3,10 +3,15 @@ pub mod configuration;
 pub mod error;
 pub mod routes;
 
+use crate::routes::scrapers::{
+    SlackConfig, interactions::slack_interactions, slack_commands::slack_commands,
+};
 use crate::routes::{
     clubs::{get_athletes_by_club::get_athletes_by_club, get_meet_stats::get_meet_stats},
     comp_data::{
-        get_adaptive_records::get_adaptive_records, get_national_rankings::get_national_rankings,
+        get_adaptive_records::get_adaptive_records,
+        get_national_ranking_by_year::get_national_rankings_by_year,
+        get_national_rankings::get_national_rankings,
     },
     lifting_results::{
         get_lifting_results::get_lifting_results,
@@ -23,12 +28,9 @@ use crate::routes::{
         },
     },
 };
-use crate::routes::scrapers::{
-    SlackConfig, interactions::slack_interactions, slack_commands::slack_commands,
-};
 use axum::{
-    http::{HeaderValue, Method},
     Router,
+    http::{HeaderValue, Method},
     routing::{get, patch, post, put},
 };
 pub use error::AppError;
@@ -94,6 +96,10 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .route("/data/qualifying-totals", get(get_qualifying_totals))
         .route("/data/intl-rankings", get(get_intl_rankings))
         .route("/data/nat-rankings", get(get_national_rankings))
+        .route(
+            "/data/nat-rankings-year",
+            get(get_national_rankings_by_year),
+        )
         .route("/data/adaptive", get(get_adaptive_records))
         .route("/meets", get(list_meets_next_3months))
         .route("/meets/details", get(get_meet_details))
