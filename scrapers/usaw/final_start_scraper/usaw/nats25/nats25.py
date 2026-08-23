@@ -356,7 +356,10 @@ def main():
     save_to_csv(parsed_data, output_path)
     
     print(f"Successfully processed {len(parsed_data)} entries from the raw text.")
-    print(f"Total lines in raw text: {len([line for line in text.split('\n') if line.strip() and line[0].isdigit()])}")
+    numbered_lines = [
+        line for line in text.splitlines() if line.strip() and line[0].isdigit()
+    ]
+    print(f"Total lines in raw text: {len(numbered_lines)}")
 
 if __name__ == "__main__":
-    main() 
+    main()
