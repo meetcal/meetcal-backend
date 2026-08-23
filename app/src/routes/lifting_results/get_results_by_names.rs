@@ -43,7 +43,11 @@ pub async fn get_results_by_names(
     State(state): State<AppState>,
     Query(params): Query<ResultsByNamesParams>,
 ) -> Result<Json<Vec<LiftingResults>>, AppError> {
-    let normalized_names: Vec<String> = params.names.iter().map(|name| normalize_name(name)).collect();
+    let normalized_names: Vec<String> = params
+        .names
+        .iter()
+        .map(|name| normalize_name(name))
+        .collect();
 
     let rows = sqlx::query_as::<_, LiftingResults>(
         r#"

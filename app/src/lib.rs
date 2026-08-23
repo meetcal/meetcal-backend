@@ -53,7 +53,7 @@ use routes::{
 };
 use sqlx::PgPool;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
@@ -63,6 +63,7 @@ use tower_http::timeout::TimeoutLayer;
 pub struct AppState {
     pub db: PgPool,
     pub slack: SlackConfig,
+    pub auth: Option<Arc<routes::users::auth::AuthVerifier>>,
 }
 
 pub fn load_env() {
@@ -73,6 +74,21 @@ pub fn load_env() {
 }
 
 pub async fn run(listener: TcpListener, db: PgPool) {
+    let auth = routes::users::auth::AuthVerifier::from_env()
+        .unwrap_or_else(|error| panic!("invalid Clerk authentication configuration: {error}"));
+    if auth.is_none() {
+        eprintln!(
+            "warning: Clerk authentication is not configured; protected user routes will reject all requests"
+        );
+    }
+    run_with_auth(listener, db, auth).await;
+}
+
+pub async fn run_with_auth(
+    listener: TcpListener,
+    db: PgPool,
+    auth: Option<Arc<routes::users::auth::AuthVerifier>>,
+) {
     let cors = CorsLayer::new()
         .allow_origin([
             "https://meetcal.app".parse::<HeaderValue>().unwrap(),
@@ -137,6 +153,7 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .with_state(AppState {
             db,
             slack: SlackConfig::from_env(),
+            auth,
         });
 
     axum::serve(listener, app).await.unwrap();

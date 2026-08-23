@@ -9,13 +9,6 @@ use serde_json::json;
 
 mod support;
 
-const SAVED_SESSIONS_TOKEN: &str = "e30.eyJzdWIiOiJ0ZXN0LXVzZXItc2F2ZWQtc2Vzc2lvbnMifQ.sig";
-const SAVED_SESSIONS_BULK_TOKEN: &str =
-    "e30.eyJzdWIiOiJ0ZXN0LXVzZXItc2F2ZWQtc2Vzc2lvbnMtYnVsayJ9.sig";
-const PREFERENCES_DEFAULT_TOKEN: &str =
-    "e30.eyJzdWIiOiJ0ZXN0LXVzZXItcHJlZmVyZW5jZXMtZGVmYXVsdCJ9.sig";
-const PREFERENCES_PATCH_TOKEN: &str = "e30.eyJzdWIiOiJ0ZXN0LXVzZXItcHJlZmVyZW5jZXMtcGF0Y2gifQ.sig";
-
 #[tokio::test]
 async fn success_saved_sessions_lifecycle() {
     let app = support::spawn_test_app().await;
@@ -26,7 +19,7 @@ async fn success_saved_sessions_lifecycle() {
 
     let save_response = client
         .put(&session_url)
-        .bearer_auth(SAVED_SESSIONS_TOKEN)
+        .bearer_auth(support::test_token("test-user-saved-sessions"))
         .json(&json!({
             "meet": "2026 USA Weightlifting National Championships, Powered by Rogue Fitness",
             "session_number": 45.0,
@@ -49,7 +42,7 @@ async fn success_saved_sessions_lifecycle() {
 
     let get_response = client
         .get(&base_url)
-        .bearer_auth(SAVED_SESSIONS_TOKEN)
+        .bearer_auth(support::test_token("test-user-saved-sessions"))
         .send()
         .await
         .unwrap();
@@ -73,7 +66,7 @@ async fn success_saved_sessions_lifecycle() {
 
     let delete_response = client
         .delete(&session_url)
-        .bearer_auth(SAVED_SESSIONS_TOKEN)
+        .bearer_auth(support::test_token("test-user-saved-sessions"))
         .send()
         .await
         .unwrap();
@@ -93,7 +86,7 @@ async fn success_delete_saved_sessions_for_meet() {
 
     let save_response = client
         .put(&session_url)
-        .bearer_auth(SAVED_SESSIONS_BULK_TOKEN)
+        .bearer_auth(support::test_token("test-user-saved-sessions-bulk"))
         .json(&json!({
             "meet": "2026 USA Weightlifting National Championships, Powered by Rogue Fitness",
             "session_number": 45.0,
@@ -109,7 +102,7 @@ async fn success_delete_saved_sessions_for_meet() {
         .delete(format!(
             "{base_url}?meet=2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness"
         ))
-        .bearer_auth(SAVED_SESSIONS_BULK_TOKEN)
+        .bearer_auth(support::test_token("test-user-saved-sessions-bulk"))
         .send()
         .await
         .unwrap();
@@ -136,7 +129,7 @@ async fn success_get_default_preferences() {
     let client = reqwest::Client::new();
     let response = client
         .get(format!("{}/users/me/preferences", app.address))
-        .bearer_auth(PREFERENCES_DEFAULT_TOKEN)
+        .bearer_auth(support::test_token("test-user-preferences-default"))
         .send()
         .await
         .unwrap();
@@ -153,7 +146,7 @@ async fn success_patch_auto_unsave_preferences() {
     let client = reqwest::Client::new();
     let response = client
         .patch(format!("{}/users/me/preferences/auto-unsave", app.address))
-        .bearer_auth(PREFERENCES_PATCH_TOKEN)
+        .bearer_auth(support::test_token("test-user-preferences-patch"))
         .json(&json!({ "enabled": true }))
         .send()
         .await
@@ -169,6 +162,55 @@ async fn success_patch_auto_unsave_preferences() {
 async fn fail_preferences_without_auth() {
     let app = support::spawn_test_app().await;
     let response = reqwest::get(format!("{}/users/me/preferences", app.address))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 401);
+}
+
+#[tokio::test]
+async fn fail_preferences_with_forged_unsigned_token() {
+    let app = support::spawn_test_app().await;
+    let response = reqwest::Client::new()
+        .get(format!("{}/users/me/preferences", app.address))
+        .bearer_auth("e30.eyJzdWIiOiJhdHRhY2tlciJ9.forged")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 401);
+}
+
+#[tokio::test]
+async fn fail_preferences_with_expired_token() {
+    let app = support::spawn_test_app().await;
+    let response = reqwest::Client::new()
+        .get(format!("{}/users/me/preferences", app.address))
+        .bearer_auth(support::test_token_with(
+            "test-user-expired",
+            "https://clerk.test",
+            "https://meetcal.app",
+            -300,
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 401);
+}
+
+#[tokio::test]
+async fn fail_preferences_with_untrusted_authorized_party() {
+    let app = support::spawn_test_app().await;
+    let response = reqwest::Client::new()
+        .get(format!("{}/users/me/preferences", app.address))
+        .bearer_auth(support::test_token_with(
+            "test-user-wrong-azp",
+            "https://clerk.test",
+            "https://evil.example",
+            300,
+        ))
+        .send()
         .await
         .unwrap();
 

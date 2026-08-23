@@ -39,6 +39,9 @@ struct CachedPackage {
 /// Process-wide cache of pre-serialized package bodies, keyed by meet + cutoff.
 static PACKAGE_CACHE: LazyLock<RwLock<HashMap<String, CachedPackage>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
+const MAX_PACKAGE_CACHE_ENTRIES: usize = 32;
+const MAX_PACKAGE_CACHE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_CACHED_PACKAGE_BYTES: usize = 8 * 1024 * 1024;
 
 fn cached_package(key: &str) -> Option<Bytes> {
     let cache = PACKAGE_CACHE.read().ok()?;
@@ -47,10 +50,25 @@ fn cached_package(key: &str) -> Option<Bytes> {
 }
 
 fn store_package(key: &str, body: Bytes) {
+    if body.len() > MAX_CACHED_PACKAGE_BYTES {
+        return;
+    }
     if let Ok(mut cache) = PACKAGE_CACHE.write() {
-        // Only a couple of meets are ever active at once; drop stale entries so the
-        // map can't accumulate old meets over time.
         cache.retain(|_, entry| entry.inserted.elapsed() < *PACKAGE_CACHE_TTL);
+        cache.remove(key);
+        while cache.len() >= MAX_PACKAGE_CACHE_ENTRIES
+            || cache.values().map(|entry| entry.body.len()).sum::<usize>() + body.len()
+                > MAX_PACKAGE_CACHE_BYTES
+        {
+            let Some(oldest_key) = cache
+                .iter()
+                .max_by_key(|(_, entry)| entry.inserted.elapsed())
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            cache.remove(&oldest_key);
+        }
         cache.insert(
             key.to_string(),
             CachedPackage {
@@ -58,6 +76,71 @@ fn store_package(key: &str, body: Bytes) {
                 inserted: Instant::now(),
             },
         );
+    }
+}
+
+fn is_valid_iso_date(value: &str) -> bool {
+    let mut parts = value.split('-');
+    let (Some(year), Some(month), Some(day), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    if year.len() != 4 || month.len() != 2 || day.len() != 2 {
+        return false;
+    }
+    let (Ok(year), Ok(month), Ok(day)) = (
+        year.parse::<u32>(),
+        month.parse::<u32>(),
+        day.parse::<u32>(),
+    ) else {
+        return false;
+    };
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days).contains(&day)
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn validates_real_iso_dates() {
+        assert!(is_valid_iso_date("2024-02-29"));
+        assert!(is_valid_iso_date("2026-08-23"));
+        assert!(!is_valid_iso_date("2025-02-29"));
+        assert!(!is_valid_iso_date("2026-13-01"));
+        assert!(!is_valid_iso_date("not-a-date"));
+    }
+
+    #[test]
+    fn package_cache_never_exceeds_entry_limit() {
+        PACKAGE_CACHE.write().unwrap().clear();
+        for index in 0..(MAX_PACKAGE_CACHE_ENTRIES + 5) {
+            store_package(&format!("meet-{index}"), Bytes::from_static(b"{}"));
+        }
+        assert_eq!(
+            PACKAGE_CACHE.read().unwrap().len(),
+            MAX_PACKAGE_CACHE_ENTRIES
+        );
+        PACKAGE_CACHE.write().unwrap().clear();
+    }
+
+    #[test]
+    fn oversized_packages_are_not_cached() {
+        PACKAGE_CACHE.write().unwrap().clear();
+        store_package(
+            "oversized",
+            Bytes::from(vec![0; MAX_CACHED_PACKAGE_BYTES + 1]),
+        );
+        assert!(!PACKAGE_CACHE.read().unwrap().contains_key("oversized"));
     }
 }
 
@@ -306,6 +389,14 @@ pub async fn get_meet_package(
     State(state): State<AppState>,
     Query(params): Query<MeetPackageParams>,
 ) -> Result<Response, AppError> {
+    if let Some(cutoff) = params.history_cutoff_date.as_deref()
+        && !is_valid_iso_date(cutoff)
+    {
+        return Err(AppError::Validation(
+            "history_cutoff_date must be a valid YYYY-MM-DD date".to_string(),
+        ));
+    }
+
     let cache_key = format!(
         "{}|{}",
         params.meet,

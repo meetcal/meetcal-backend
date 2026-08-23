@@ -19,6 +19,10 @@ set -a
 source "${ENV_FILE}"
 set +a
 
+: "${CLERK_JWKS_URL:?CLERK_JWKS_URL must be set in the production env file}"
+: "${CLERK_ISSUER:?CLERK_ISSUER must be set in the production env file}"
+: "${CLERK_AUTHORIZED_PARTIES:?CLERK_AUTHORIZED_PARTIES must be set in the production env file}"
+
 SCRAPERS_MOUNT="/srv/meetcal-backend/scrapers"
 MEET_AUTOMATION_WATCHES_PATH="${MEET_AUTOMATION_WATCHES_PATH:-${SCRAPERS_MOUNT}/usaw/meet_automation/watches.json}"
 ENTRIES_TARGETS_PATH="${ENTRIES_TARGETS_PATH:-${SCRAPERS_MOUNT}/usaw/entry_scraper/entries_targets.json}"
@@ -28,12 +32,16 @@ env_args=(
   -e APP_APPLICATION_HOST=0.0.0.0
   -e APP_DATABASE__HOST=meetcal
   -e APP_DATABASE__PASSWORD
+  -e CLERK_JWKS_URL
+  -e CLERK_ISSUER
+  -e CLERK_AUTHORIZED_PARTIES
   -e "MEET_AUTOMATION_WATCHES_PATH=${MEET_AUTOMATION_WATCHES_PATH}"
   -e "ENTRIES_TARGETS_PATH=${ENTRIES_TARGETS_PATH}"
   -e "MEET_AUTOMATION_STATE_DIR=${MEET_AUTOMATION_STATE_DIR}"
 )
 
 for optional_var in \
+  CLERK_AUDIENCE \
   SLACK_SIGNING_SECRET \
   SLACK_MEET_AUTOMATION_CHANNEL \
   SLACK_ENTRIES_CHANNEL \

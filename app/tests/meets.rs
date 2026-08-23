@@ -139,8 +139,8 @@ async fn success_get_sessions_for_athletes_filtered() {
 
     assert!(!body.is_empty());
     assert!(
-        body.iter()
-            .all(|row| row.session_number == Some(45.0) && row.session_platform.as_deref() == Some("Red"))
+        body.iter().all(|row| row.session_number == Some(45.0)
+            && row.session_platform.as_deref() == Some("Red"))
     );
 }
 

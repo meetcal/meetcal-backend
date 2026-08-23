@@ -31,7 +31,7 @@ pub async fn get_preferences(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<UserPreferencesResponse>, AppError> {
-    let user_id = user_id_from_headers(&headers)?;
+    let user_id = user_id_from_headers(&headers, state.auth.as_deref()).await?;
     let mut tx = state.db.begin().await?;
     set_request_user(&mut tx, &user_id).await?;
 
@@ -72,7 +72,7 @@ pub async fn patch_auto_unsave(
     headers: HeaderMap,
     Json(body): Json<AutoUnsaveRequest>,
 ) -> Result<Json<UserPreferencesResponse>, AppError> {
-    let user_id = user_id_from_headers(&headers)?;
+    let user_id = user_id_from_headers(&headers, state.auth.as_deref()).await?;
     let updated_at = now_millis()?;
     let convex_id = format!("user_preferences:{user_id}");
     let mut tx = state.db.begin().await?;
