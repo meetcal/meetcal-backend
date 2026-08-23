@@ -46,8 +46,10 @@ use routes::{
     },
     health::health,
     meets::{
-        get_all_meets::list_meets_next_3months, get_athletes_by_meet::get_athletes_by_meet,
-        get_meet_details::get_meet_details, get_meet_package::get_meet_package,
+        get_all_meets::{list_completed_meets, list_meets_next_3months},
+        get_athletes_by_meet::get_athletes_by_meet,
+        get_meet_details::get_meet_details,
+        get_meet_package::get_meet_package,
         get_meet_schedule::get_meet_schedule,
     },
 };
@@ -118,6 +120,7 @@ pub async fn run_with_auth(
         )
         .route("/data/adaptive", get(get_adaptive_records))
         .route("/meets", get(list_meets_next_3months))
+        .route("/meets/completed", get(list_completed_meets))
         .route("/meets/details", get(get_meet_details))
         .route("/meets/package", get(get_meet_package))
         .route("/meets/schedule", get(get_meet_schedule))

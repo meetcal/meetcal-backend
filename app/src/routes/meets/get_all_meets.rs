@@ -39,3 +39,23 @@ pub async fn list_meets_next_3months(
 
     Ok(Json(rows))
 }
+
+/// Returns completed meets, newest first, for result and team reporting views.
+pub async fn list_completed_meets(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<Meets>>, AppError> {
+    let rows = sqlx::query_as::<_, Meets>(
+        r#"
+        SELECT name, start_date::text as start_date, end_date::text as end_date,
+               time_zone, venue_city, venue_state, venue_name, venue_street,
+               venue_zip, federation, status, venue_map_pdf_url, venue_map_apple_url
+        FROM meets
+        WHERE status = 'completed'
+        ORDER BY start_date DESC
+        "#,
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(rows))
+}
