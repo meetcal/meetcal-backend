@@ -55,6 +55,12 @@ jobs:
           echo "${GHCR_PULL_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
           cd "${DEPLOY_ROOT}"
           git fetch origin "${DEPLOY_SHA}"
-          git checkout "${DEPLOY_SHA}"
-          export IMAGE="${IMAGE}"
-          bash app/deploy/deploy-prod.sh
+
+          # The production checkout contains host-local operational files. Run
+          # the reviewed deployment script directly from the CI-tested commit
+          # so deploying never overwrites or stashes those local changes.
+          deploy_script="$(mktemp)"
+          trap 'rm -f "${deploy_script}"' EXIT
+          git show "${DEPLOY_SHA}:app/deploy/deploy-prod.sh" > "${deploy_script}"
+          chmod 700 "${deploy_script}"
+          MEETCAL_BACKEND_ROOT="${DEPLOY_ROOT}" IMAGE="${IMAGE}" bash "${deploy_script}"
