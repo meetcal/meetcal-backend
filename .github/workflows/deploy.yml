@@ -45,6 +45,11 @@ jobs:
       DEPLOY_ROOT: /home/maddisen/dev/meetcal-llc/meetcal-backend
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
       IMAGE: ghcr.io/meetcal/meetcal-backend/meetcal-api:${{ github.event.workflow_run.head_sha }}
+      # Clerk's verification endpoints and trusted browser origins are public
+      # deployment configuration, so keep them reviewed alongside the code.
+      CLERK_JWKS_URL: https://clerk.meetcal.app/.well-known/jwks.json
+      CLERK_ISSUER: https://clerk.meetcal.app
+      CLERK_AUTHORIZED_PARTIES: https://meetcal.app,https://www.meetcal.app
     steps:
       - name: Pull and run on prod
         env:
