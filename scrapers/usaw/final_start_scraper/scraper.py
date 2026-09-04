@@ -22,7 +22,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import unquote, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
 import pdfplumber
 
@@ -35,7 +35,7 @@ DEFAULT_PDF_URL = "https://assets.contentstack.io/v3/assets/blteb7d012fc7ebef7f/
 DEFAULT_MEET_NAME = (
     "2026 USA Weightlifting National Championships, Powered by Rogue Fitness"
 )
-DEFAULT_OUTPUT_TS = Path(__file__).with_name("convex_output.ts")
+DEFAULT_OUTPUT_TS = Path(__file__).with_name("start_list_output.ts")
 START_MEMBER_ID = 3100
 REQUEST_TIMEOUT_SECONDS = 45
 
@@ -111,7 +111,7 @@ class RunSettings:
     start_member_id: int = START_MEMBER_ID
     source_format: str = "auto"
     run_verification: bool = True
-    backfill_wso_from_convex: bool = False
+    backfill_wso: bool = False
 
 
 @dataclass
@@ -181,11 +181,10 @@ def load_env_file(path: Path) -> None:
         os.environ.setdefault(key, value.strip().strip("\"'"))
 
 
-def get_convex_url() -> Optional[str]:
-    root = Path(__file__).resolve().parents[3]
-    load_env_file(root / ".env.local")
-    load_env_file(root / ".env")
-    return os.getenv("CONVEX_URL") or os.getenv("EXPO_PUBLIC_CONVEX_URL")
+def _ensure_scrapers_path() -> None:
+    scrapers_dir = Path(__file__).resolve().parents[2]
+    if str(scrapers_dir) not in sys.path:
+        sys.path.insert(0, str(scrapers_dir))
 
 
 def normalize_fragment(value: str) -> str:
@@ -363,9 +362,9 @@ def build_run_settings(argv: Optional[Sequence[str]] = None) -> RunSettings:
     )
     parser.add_argument("--skip-verify", action="store_true")
     parser.add_argument(
-        "--backfill-wso-from-convex",
+        "--backfill-wso",
         action="store_true",
-        help="Fill blank WSO values from prior Convex athlete rows with the same name.",
+        help="Fill blank WSO values from prior Postgres athlete rows with the same name.",
     )
     args = parser.parse_args(argv)
     return RunSettings(
@@ -375,7 +374,7 @@ def build_run_settings(argv: Optional[Sequence[str]] = None) -> RunSettings:
         start_member_id=args.start_member_id,
         source_format=args.source_format,
         run_verification=not args.skip_verify,
-        backfill_wso_from_convex=args.backfill_wso_from_convex,
+        backfill_wso=args.backfill_wso,
     )
 
 
@@ -1256,36 +1255,44 @@ def assign_member_ids(
     return entries
 
 
-def query_convex_wso_history(
+def query_postgres_wso_history(
     names: Sequence[str], exclude_meet: str
 ) -> Dict[str, str]:
-    convex_url = get_convex_url()
-    if not convex_url:
-        print("Skipping WSO backfill: CONVEX_URL or EXPO_PUBLIC_CONVEX_URL is not set")
+    root = Path(__file__).resolve().parents[3]
+    load_env_file(root / ".env.local")
+    load_env_file(root / ".env")
+    _ensure_scrapers_path()
+    from common import postgres_writer as pg
+
+    if not os.getenv("DATABASE_URL"):
+        print("Skipping WSO backfill: DATABASE_URL is not set")
         return {}
 
-    payload = {
-        "path": "athletes:getWsoHistoryByNames",
-        "args": {"names": list(names), "excludeMeet": exclude_meet},
-    }
-    request = Request(
-        f"{convex_url.rstrip('/')}/api/query",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-        data = json.loads(response.read().decode("utf-8") or "{}")
+    with pg.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT name, wso
+            FROM athletes
+            WHERE meet <> %s
+              AND wso IS NOT NULL
+              AND btrim(wso) <> ''
+              AND name = ANY(%s)
+            ORDER BY id DESC
+            """,
+            (exclude_meet, list(names)),
+        ).fetchall()
 
-    rows = data.get("value", []) if isinstance(data, dict) else []
-    return {
-        normalize_name(str(row.get("name", ""))): str(row.get("wso", ""))
-        for row in rows
-        if row.get("name") and row.get("wso")
-    }
+    history: Dict[str, str] = {}
+    for row in rows:
+        if not row.get("name") or not row.get("wso"):
+            continue
+        key = normalize_name(str(row["name"]))
+        if key not in history:
+            history[key] = str(row["wso"])
+    return history
 
 
-def backfill_missing_wsos_from_convex(
+def backfill_missing_wsos(
     entries: List[Dict[str, object]], meet_name: str
 ) -> int:
     missing_names = sorted(
@@ -1298,7 +1305,7 @@ def backfill_missing_wsos_from_convex(
     if not missing_names:
         return 0
 
-    history = query_convex_wso_history(missing_names, exclude_meet=meet_name)
+    history = query_postgres_wso_history(missing_names, exclude_meet=meet_name)
     updated = 0
     for entry in entries:
         if normalize_fragment(str(entry.get("wso", ""))):
@@ -1430,15 +1437,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         start_member_id=settings.start_member_id,
     )
     backfilled_wsos = 0
-    if settings.backfill_wso_from_convex:
-        backfilled_wsos = backfill_missing_wsos_from_convex(entries, meet_name)
+    if settings.backfill_wso:
+        backfilled_wsos = backfill_missing_wsos(entries, meet_name)
     write_typescript(entries, output_path)
     issues = audit_entries(entries)
     print(f"Parsed {len(entries)} entries", flush=True)
     print(f"Detected format: {actual_format}", flush=True)
     print(f"Meet name: {meet_name}", flush=True)
     print(f"Wrote {output_path}", flush=True)
-    print(f"Backfilled WSOs from Convex: {backfilled_wsos}", flush=True)
+    print(f"Backfilled WSOs from Postgres: {backfilled_wsos}", flush=True)
     print(f"Audit issues: {len(issues)}", flush=True)
     for issue in issues[:10]:
         print(f"- {issue}", flush=True)

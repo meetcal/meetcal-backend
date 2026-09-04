@@ -5,9 +5,8 @@ import logging
 from datetime import datetime, timezone
 
 from sport80 import SportEighty
-from common.convex_compat import ConvexClient
+from common.postgres_ingest import IngestClient
 
-CONVEX_URL = os.environ.get("CONVEX_URL")
 SCRAPER_SECRET = os.environ.get("SCRAPER_SECRET")
 USAW_DOMAIN = "https://usaweightlifting.sport80.com"
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
@@ -51,7 +50,7 @@ def parse_event_date(event_data_dict):
     return datetime.min.replace(tzinfo=timezone.utc)
 
 
-def add_meet_results_to_convex(client: ConvexClient, results_to_insert: list):
+def add_meet_results_to_postgres(client: IngestClient, results_to_insert: list):
     if not results_to_insert:
         logging.info("No results to insert.")
         return {"inserted": 0, "updated": 0, "unchanged": 0}
@@ -167,13 +166,13 @@ def send_slack_notification(inserted_meet_names: list[str], updated_meet_names: 
 
 
 def main():
-    logging.info("Starting Sport80 to Convex sync process...")
+    logging.info("Starting Sport80 to Postgres sync process...")
 
-    if not CONVEX_URL or not SCRAPER_SECRET:
-        logging.critical("CONVEX_URL and SCRAPER_SECRET must be set. Exiting.")
+    if not os.getenv("DATABASE_URL"):
+        logging.critical("DATABASE_URL must be set. Exiting.")
         return
 
-    client = ConvexClient(CONVEX_URL)
+    client = IngestClient()
     sport80_api = SportEighty(subdomain=USAW_DOMAIN, return_dict=True, debug=logging.WARNING)
     recent_sport80_events_data = fetch_recent_events_from_sport80(sport80_api, num_events=30)
 
@@ -224,14 +223,14 @@ def main():
             logging.info(f"Event ID '{current_event_id}' already processed this run. Skipping.")
             continue
 
-        logging.info(f"Processing meet for Convex upsert: '{current_meet_name}' (Event ID: {current_event_id})")
+        logging.info(f"Processing meet for Postgres upsert: '{current_meet_name}' (Event ID: {current_event_id})")
         detailed_results_list = fetch_meet_results_from_sport80(sport80_api, event_data_for_api)
 
         if not detailed_results_list:
             processed_event_ids_this_run.add(current_event_id)
             continue
 
-        formatted_results_for_convex = []
+        formatted_results = []
         meet_date_obj = parse_event_date(event_data_for_api)
         meet_date_for_db = meet_date_obj.strftime("%Y-%m-%d") if meet_date_obj > datetime.min.replace(tzinfo=timezone.utc) else "1970-01-01"
 
@@ -249,7 +248,7 @@ def main():
             best_cj = get_nested_value(result_item, "best_cj", "Best Clean & Jerk") or get_nested_value(result_item, "best_c&j")
             total_lifted = get_nested_value(result_item, "total", "Total")
 
-            formatted_results_for_convex.append({
+            formatted_results.append({
                 "scraperSecret": SCRAPER_SECRET,
                 "eventId": current_event_id,
                 "meet": current_meet_name,
@@ -270,15 +269,15 @@ def main():
                 "federation": "USAW",
             })
 
-        if formatted_results_for_convex:
-            upsert_summary = add_meet_results_to_convex(client, formatted_results_for_convex)
+        if formatted_results:
+            upsert_summary = add_meet_results_to_postgres(client, formatted_results)
             if upsert_summary["inserted"] > 0:
                 inserted_meet_names.append(current_meet_name)
             elif upsert_summary["updated"] > 0:
                 updated_meet_names.append(current_meet_name)
             logging.info(
                 "Processed %s results for '%s' (ID: %s): %s inserted, %s updated, %s unchanged.",
-                len(formatted_results_for_convex),
+                len(formatted_results),
                 current_meet_name,
                 current_event_id,
                 upsert_summary["inserted"],
@@ -291,7 +290,7 @@ def main():
         processed_event_ids_this_run.add(current_event_id)
 
     logging.info(
-        "Finished Sport80 to Convex sync. %s meet(s) inserted, %s meet(s) updated.",
+        "Finished Sport80 to Postgres sync. %s meet(s) inserted, %s meet(s) updated.",
         len(inserted_meet_names),
         len(updated_meet_names),
     )

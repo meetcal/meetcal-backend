@@ -448,7 +448,7 @@ fn usamw_results_reply(cfg: &super::SlackConfig, text: &str, user_id: &str) -> S
                 let count = body["pdf_urls"].as_array().map(Vec::len).unwrap_or(0);
                 format!(
                     ":hourglass_flowing_sand: Queued USAMW results import for `{}` \
-                     ({} PDF link{}). The worker will scrape and write to Postgres + Convex.",
+                     ({} PDF link{}). The worker will scrape and write to Postgres.",
                     field(&body, "meet"),
                     count,
                     if count == 1 { "" } else { "s" }

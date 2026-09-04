@@ -23,9 +23,9 @@ from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 
 try:
-    from common.convex_compat import ConvexClient
+    from common.postgres_ingest import IngestClient
 except ImportError:
-    print("Error: convex library not installed. Run: pip install convex")
+    print("Error: postgres ingest helpers not importable. Set PYTHONPATH to scrapers/")
     sys.exit(1)
 
 # Load environment variables
@@ -38,25 +38,18 @@ class USAMWEventsScraper:
     def __init__(self):
         """Initialize the scraper."""
         self.base_url = "https://usamastersweightlifting.com/events"
-        self.convex: Optional[ConvexClient] = None
+        self.ingest: Optional[IngestClient] = None
         self.scraper_secret: Optional[str] = None
         self.slack_webhook_url: Optional[str] = None
         
-    def setup_convex_client(self):
-        """Initialize Convex client."""
-        convex_url = os.getenv('CONVEX_URL')
+    def setup_ingest_client(self):
         self.scraper_secret = os.getenv('SCRAPER_SECRET')
-        
-        if not convex_url or not self.scraper_secret:
-            print("Warning: Convex credentials not provided. Database updates will be skipped.")
-            return
-        
         try:
-            self.convex = ConvexClient(convex_url)
-            print("Convex client initialized successfully")
+            self.ingest = IngestClient()
+            print("Postgres ingest client initialized")
         except Exception as e:
-            print(f"Error initializing Convex client: {e}")
-            self.convex = None
+            print(f"Error initializing Postgres ingest client: {e}")
+            self.ingest = None
     
     def get_state_abbreviation(self, state_name: str) -> str:
         """Convert state name to two-letter abbreviation."""
@@ -351,7 +344,7 @@ class USAMWEventsScraper:
             return []
     
     def transform_events(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Transform scraped events to match Convex schema."""
+        """Transform scraped events to match the ingest schema."""
         transformed = []
         
         for event in events:
@@ -414,13 +407,13 @@ class USAMWEventsScraper:
         
         return {'inserted': inserted, 'skipped': []}
     
-    def ingest_to_convex(self, events: List[Dict[str, Any]], dry_run: bool = False) -> Dict[str, List[Dict[str, Any]]]:
-        """Ingest events into Convex via the scraperIngestion:ingestMeet action."""
+    def ingest_to_postgres(self, events: List[Dict[str, Any]], dry_run: bool = False) -> Dict[str, List[Dict[str, Any]]]:
+        """Ingest events into Postgres via the scraperIngestion:ingestMeet action."""
         if dry_run:
             return self.dry_run(events)
         
-        if not self.convex:
-            print("Convex client not initialized. Skipping database update.")
+        if not self.ingest:
+            print("Ingest client not initialized. Skipping database update.")
             return {'inserted': [], 'skipped': []}
         
         inserted = []
@@ -432,7 +425,7 @@ class USAMWEventsScraper:
         
         for event in events:
             try:
-                result = self.convex.action("scraperIngestion:ingestMeet", {
+                result = self.ingest.action("scraperIngestion:ingestMeet", {
                     "scraperSecret": self.scraper_secret,
                     "name": event['name'],
                     "venueName": event['venue_name'],
@@ -494,8 +487,8 @@ class USAMWEventsScraper:
         print(f"USAMW EVENTS SCRAPER{' (DRY RUN)' if dry_run else ''}")
         print("="*60 + "\n")
         
-        # Setup Convex client
-        self.setup_convex_client()
+        # Setup ingest client
+        self.setup_ingest_client()
         
         # Get Slack webhook URL
         self.slack_webhook_url = os.getenv('SLACK_WEBHOOK_URL')
@@ -516,8 +509,8 @@ class USAMWEventsScraper:
         
         print(f"\nProcessed {len(transformed_events)} valid events")
         
-        # Ingest to Convex (or dry-run)
-        results = self.ingest_to_convex(transformed_events, dry_run=dry_run)
+        # Ingest to Postgres (or dry-run)
+        results = self.ingest_to_postgres(transformed_events, dry_run=dry_run)
         
         # Send Slack notification
         self.send_slack_notification(results['inserted'], results['skipped'], is_dry_run=dry_run)
@@ -533,7 +526,7 @@ class USAMWEventsScraper:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description='Scrape USAMW events and update Convex'
+        description='Scrape USAMW events and update Postgres'
     )
     parser.add_argument(
         '--dry-run',

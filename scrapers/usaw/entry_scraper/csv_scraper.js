@@ -7,12 +7,9 @@ const https = require('https');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-// Read Convex configuration from environment
-const convexUrl = process.env.CONVEX_URL;
-const scraperSecret = process.env.SCRAPER_SECRET;
-
-if (!convexUrl || !scraperSecret) {
-    console.warn('CONVEX_URL or SCRAPER_SECRET not provided. Database updates will be skipped.');
+if (!process.env.DATABASE_URL) {
+    console.error('Missing DATABASE_URL. Exiting.');
+    process.exit(1);
 }
 
 // Read the target URL from file
@@ -214,8 +211,8 @@ async function scrapeWeightliftingData() {
         
         console.log(`Successfully scraped ${allEntries.length} total entries (${Math.ceil(allEntries.length / 20)} pages)`);
         
-        // Update Convex and get the count of upserted rows
-        const upsertStats = await updateConvex(sortedEntries);
+        // Update Postgres and get the count of upserted rows
+        const upsertStats = await updateDatabase(sortedEntries);
         
         return { entries: allEntries, upsertStats };
 
@@ -228,82 +225,8 @@ async function scrapeWeightliftingData() {
     }
 }
 
-async function updateConvex(entries) {
-    if (process.env.DATABASE_URL) {
-        return updatePostgres(entries);
-    }
-
-    if (!convexUrl || !scraperSecret) {
-        console.error('CONVEX_URL or SCRAPER_SECRET not configured. Skipping database update.');
-        return;
-    }
-
-    if (entries.length === 0) {
-        console.log('No entries to update in Convex');
-        return;
-    }
-
-    const meetName = entries[0].meet;
-    console.log(`Updating Convex with entries for meet: ${meetName}`);
-
-    let processedCount = 0;
-    let successCount = 0;
-    let errorCount = 0;
-
-    for (const entry of entries) {
-        const memberId = (entry.member_id && entry.member_id.trim())
-            ? entry.member_id.trim()
-            : String(Math.floor(Math.random() * 900000000) + 100000000);
-
-        try {
-            const response = await fetch(`${convexUrl}/api/action`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    path: 'scraperIngestion:ingestAthlete',
-                    args: {
-                        scraperSecret: scraperSecret,
-                        memberId: memberId,
-                        name: entry.name,
-                        age: entry.age,
-                        club: entry.club,
-                        gender: entry.gender,
-                        weightClass: entry.weight_class,
-                        entryTotal: entry.entry_total,
-                        sessionNumber: entry.session_number ?? undefined,
-                        sessionPlatform: entry.session_platform ?? undefined,
-                        meet: entry.meet,
-                        adaptive: false,
-                    }
-                })
-            });
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error(`Error ingesting athlete ${entry.name}: HTTP ${response.status} - ${errorText}`);
-                errorCount++;
-            } else {
-                console.log(`Ingested athlete: ${entry.name} in meet: ${meetName}`);
-                successCount++;
-            }
-        } catch (error) {
-            console.error(`Error ingesting athlete ${entry.name}:`, error.message);
-            errorCount++;
-        }
-
-        processedCount++;
-    }
-
-    console.log(`Successfully processed ${processedCount} entries for meet: ${meetName}`);
-    console.log(`  - Succeeded: ${successCount}`);
-    console.log(`  - Errors: ${errorCount}`);
-
-    return {
-        inserted: successCount,
-        updated: 0,
-        skipped: errorCount,
-        total: processedCount
-    };
+async function updateDatabase(entries) {
+    return updatePostgres(entries);
 }
 
 function updatePostgres(entries) {

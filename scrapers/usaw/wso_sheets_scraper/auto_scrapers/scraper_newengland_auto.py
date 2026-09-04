@@ -197,7 +197,7 @@ class NewEnglandAutoScraper:
 
             try:
                 scraper = WSORecordsNewEnglandScraper(self.wso_name, pdf_url)
-                scraper.setup_convex_client()
+                scraper.setup_ingest_client()
 
                 # Don't set up Discord for individual PDFs (we'll send one summary)
 
@@ -222,7 +222,7 @@ class NewEnglandAutoScraper:
                     print(f"  To UPDATE: {len(comparison['to_update'])} records")
                     print(f"  Unchanged: {len(comparison['unchanged'])} records")
                 else:
-                    result = scraper.upsert_to_convex(records)
+                    result = scraper.upsert_to_postgres(records)
                     results.append(
                         {
                             "category": category,

@@ -15,7 +15,7 @@ import pdfplumber
 import requests
 from dotenv import load_dotenv
 
-from common.convex_compat import ConvexClient
+from common.postgres_ingest import IngestClient
 
 # ============================================================================
 # CONFIGURATION
@@ -33,8 +33,6 @@ load_dotenv(REPO_ROOT / ".env")
 load_dotenv(REPO_ROOT / ".env.local", override=True)
 load_dotenv()
 
-# Convex Configuration
-CONVEX_URL = os.environ.get("CONVEX_URL") or os.environ.get("EXPO_PUBLIC_CONVEX_URL")
 SCRAPER_SECRET = os.environ.get("SCRAPER_SECRET")
 SLACK_RANKINGS_WEBHOOK_URL = os.environ.get("SLACK_RANKINGS_WEBHOOK_URL")
 
@@ -489,7 +487,7 @@ def send_slack_notification(group_results: List[Dict[str, Any]], dry_run: bool =
 
 def prune_missing_groups(active_groups: List[Dict[str, str]], dry_run: bool = False) -> List[Dict[str, Any]]:
     """
-    Delete Convex intl ranking groups that are no longer present on the USAW page.
+    Delete intl ranking groups that are no longer present on the USAW page.
     """
     if dry_run:
         return []
@@ -498,11 +496,11 @@ def prune_missing_groups(active_groups: List[Dict[str, str]], dry_run: bool = Fa
         logging.error("Refusing to prune intl rankings because no active groups were parsed.")
         return []
 
-    if not CONVEX_URL or not SCRAPER_SECRET:
-        logging.error("CONVEX_URL or SCRAPER_SECRET not configured")
+    if not os.getenv("DATABASE_URL"):
+        logging.error("DATABASE_URL not configured")
         return []
 
-    client = ConvexClient(CONVEX_URL)
+    client = IngestClient()
     try:
         result = client.action(
             "scraperIngestion:deleteMissingIntlRankingGroups",
@@ -523,9 +521,9 @@ def prune_missing_groups(active_groups: List[Dict[str, str]], dry_run: bool = Fa
         return []
 
 
-def upsert_to_convex(rankings: List[Dict], dry_run: bool = False) -> Dict[str, Any]:
+def upsert_to_postgres(rankings: List[Dict], dry_run: bool = False) -> Dict[str, Any]:
     """
-    Replace all international rankings in Convex.
+    Replace all international rankings in Postgres.
 
     Args:
         rankings: List of ranking dictionaries
@@ -567,8 +565,8 @@ def upsert_to_convex(rankings: List[Dict], dry_run: bool = False) -> Dict[str, A
             "pruned": False,
         }
 
-    if not CONVEX_URL or not SCRAPER_SECRET:
-        logging.error("CONVEX_URL or SCRAPER_SECRET not configured")
+    if not os.getenv("DATABASE_URL"):
+        logging.error("DATABASE_URL not configured")
         return {"inserted": 0, "updated": 0, "unchanged": 0, "deleted": 0}
 
     group_meet = rankings[0].get("meet")
@@ -592,8 +590,8 @@ def upsert_to_convex(rankings: List[Dict], dry_run: bool = False) -> Dict[str, A
             )
             return {"inserted": 0, "updated": 0, "unchanged": 0, "deleted": 0}
 
-    client = ConvexClient(CONVEX_URL)
-    convex_rankings = [
+    client = IngestClient()
+    payload_rankings = [
         {
             "meet": ranking.get("meet"),
             "ranking": ranking.get("ranking"),
@@ -609,7 +607,7 @@ def upsert_to_convex(rankings: List[Dict], dry_run: bool = False) -> Dict[str, A
 
     try:
         print(
-            f"Upserting {len(convex_rankings)} intl rankings in Postgres for "
+            f"Upserting {len(payload_rankings)} intl rankings in Postgres for "
             f"{group_meet} / {group_gender} / {group_age_category}..."
         )
         result = client.action(
@@ -619,7 +617,7 @@ def upsert_to_convex(rankings: List[Dict], dry_run: bool = False) -> Dict[str, A
                 "meet": group_meet,
                 "gender": group_gender,
                 "ageCategory": group_age_category,
-                "rankings": convex_rankings,
+                "rankings": payload_rankings,
             },
         )
         inserted = int(result.get("inserted", 0))
@@ -682,8 +680,8 @@ def scrape_rankings_pdf(
         logging.warning("No rankings parsed from PDF")
         return {"inserted": 0, "updated": 0, "unchanged": 0, "deleted": 0}
 
-    # Upsert to Convex
-    result = upsert_to_convex(rankings, dry_run=dry_run)
+    # Upsert to Postgres
+    result = upsert_to_postgres(rankings, dry_run=dry_run)
 
     return result
 
@@ -794,11 +792,8 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # Validate Convex configuration
-    if not args.dry_run and (not CONVEX_URL or not SCRAPER_SECRET):
-        logging.error(
-            "Missing env vars. Set CONVEX_URL (or EXPO_PUBLIC_CONVEX_URL) and SCRAPER_SECRET locally before running."
-        )
+    if not args.dry_run and not os.getenv("DATABASE_URL"):
+        logging.error("DATABASE_URL must be set before running.")
         sys.exit(1)
 
     # Run scraper

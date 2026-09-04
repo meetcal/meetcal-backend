@@ -1,6 +1,6 @@
 # VWS2 / American Open 2 Final Start List Workflow
 
-End-to-end process used for **2026 Virus Weightlifting Series 2, Powered by Rogue Fitness** (VWS2 / American Open 2): scrape the WSO-table start list PDF, verify against the schedule, then replace meet athletes in Postgres and Convex.
+End-to-end process used for **2026 Virus Weightlifting Series 2, Powered by Rogue Fitness** (VWS2 / American Open 2): scrape the WSO-table start list PDF, verify against the schedule, then replace meet athletes in Postgres.
 
 ## Meet And Sources
 
@@ -77,9 +77,9 @@ Success criteria (see saved report):
 
 Do **not** block on differences vs older preview or Postgres snapshots; treat the PDF + verifier as source of truth.
 
-## 3. Publish Athletes To Postgres And Convex
+## 3. Publish Athletes To Postgres
 
-Requires `DATABASE_URL`, `CONVEX_URL`, and `SCRAPER_SECRET` (see repo `.env`).
+Requires `DATABASE_URL` (see repo `.env`).
 
 **Athletes only** — delete all athletes for this meet, then upsert the scraped rows. Session schedule rows in Postgres are left unchanged.
 
@@ -94,7 +94,6 @@ import sys
 
 sys.path.insert(0, "usaw/final_start_scraper")
 from output_check import load_output_entries
-from usaw.meet_automation import ingest
 from common import postgres_writer as pg
 
 MEET = "2026 Virus Weightlifting Series 2, Powered by Rogue Fitness"
@@ -112,61 +111,13 @@ with pg.connect() as conn:
         "SELECT COUNT(*) AS c FROM athletes WHERE meet = %s", (MEET,)
     ).fetchone()["c"]
     print(f"Postgres athlete count: {count}")
-
-stats = ingest._ingest_convex(
-    athletes=athletes, schedule=[], meet=None, meet_name=MEET, replace=True
-)
-print(f"Convex: {stats}")
-PY
-```
-
-**Important:** `ingest._ingest_convex(..., replace=True)` also calls `deleteSessionScheduleByMeet` on Convex. If you use that helper, restore Convex schedule from Postgres afterward:
-
-```bash
-# After athlete ingest — restore Convex schedule from Postgres (59 rows for VWS2)
-PYTHONPATH=. usaw/meet_automation/.venv/bin/python - <<'PY'
-import os
-from pathlib import Path
-from dotenv import load_dotenv
-load_dotenv(Path("../.env"))
-from common import postgres_writer as pg
-from usaw.meet_automation import ingest
-
-MEET = "2026 Virus Weightlifting Series 2, Powered by Rogue Fitness"
-endpoint = f"{os.environ['CONVEX_URL'].rstrip('/')}/api/action"
-secret = os.environ["SCRAPER_SECRET"]
-
-with pg.connect() as conn:
-    rows = conn.execute(
-        "SELECT date, platform, session_id, start_time, weigh_in_time, weight_class "
-        "FROM session_schedule WHERE meet = %s ORDER BY date, session_id, platform",
-        (MEET,),
-    ).fetchall()
-
-for row in rows:
-    ingest._convex_action(
-        endpoint,
-        ingest.SCHEDULE_INGEST_PATH,
-        {
-            "scraperSecret": secret,
-            "date": str(row["date"]),
-            "platform": row["platform"],
-            "sessionId": int(row["session_id"]),
-            "startTime": str(row["start_time"]),
-            "weighInTime": str(row["weigh_in_time"]),
-            "weightClass": row["weight_class"],
-            "meet": MEET,
-        },
-    )
-print(f"Restored {len(rows)} schedule rows to Convex")
 PY
 ```
 
 Verify counts:
 
 - Postgres: `SELECT COUNT(*) FROM athletes WHERE meet = '…'` → **677**
-- Convex: `athletes:getByMeet` → **677**
-- Convex schedule: `schedule:getByMeet` → **59** (unchanged in Postgres)
+- Postgres schedule: `SELECT COUNT(*) FROM session_schedule WHERE meet = '…'` → **59** (unchanged)
 
 ## Files Touched In This Work
 

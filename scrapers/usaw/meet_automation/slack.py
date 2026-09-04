@@ -85,7 +85,7 @@ def build_blocks(cfg: SlackConfig, bundle: StagedBundle) -> List[Dict[str, Any]]
                     "text": {"type": "plain_text", "text": "✅ Approve & publish"},
                     "value": bundle.run_id,
                     "confirm": {
-                        "title": {"type": "plain_text", "text": "Publish to Postgres + Convex?"},
+                        "title": {"type": "plain_text", "text": "Publish to Postgres?"},
                         "text": {"type": "mrkdwn", "text": f"Publish `{bundle.run_id}`?"},
                         "confirm": {"type": "plain_text", "text": "Publish"},
                         "deny": {"type": "plain_text", "text": "Cancel"},

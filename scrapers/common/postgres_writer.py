@@ -815,3 +815,43 @@ def replace_intl_rankings_group(conn, args: dict[str, Any]) -> dict[str, Any]:
         upsert_intl_ranking(conn, {**row, "meet": meet, "gender": gender, "ageCategory": age_category})
     deleted = max(len(existing_rows) - len(rankings), 0)
     return {"inserted": inserted, "updated": updated, "unchanged": unchanged, "deleted": deleted}
+
+
+def delete_missing_intl_ranking_groups(conn, groups: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    active: set[tuple[str, str, str]] = set()
+    for group in groups:
+        meet = first(group, "meet", default="")
+        gender = normalize_gender(first(group, "gender", default=""))
+        age_category = normalize_age_category(
+            first(group, "ageCategory", "age_category", default="")
+        )
+        if meet and gender and age_category:
+            active.add((meet, gender, age_category))
+
+    if not active:
+        return {"deletedGroups": [], "deleted": 0}
+
+    existing_groups = conn.execute(
+        "SELECT DISTINCT meet, gender, age_category FROM intl_rankings"
+    ).fetchall()
+    deleted_groups: list[dict[str, Any]] = []
+    for row in existing_groups:
+        key = (row["meet"], row["gender"], row["age_category"])
+        if key in active:
+            continue
+        deleted = conn.execute(
+            "DELETE FROM intl_rankings WHERE meet = %s AND gender = %s AND age_category = %s",
+            key,
+        ).rowcount
+        deleted_groups.append(
+            {
+                "meet": key[0],
+                "gender": key[1],
+                "ageCategory": key[2],
+                "deleted": deleted,
+            }
+        )
+    return {
+        "deletedGroups": deleted_groups,
+        "deleted": sum(int(group["deleted"]) for group in deleted_groups),
+    }

@@ -19,7 +19,7 @@ from datetime import datetime
 from collections import defaultdict
 
 import requests
-from common.convex_compat import ConvexClient
+from common.postgres_ingest import IngestClient
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -46,15 +46,15 @@ class WSORecordsCarolinasScraper:
             "MASTER": "448005775"
         }
         
-        self.convex_client = None
+        self.ingest_client = None
         self.scraper_secret = None
         self.slack_webhook_url = None
         
-    def setup_convex_client(self):
-        """Set up Convex client."""
-        self.convex_client = ConvexClient(os.getenv("CONVEX_URL"))
+    def setup_ingest_client(self):
+        """Set up Postgres ingest client."""
+        self.ingest_client = IngestClient()
         self.scraper_secret = os.getenv("SCRAPER_SECRET")
-        print("✓ Convex client initialized")
+        print("Postgres ingest client initialized")
     
     def setup_slack(self):
         """Set up Slack webhook URL."""
@@ -333,9 +333,9 @@ class WSORecordsCarolinasScraper:
             return None
     
     def upsert_records(self, records: List[Dict[str, Any]]) -> None:
-        """Upsert records to Convex."""
+        """Upsert records to Postgres."""
         for record in records:
-            self.convex_client.action("scraperIngestion:ingestWSORecord", wso_record_ingest_args(record, self.scraper_secret))
+            self.ingest_client.action("scraperIngestion:ingestWSORecord", wso_record_ingest_args(record, self.scraper_secret))
             print(f"  ✓ Upserted: {record['age_category']} {record['gender']} {record['weight_class']}")
     
     def send_slack_notification(self) -> None:
@@ -394,7 +394,7 @@ class WSORecordsCarolinasScraper:
         print(f"Starting scraper for {self.wso_name}")
         print(f"Sheet URL: {self.sheet_url}")
         
-        self.setup_convex_client()
+        self.setup_ingest_client()
 
         if not dry_run:
             self.setup_slack()
@@ -406,7 +406,7 @@ class WSORecordsCarolinasScraper:
         print(f"Found {len(records)} total records")
         
         if not dry_run:
-            print("Upserting records to Convex...")
+            print("Upserting records to Postgres...")
             self.upsert_records(records)
             
             print("Sending Slack notification...")

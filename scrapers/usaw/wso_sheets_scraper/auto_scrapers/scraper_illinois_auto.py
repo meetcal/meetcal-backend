@@ -71,7 +71,7 @@ class IllinoisAutoScraper:
 
 def main():
     parser = argparse.ArgumentParser(description="Automated scraper for Illinois WSO records")
-    parser.add_argument("--dry-run", action="store_true", help="Parse without updating Convex")
+    parser.add_argument("--dry-run", action="store_true", help="Parse without updating Postgres")
     args = parser.parse_args()
 
     load_dotenv()
