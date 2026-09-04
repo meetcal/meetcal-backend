@@ -1,10 +1,9 @@
-const CONVEX_URL = process.env.CONVEX_URL;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SLACK_WEBHOOK_URL = process.env.SLACK_MEET_WEBHOOK_URL;
 const { spawnSync } = require("child_process");
 
-if (!DATABASE_URL && !CONVEX_URL) {
-  console.error("Missing CONVEX_URL. Exiting.");
+if (!DATABASE_URL) {
+  console.error("Missing DATABASE_URL. Exiting.");
   process.exit(1);
 }
 
@@ -29,25 +28,6 @@ function formatMeetDate(meet) {
   }
 
   return `${meet.startDate} to ${meet.endDate}`;
-}
-
-async function queryConvex(path, args = {}) {
-  const response = await fetch(`${CONVEX_URL}/api/query`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, args }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Convex query failed: ${response.status} ${await response.text()}`);
-  }
-
-  const result = await response.json();
-  if (result.status === "error") {
-    throw new Error(`Convex query failed: ${result.errorMessage ?? "unknown error"}`);
-  }
-
-  return result.value ?? result;
 }
 
 function queryPostgresMeets(todayKey, cutoffKey) {
@@ -94,24 +74,10 @@ async function main() {
   const todayKey = toDateKey(today);
   const cutoffKey = toDateKey(addMonths(today, 2));
 
-  const meets = DATABASE_URL
-    ? queryPostgresMeets(todayKey, cutoffKey)
-    : await queryConvex("meets:listAll");
-  if (!Array.isArray(meets)) {
+  const upcomingMeets = queryPostgresMeets(todayKey, cutoffKey);
+  if (!Array.isArray(upcomingMeets)) {
     throw new Error("Meet query did not return a meets array.");
   }
-
-  const upcomingMeets = DATABASE_URL
-    ? meets
-    : meets
-        .filter((meet) => {
-          return (
-            meet.status !== "completed" &&
-            meet.startDate >= todayKey &&
-            meet.startDate <= cutoffKey
-          );
-        })
-        .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.name.localeCompare(b.name));
 
   const header = `Upcoming meets in Postgres from ${todayKey} through ${cutoffKey}`;
   const message =

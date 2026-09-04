@@ -3,13 +3,11 @@ const axios = require('axios');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const convexUrl = process.env.CONVEX_URL;
-const scraperSecret = process.env.SCRAPER_SECRET;
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
 const API_URL = 'https://usaweightlifting.sport80.com/api/public/widget/data/new/1?p=0&i=20&s=Virus%20Weightlifting&l=&d=10&f=';
 
-if (!process.env.DATABASE_URL && (!convexUrl || !scraperSecret)) {
-  console.error('Missing CONVEX_URL or SCRAPER_SECRET. Exiting.');
+if (!process.env.DATABASE_URL) {
+  console.error('Missing DATABASE_URL. Exiting.');
   process.exit(1);
 }
 
@@ -148,35 +146,8 @@ function transformMeetsData(meetsData) {
   }).filter(meet => meet.startDate && meet.endDate && !meet.name.toUpperCase().includes('ADAPTIVE'));
 }
 
-async function ingestMeetToConvex(meet) {
-  if (process.env.DATABASE_URL) {
-    return ingestMeetToPostgres(meet);
-  }
-
-  const res = await fetch(`${convexUrl}/api/action`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      path: 'scraperIngestion:ingestMeet',
-      args: {
-        scraperSecret,
-        name: meet.name,
-        venueName: meet.venueName,
-        venueStreet: meet.venueStreet,
-        venueCity: meet.venueCity,
-        venueState: meet.venueState,
-        venueZip: meet.venueZip,
-        timeZone: meet.timeZone,
-        startDate: meet.startDate,
-        endDate: meet.endDate,
-        status: meet.status,
-        federation: meet.federation,
-      },
-    }),
-  });
-  if (!res.ok) throw new Error(await res.text());
-  const result = await res.json();
-  return result.wasInsert;
+async function ingestMeet(meet) {
+  return ingestMeetToPostgres(meet);
 }
 
 function ingestMeetToPostgres(meet) {
@@ -244,7 +215,7 @@ async function syncMeets() {
     const addedMeetNames = [];
     for (const meet of transformedMeets) {
       try {
-        const wasInsert = await ingestMeetToConvex(meet);
+        const wasInsert = await ingestMeet(meet);
         if (wasInsert) {
           insertCount++;
           addedMeetNames.push(meet.name);

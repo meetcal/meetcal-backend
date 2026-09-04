@@ -136,7 +136,7 @@ the buttons below.
 **`POST /scrapers/slack/interactions`** — receives the *Approve & publish* /
 *Reject* buttons the meet-automation pipeline posts. A click records a decision
 under `MEET_AUTOMATION_STATE_DIR/decisions/`, which the pipeline's `approve`
-cron consumes to perform the dual-write to Postgres + Convex. The DB write stays
+cron consumes to perform the Postgres write. The DB write stays
 in the Python pipeline, so this API keeps no database credentials.
 
 Full server setup — Slack app config, env vars, cron, preview hosting, testing —

@@ -22,7 +22,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import pdfplumber
 
-from common.convex_compat import ConvexClient
+from common.postgres_ingest import IngestClient
 
 # Load environment variables
 load_dotenv()
@@ -34,16 +34,12 @@ class USAMWMastersRecordsScraper:
     def __init__(self, pdf_url: str):
         """Initialize the scraper."""
         self.pdf_url = pdf_url
-        self.convex_client: Optional[ConvexClient] = None
+        self.ingest_client: Optional[IngestClient] = None
         self.slack_webhook_url: Optional[str] = None
 
-    def setup_convex_client(self):
-        """Initialize Convex client."""
-        convex_url = "https://disciplined-hare-790.convex.cloud"
-        if not convex_url:
-            raise ValueError("CONVEX_URL must be set in .env")
-        self.convex_client = ConvexClient(convex_url)
-        print("✓ Convex client initialized")
+    def setup_ingest_client(self):
+        self.ingest_client = IngestClient()
+        print("Postgres ingest client initialized")
 
     def setup_slack(self):
         """Initialize Slack webhook."""
@@ -409,7 +405,7 @@ class USAMWMastersRecordsScraper:
         print("DRY RUN - No database changes will be made")
         print("=" * 60 + "\n")
 
-        print(f"Would upsert {len(records)} records to Convex:")
+        print(f"Would upsert {len(records)} records to Postgres:")
         for record in records[:20]:
             print(
                 f"  {record['age_category']} {record['gender']} {record['weight_class']}: "
@@ -425,12 +421,12 @@ class USAMWMastersRecordsScraper:
             "total": len(records),
         }
 
-    def upsert_to_convex(
+    def upsert_to_postgres(
         self, records: List[Dict[str, Any]]
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """Upsert records to Convex via scraperIngestion:ingestRecord."""
-        if not self.convex_client:
-            self.setup_convex_client()
+        """Upsert records to Postgres via scraperIngestion:ingestRecord."""
+        if not self.ingest_client:
+            self.setup_ingest_client()
 
         scraper_secret = (
             "24867d854eb4f5677cb12a0d4bc8b9ddafe4957c3d11de7930b6a7e5eba9c9f8"
@@ -443,7 +439,7 @@ class USAMWMastersRecordsScraper:
 
         for record in records:
             try:
-                result = self.convex_client.action(
+                result = self.ingest_client.action(
                     "scraperIngestion:ingestRecord",
                     {
                         "scraperSecret": scraper_secret,
@@ -554,8 +550,8 @@ class USAMWMastersRecordsScraper:
         # Export to CSV
         self.export_to_csv(records)
 
-        # Setup Convex client
-        self.setup_convex_client()
+        # Setup ingest client
+        self.setup_ingest_client()
 
         # Setup Slack for notifications (works in both modes)
         self.setup_slack()
@@ -568,7 +564,7 @@ class USAMWMastersRecordsScraper:
             print("\n" + "=" * 60)
             print("UPDATING DATABASE")
             print("=" * 60 + "\n")
-            result = self.upsert_to_convex(records)
+            result = self.upsert_to_postgres(records)
             print(f"\n✓ Complete: {len(result['inserted'])} upserted")
 
             # Send Slack notification

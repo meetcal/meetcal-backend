@@ -7,7 +7,7 @@ use serde_json::json;
 
 #[derive(Debug)]
 pub enum AppError {
-    Convex(anyhow::Error),
+    Internal(anyhow::Error),
     Database(sqlx::Error),
     NotFound,
     Unauthorized,
@@ -16,7 +16,7 @@ pub enum AppError {
 
 impl From<anyhow::Error> for AppError {
     fn from(err: anyhow::Error) -> Self {
-        AppError::Convex(err)
+        AppError::Internal(err)
     }
 }
 
@@ -29,11 +29,11 @@ impl From<sqlx::Error> for AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            AppError::Convex(err) => {
-                eprintln!("upstream service error: {err:#}");
+            AppError::Internal(err) => {
+                eprintln!("internal error: {err:#}");
                 (
-                    StatusCode::BAD_GATEWAY,
-                    "Upstream service error".to_string(),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
                 )
             }
             AppError::Database(err) => {

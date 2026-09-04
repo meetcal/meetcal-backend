@@ -149,7 +149,7 @@ pub async fn put_saved_session(
     let user_id = user_id_from_headers(&headers, state.auth.as_deref()).await?;
     let updated_at = now_millis()?;
     let athlete_names = body.athlete_names.unwrap_or_default();
-    let convex_id = format!("saved_session:{user_id}:{session_id}");
+    let row_id = format!("saved_session:{user_id}:{session_id}");
 
     let mut tx = state.db.begin().await?;
     set_request_user(&mut tx, &user_id).await?;
@@ -184,7 +184,7 @@ pub async fn put_saved_session(
         RETURNING session_id, updated_at
         "#,
     )
-    .bind(convex_id)
+    .bind(row_id)
     .bind(&session_id)
     .bind(&user_id)
     .bind(body.meet)

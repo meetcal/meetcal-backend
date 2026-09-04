@@ -2,7 +2,7 @@
 """
 WSO Records Scraper
 
-Scrapes weightlifting records from Google Sheets and upserts to Convex.
+Scrapes weightlifting records from Google Sheets and upserts to Postgres.
 Sends Slack notifications for changes.
 """
 
@@ -17,7 +17,7 @@ from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
 import requests
-from common.convex_compat import ConvexClient
+from common.postgres_ingest import IngestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils import wso_record_ingest_args
@@ -34,7 +34,7 @@ class WSORecordsScraper:
         
         # Initialize clients
         self.google_client = None
-        self.convex_client = None
+        self.ingest_client = None
         self.scraper_secret = None
         self.slack_webhook_url = None
         
@@ -61,11 +61,11 @@ class WSORecordsScraper:
             self.use_public_api = True
             print("✓ Using public Google Sheets API (no authentication)")
     
-    def setup_convex_client(self):
-        """Set up Convex client."""
-        self.convex_client = ConvexClient(os.getenv("CONVEX_URL"))
+    def setup_ingest_client(self):
+        """Set up Postgres ingest client."""
+        self.ingest_client = IngestClient()
         self.scraper_secret = os.getenv("SCRAPER_SECRET")
-        print("✓ Convex client initialized")
+        print("Postgres ingest client initialized")
     
     def setup_slack(self):
         """Set up Slack webhook URL."""
@@ -401,13 +401,13 @@ class WSORecordsScraper:
     
     def upsert_records(self, records: List[Dict[str, Any]]) -> None:
         """
-        Upsert records to Convex.
+        Upsert records to Postgres.
         
         Args:
             records: List of records to upsert
         """
         for record in records:
-            self.convex_client.action("scraperIngestion:ingestWSORecord", wso_record_ingest_args(record, self.scraper_secret))
+            self.ingest_client.action("scraperIngestion:ingestWSORecord", wso_record_ingest_args(record, self.scraper_secret))
             print(f"  ✓ Upserted: {record['age_category']} {record['gender']} {record['weight_class']}")
     
     def send_slack_notification(self) -> None:
@@ -468,7 +468,7 @@ class WSORecordsScraper:
         
         # Setup clients
         self.setup_google_client()
-        self.setup_convex_client()
+        self.setup_ingest_client()
         self.setup_slack()
         
         # Scrape data
@@ -477,7 +477,7 @@ class WSORecordsScraper:
         print(f"Found {len(records)} records")
         
         # Upsert to database
-        print("Upserting records to Convex...")
+        print("Upserting records to Postgres...")
         self.upsert_records(records)
         
         # Send notification

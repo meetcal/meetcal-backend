@@ -7,7 +7,7 @@ This scraper:
 2. Finds the PDF link containing "Standards"
 3. Downloads and parses the PDF
 4. Extracts A/B standards for each age category, gender, and weight class
-5. Upserts to Convex
+5. Upserts to Postgres
 
 USAGE:
   # Dry-run (preview changes without updating database)
@@ -30,9 +30,9 @@ import pdfplumber
 from bs4 import BeautifulSoup
 
 try:
-    from common.convex_compat import ConvexClient
+    from common.postgres_ingest import IngestClient
 except ImportError:
-    print("Error: convex library not installed. Run: pip install convex")
+    print("Error: postgres ingest helpers not importable. Set PYTHONPATH to scrapers/")
     sys.exit(1)
 
 # Load environment variables
@@ -45,21 +45,15 @@ class StandardsScraper:
     def __init__(self):
         """Initialize the scraper."""
         self.base_url = "https://www.usaweightlifting.org/resources/athlete-information-and-programs/selection-procedures"
-        self.convex: Optional[ConvexClient] = None
+        self.ingest: Optional[IngestClient] = None
         self.scraper_secret: Optional[str] = None
         self.pdf_url: Optional[str] = None
         self.slack_webhook_url: Optional[str] = None
     
-    def setup_convex_client(self):
-        """Initialize Convex client."""
-        convex_url = os.getenv("CONVEX_URL")
-        
-        if not convex_url:
-            raise ValueError("CONVEX_URL must be set in .env")
-        
-        self.convex = ConvexClient(convex_url)
+    def setup_ingest_client(self):
+        self.ingest = IngestClient()
         self.scraper_secret = os.getenv("SCRAPER_SECRET")
-        print("✓ Convex client initialized")
+        print("Postgres ingest client initialized")
     
     def setup_slack(self):
         """Initialize Slack webhook."""
@@ -366,21 +360,21 @@ class StandardsScraper:
             'total': len(standards)
         }
     
-    def upsert_to_convex(self, standards: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    def upsert_to_postgres(self, standards: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Upsert standards to Convex via the scraperIngestion:ingestStandard action.
+        Upsert standards to Postgres via the scraperIngestion:ingestStandard action.
         
         Returns:
             Dictionary with 'inserted' and 'updated' lists
         """
-        if not self.convex:
-            self.setup_convex_client()
+        if not self.ingest:
+            self.setup_ingest_client()
         
         inserted = []
         updated = []
 
         for standard in standards:
-            result = self.convex.action("scraperIngestion:ingestStandard", {
+            result = self.ingest.action("scraperIngestion:ingestStandard", {
                 "scraperSecret": self.scraper_secret,
                 "ageCategory": standard['age_category'],
                 "gender": standard['gender'],
@@ -488,8 +482,8 @@ class StandardsScraper:
             print("\n" + "="*60)
             print("UPDATING DATABASE")
             print("="*60 + "\n")
-            self.setup_convex_client()
-            result = self.upsert_to_convex(standards)
+            self.setup_ingest_client()
+            result = self.upsert_to_postgres(standards)
             print(f"\n✓ Complete: {len(result['inserted'])} inserted, {len(result['updated'])} updated")
 
             # Send Slack notification
@@ -499,7 +493,7 @@ class StandardsScraper:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description='Scrape USA Weightlifting standards and update Convex'
+        description='Scrape USA Weightlifting standards and update Postgres'
     )
     parser.add_argument(
         '--dry-run',

@@ -2,7 +2,7 @@
 # covers the two existing scrapers it drives (final_start_scraper +
 # owlcms_schedule_scraper), so a single venv can run the whole pipeline.
 #
-# DB writes use the shared common/postgres_writer (psycopg). Convex writes and
+# DB writes use the shared common/postgres_writer (psycopg).
 # PDF/Slack HTTP use requests.
 
 # pipeline + ingest + slack + detect

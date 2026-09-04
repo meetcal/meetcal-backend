@@ -1,24 +1,22 @@
 """
-Assign athletes to preliminary schedule sessions and export Convex-ready placements.
+Assign athletes to preliminary schedule sessions and export placements.
 
 Usage:
   python assign_athlete_sessions.py dry-run
   python assign_athlete_sessions.py dry-run --output athlete_placements_preview.ts
-  python assign_athlete_sessions.py convex
+  python assign_athlete_sessions.py ingest
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
-import requests
 from dotenv import load_dotenv
 
 from final_scraper import (
@@ -26,11 +24,13 @@ from final_scraper import (
     PDF_URL,
     download_pdf,
     extract_assignment_schedule_data,
-    get_convex_url,
 )
 
 PRELIM_DIR = Path(__file__).with_name("prelim")
 sys.path.insert(0, str(PRELIM_DIR))
+SCRAPERS_DIR = Path(__file__).resolve().parents[2]
+if str(SCRAPERS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRAPERS_DIR))
 
 from assign_sessions import find_matching_session  # noqa: E402
 
@@ -39,9 +39,6 @@ load_dotenv(Path(__file__).resolve().parents[3] / ".env.local")
 load_dotenv(Path(__file__).resolve().parents[3] / ".env")
 
 DEFAULT_OUTPUT_PATH = "athlete_placements_preview.ts"
-CONVEX_QUERY_PATH = "athletes:getByMeet"
-CONVEX_INGEST_PATH = "scraperIngestion:ingestAthlete"
-REQUEST_TIMEOUT_SECONDS = 45
 WSO_MEET_NAME = "2026 Mountain North WSO Championships"
 SOURCE_MEET_NAMES = (
     "ADAPTIVE ATHLETES - The 2026 National Junior Championships, Powered by Rogue Fitness",
@@ -58,37 +55,45 @@ SOURCE_MEET_NAME_SET = frozenset(SOURCE_MEET_NAMES)
 OUTPUT_MEET_NAMES = frozenset({MEET_NAME, WSO_MEET_NAME})
 
 
-def fetch_athletes_from_convex(meet_name: str) -> List[dict]:
-    return fetch_athletes_from_convex_meet(meet_name)
+def _athlete_row_to_camel(row: dict) -> dict:
+    return {
+        "memberId": row.get("member_id", ""),
+        "name": row.get("name", ""),
+        "age": row.get("age"),
+        "club": row.get("club", ""),
+        "wso": row.get("wso"),
+        "gender": row.get("gender", ""),
+        "weightClass": row.get("weight_class", ""),
+        "entryTotal": row.get("entry_total", 0),
+        "sessionNumber": row.get("session_number"),
+        "sessionPlatform": row.get("session_platform"),
+        "meet": row.get("meet", ""),
+        "adaptive": row.get("adaptive", False),
+    }
 
 
-def fetch_athletes_from_convex_meet(meet_name: str) -> List[dict]:
-    convex_url = get_convex_url()
-    if not convex_url:
-        raise ValueError(
-            "CONVEX_URL or EXPO_PUBLIC_CONVEX_URL is required to fetch athletes"
-        )
+def fetch_athletes_from_meet(meet_name: str) -> List[dict]:
+    from common import postgres_writer as pg
 
-    endpoint = f"{convex_url.rstrip('/')}/api/query"
-    response = requests.post(
-        endpoint,
-        json={"path": CONVEX_QUERY_PATH, "args": {"meet": meet_name}},
-        timeout=REQUEST_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    value = payload.get("value", []) if isinstance(payload, dict) else []
-    if not isinstance(value, list):
-        raise ValueError(f"Unexpected Convex response for {CONVEX_QUERY_PATH}: {payload}")
-    return value
+    with pg.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT member_id, name, age, club, wso, gender, weight_class,
+                   entry_total, session_number, session_platform, meet, adaptive
+            FROM athletes
+            WHERE meet = %s
+            """,
+            (meet_name,),
+        ).fetchall()
+    return [_athlete_row_to_camel(row) for row in rows]
 
 
-def fetch_athletes_from_convex_meets(meet_names: Sequence[str]) -> List[dict]:
+def fetch_athletes_from_meets(meet_names: Sequence[str]) -> List[dict]:
     athletes: List[dict] = []
     seen: set[tuple[str, str]] = set()
 
     for meet_name in meet_names:
-        rows = fetch_athletes_from_convex_meet(meet_name)
+        rows = fetch_athletes_from_meet(meet_name)
         print(f"Loaded {len(rows)} athletes from {meet_name}")
         for athlete in rows:
             key = (str(athlete.get("memberId", "")), str(athlete.get("meet", "")))
@@ -100,11 +105,11 @@ def fetch_athletes_from_convex_meets(meet_names: Sequence[str]) -> List[dict]:
     return athletes
 
 
-def fetch_all_source_athletes_from_convex(
+def fetch_all_source_athletes(
     meet_names: Sequence[str] = SOURCE_MEET_NAMES,
 ) -> List[dict]:
     print(f"Fetching athletes from {len(meet_names)} source meets...")
-    return fetch_athletes_from_convex_meets(meet_names)
+    return fetch_athletes_from_meets(meet_names)
 
 
 def meet_event_category(meet: str) -> str:
@@ -122,30 +127,30 @@ def meet_event_category(meet: str) -> str:
     return "unknown"
 
 
-def output_meet_name(convex_athlete: dict, schedule_meet_name: str) -> str:
-    source_meet = str(convex_athlete.get("meet", ""))
+def output_meet_name(athlete_row: dict, schedule_meet_name: str) -> str:
+    source_meet = str(athlete_row.get("meet", ""))
     if meet_event_category(source_meet) == "wso":
         return source_meet
     return schedule_meet_name
 
 
-def athlete_for_matching(convex_athlete: dict, schedule_meet_name: str) -> dict:
-    meet = convex_athlete.get("meet", "")
+def athlete_for_matching(athlete_row: dict, schedule_meet_name: str) -> dict:
+    meet = athlete_row.get("meet", "")
     matching_meet = (
         schedule_meet_name if meet in SOURCE_MEET_NAME_SET else meet
     )
     return {
-        "member_id": convex_athlete.get("memberId", ""),
-        "name": convex_athlete.get("name", ""),
-        "age": convex_athlete.get("age"),
-        "club": convex_athlete.get("club", ""),
-        "gender": convex_athlete.get("gender", ""),
-        "weight_class": convex_athlete.get("weightClass", ""),
-        "entry_total": convex_athlete.get("entryTotal", 0),
+        "member_id": athlete_row.get("memberId", ""),
+        "name": athlete_row.get("name", ""),
+        "age": athlete_row.get("age"),
+        "club": athlete_row.get("club", ""),
+        "gender": athlete_row.get("gender", ""),
+        "weight_class": athlete_row.get("weightClass", ""),
+        "entry_total": athlete_row.get("entryTotal", 0),
         "meet": matching_meet,
         "event_category": meet_event_category(meet),
-        "adaptive": convex_athlete.get("adaptive", False),
-        "wso": convex_athlete.get("wso"),
+        "adaptive": athlete_row.get("adaptive", False),
+        "wso": athlete_row.get("wso"),
     }
 
 
@@ -158,37 +163,37 @@ def is_adaptive_meet(meet: str) -> bool:
     return "adaptive" in meet.lower()
 
 
-def is_adaptive_athlete(convex_athlete: dict) -> bool:
-    return bool(convex_athlete.get("adaptive")) or is_adaptive_meet(
-        str(convex_athlete.get("meet", ""))
+def is_adaptive_athlete(athlete_row: dict) -> bool:
+    return bool(athlete_row.get("adaptive")) or is_adaptive_meet(
+        str(athlete_row.get("meet", ""))
     )
 
 
 def build_placement(
-    convex_athlete: dict,
+    athlete_row: dict,
     schedule: Sequence[dict],
     schedule_meet_name: str,
 ) -> dict:
-    athlete = athlete_for_matching(convex_athlete, schedule_meet_name)
+    athlete = athlete_for_matching(athlete_row, schedule_meet_name)
     matching_session = find_matching_session(athlete, list(schedule))
 
     placement = {
-        "memberId": convex_athlete.get("memberId", ""),
-        "name": convex_athlete.get("name", ""),
-        "age": convex_athlete.get("age"),
-        "club": convex_athlete.get("club", ""),
-        "gender": convex_athlete.get("gender", ""),
-        "weightClass": convex_athlete.get("weightClass", ""),
-        "entryTotal": convex_athlete.get("entryTotal", 0),
-        "meet": output_meet_name(convex_athlete, schedule_meet_name),
-        "adaptive": is_adaptive_athlete(convex_athlete),
+        "memberId": athlete_row.get("memberId", ""),
+        "name": athlete_row.get("name", ""),
+        "age": athlete_row.get("age"),
+        "club": athlete_row.get("club", ""),
+        "gender": athlete_row.get("gender", ""),
+        "weightClass": athlete_row.get("weightClass", ""),
+        "entryTotal": athlete_row.get("entryTotal", 0),
+        "meet": output_meet_name(athlete_row, schedule_meet_name),
+        "adaptive": is_adaptive_athlete(athlete_row),
     }
 
-    wso = convex_athlete.get("wso")
+    wso = athlete_row.get("wso")
     if wso:
         placement["wso"] = wso
-    elif meet_event_category(str(convex_athlete.get("meet", ""))) == "wso":
-        derived_wso = wso_from_meet(str(convex_athlete.get("meet", "")))
+    elif meet_event_category(str(athlete_row.get("meet", ""))) == "wso":
+        derived_wso = wso_from_meet(str(athlete_row.get("meet", "")))
         if derived_wso:
             placement["wso"] = derived_wso
 
@@ -288,29 +293,21 @@ def export_ts(placements: Sequence[dict], output_path: str) -> None:
         handle.write("];\n")
 
 
-def ingest_to_convex(placements: Sequence[dict]) -> dict:
-    convex_url = get_convex_url()
-    scraper_secret = os.getenv("SCRAPER_SECRET")
-    if not convex_url or not scraper_secret:
-        raise ValueError(
-            "CONVEX_URL (or EXPO_PUBLIC_CONVEX_URL) and SCRAPER_SECRET are required for convex mode"
-        )
+def ingest_to_postgres(placements: Sequence[dict]) -> dict:
+    from common import postgres_writer as pg
 
-    endpoint = f"{convex_url.rstrip('/')}/api/action"
     inserted = 0
     updated = 0
     failed = 0
     skipped = 0
 
-    for placement in placements:
-        if "sessionNumber" not in placement or "sessionPlatform" not in placement:
-            skipped += 1
-            continue
+    with pg.connect() as conn:
+        for placement in placements:
+            if "sessionNumber" not in placement or "sessionPlatform" not in placement:
+                skipped += 1
+                continue
 
-        payload = {
-            "path": CONVEX_INGEST_PATH,
-            "args": {
-                "scraperSecret": scraper_secret,
+            row = {
                 "memberId": placement["memberId"],
                 "name": placement["name"],
                 "age": placement["age"],
@@ -322,30 +319,20 @@ def ingest_to_convex(placements: Sequence[dict]) -> dict:
                 "sessionPlatform": placement["sessionPlatform"],
                 "meet": placement["meet"],
                 "adaptive": placement["adaptive"],
-                **({"wso": placement["wso"]} if placement.get("wso") else {}),
-            },
-        }
+            }
+            if placement.get("wso"):
+                row["wso"] = placement["wso"]
 
-        try:
-            response = requests.post(
-                endpoint, json=payload, timeout=REQUEST_TIMEOUT_SECONDS
-            )
-            if not response.ok:
+            try:
+                value = pg.upsert_athlete(conn, row)
+                if value.get("wasInsert") is True:
+                    inserted += 1
+                else:
+                    updated += 1
+            except Exception as exc:  # noqa: BLE001
                 failed += 1
-                print(
-                    f"HTTP {response.status_code} for {placement['name']}: {response.text}"
-                )
-                continue
-
-            data = response.json()
-            value = data.get("value", {}) if isinstance(data, dict) else {}
-            if value.get("wasInsert") is True:
-                inserted += 1
-            else:
-                updated += 1
-        except Exception as exc:  # noqa: BLE001
-            failed += 1
-            print(f"Convex error for {placement['name']}: {exc}")
+                print(f"Postgres error for {placement['name']}: {exc}")
+        conn.commit()
 
     return {
         "total": len(placements),
@@ -401,8 +388,8 @@ def run(
         assigned = len(placements) - unassigned
         print(f"Assigned {assigned}/{len(placements)} athletes")
     else:
-        athletes = fetch_all_source_athletes_from_convex(source_meet_names)
-        print(f"Loaded {len(athletes)} total athletes from Convex")
+        athletes = fetch_all_source_athletes(source_meet_names)
+        print(f"Loaded {len(athletes)} total athletes from Postgres")
 
         pdf_file = download_pdf(pdf_url)
         schedule = extract_assignment_schedule_data(
@@ -430,8 +417,8 @@ def run(
             )
         return
 
-    stats = ingest_to_convex(placements)
-    print("Convex ingest complete:")
+    stats = ingest_to_postgres(placements)
+    print("Postgres ingest complete:")
     print(stats)
     if run_verification and not input_path:
         export_ts(placements, output_path)
@@ -445,12 +432,12 @@ def run(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Assign Convex athletes to preliminary schedule sessions"
+        description="Assign Postgres athletes to preliminary schedule sessions"
     )
     parser.add_argument(
         "mode",
-        choices=["dry-run", "convex"],
-        help="dry-run writes TypeScript placements, convex upserts athletes",
+        choices=["dry-run", "ingest"],
+        help="dry-run writes TypeScript placements, ingest upserts athletes to Postgres",
     )
     parser.add_argument(
         "--meet",
@@ -461,7 +448,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--source-meet",
         action="append",
         dest="source_meets",
-        help="Convex meet name to include (repeatable). Defaults to all NCW source meets.",
+        help="Meet name to include as an athlete source (repeatable). Defaults to all NCW source meets.",
     )
     parser.add_argument(
         "--url",

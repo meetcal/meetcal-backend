@@ -14,7 +14,7 @@ download PDFs ──► scrape (reuses existing scrapers) ──► validate
 stage to disk (no DB writes)  ◄───────────────  preview.html + report
    │
    ▼
-Slack review message  ──►  you reply "okay"  ──►  ingest to Postgres + Convex
+Slack review message  ──►  you reply "okay"  ──►  ingest to Postgres
                             you reply "reject" ──► discard
 ```
 
@@ -34,7 +34,7 @@ modifies them.
 | `stage.py` / `models.py` | Persist a run (`bundle.json`) + `preview.html`; no DB writes |
 | `preview.py` | Self-contained mobile-friendly HTML preview of staged data |
 | `slack.py` | Block Kit review message + reply-based approval polling |
-| `ingest.py` | **Dual-write** to Postgres (`common.postgres_writer`) + Convex (`/api/action`) |
+| `ingest.py` | Postgres write via `common.postgres_writer` |
 | `pipeline.py` | CLI entry point |
 
 Runtime state lives under `state/` (git-ignored): `state/seen.json` (last-seen
@@ -62,8 +62,6 @@ the pipeline can read while a command updates it.
 
 ```bash
 DATABASE_URL=postgres://…            # Postgres ingest target
-CONVEX_URL=…                         # Convex ingest target (phasing out)
-SCRAPER_SECRET=…                     # required for Convex writes
 
 # Slack — reply approval needs a bot token + channel:
 SLACK_BOT_TOKEN=xoxb-…               # scopes: chat:write, channels:history (or groups:history)
@@ -82,7 +80,7 @@ Approval works three ways, in priority order:
    *Reject* buttons. A click hits the Rust API's
    `POST /scrapers/slack/interactions`, which writes a decision file under
    `MEET_AUTOMATION_STATE_DIR/decisions/<run_id>.json`. The `approve` cron
-   consumes it and performs the dual-write. The API and this pipeline must share
+   consumes it and writes to Postgres. The API and this pipeline must share
    the same `MEET_AUTOMATION_STATE_DIR` (same server).
 2. **Reply polling.** With a bot token, `approve` also reads thread replies for
    `okay` / `reject` (fallback when buttons aren't wired).
@@ -107,8 +105,7 @@ $PY -m usaw.meet_automation.pipeline approve --all-pending
 # inspect / operate manually
 $PY -m usaw.meet_automation.pipeline list
 $PY -m usaw.meet_automation.pipeline show <run_id>
-$PY -m usaw.meet_automation.pipeline ingest <run_id>            # publish now (both targets)
-$PY -m usaw.meet_automation.pipeline ingest <run_id> --target postgres
+$PY -m usaw.meet_automation.pipeline ingest <run_id>            # publish now
 $PY -m usaw.meet_automation.pipeline reject <run_id>
 $PY -m usaw.meet_automation.pipeline detect --all --candidates  # dry inspection
 ```
@@ -165,8 +162,5 @@ Then stage from a real PDF and ingest into the test DB only:
 
 ```bash
 $PY -m usaw.meet_automation.pipeline run --watch 2026-nationals --no-slack --force
-$PY -m usaw.meet_automation.pipeline ingest <run_id> --target postgres
+$PY -m usaw.meet_automation.pipeline ingest <run_id>
 ```
-
-Leave `CONVEX_URL` unset while testing so `--target postgres` (or `both`)
-writes only to the local database.

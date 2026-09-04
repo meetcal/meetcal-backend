@@ -29,7 +29,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from io import StringIO
 
-from common.convex_compat import ConvexClient
+from common.postgres_ingest import IngestClient
 
 # Load environment variables
 load_dotenv()
@@ -74,16 +74,12 @@ class UMWFRecordsScraper:
 
     def __init__(self):
         """Initialize the scraper."""
-        self.convex_client: Optional[ConvexClient] = None
+        self.ingest_client: Optional[IngestClient] = None
         self.slack_webhook_url: Optional[str] = None
 
-    def setup_convex_client(self):
-        """Initialize Convex client."""
-        convex_url = os.getenv("CONVEX_URL")
-        if not convex_url:
-            raise ValueError("CONVEX_URL must be set in .env")
-        self.convex_client = ConvexClient(convex_url)
-        print("* Convex client initialized")
+    def setup_ingest_client(self):
+        self.ingest_client = IngestClient()
+        print("Postgres ingest client initialized")
 
     def setup_slack(self):
         """Initialize Slack webhook."""
@@ -287,7 +283,7 @@ class UMWFRecordsScraper:
         print("DRY RUN - No database changes will be made")
         print("="*60 + "\n")
 
-        print(f"Would upsert {len(records)} records to Convex:")
+        print(f"Would upsert {len(records)} records to Postgres:")
         for record in records[:20]:
             print(f"  {record['age_category']} {record['gender']} {record['weight_class']}: "
                   f"Snatch={record['snatch_record']}, CJ={record['cj_record']}, Total={record['total_record']}")
@@ -301,10 +297,10 @@ class UMWFRecordsScraper:
             'total': len(records)
         }
 
-    def upsert_to_convex(self, records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-        """Upsert records to Convex via scraperIngestion:ingestRecord."""
-        if not self.convex_client:
-            self.setup_convex_client()
+    def upsert_to_postgres(self, records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Upsert records to Postgres via scraperIngestion:ingestRecord."""
+        if not self.ingest_client:
+            self.setup_ingest_client()
 
         scraper_secret = os.getenv("SCRAPER_SECRET")
         if not scraper_secret:
@@ -315,7 +311,7 @@ class UMWFRecordsScraper:
 
         for record in records:
             try:
-                result = self.convex_client.action("scraperIngestion:ingestRecord", {
+                result = self.ingest_client.action("scraperIngestion:ingestRecord", {
                     "scraperSecret": scraper_secret,
                     "recordType": record['record_type'],
                     "ageCategory": record['age_category'],
@@ -404,8 +400,8 @@ class UMWFRecordsScraper:
         # Export to CSV
         self.export_to_csv(records)
 
-        # Setup Convex client
-        self.setup_convex_client()
+        # Setup ingest client
+        self.setup_ingest_client()
 
         # Setup Slack for notifications (works in both modes)
         self.setup_slack()
@@ -422,7 +418,7 @@ class UMWFRecordsScraper:
             print("\n" + "="*60)
             print("UPDATING DATABASE")
             print("="*60 + "\n")
-            result = self.upsert_to_convex(records)
+            result = self.upsert_to_postgres(records)
             print(f"\n* Complete: {len(result['inserted'])} upserted")
 
             # Send Slack notification

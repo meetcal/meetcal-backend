@@ -22,7 +22,7 @@ from assign_athlete_sessions import (
     OUTPUT_MEET_NAMES,
     SOURCE_MEET_NAMES,
     assign_placements,
-    fetch_all_source_athletes_from_convex,
+    fetch_all_source_athletes,
     is_adaptive_athlete,
 )
 from final_scraper import (
@@ -69,7 +69,7 @@ def build_verification_settings(argv: Optional[Sequence[str]] = None) -> Verific
         "--source-meet",
         action="append",
         dest="source_meets",
-        help="Convex source meet name (repeatable)",
+        help="Meet name to include as an athlete source (repeatable)",
     )
     parser.add_argument("--url", default=PDF_URL)
     parser.add_argument("--output", default=DEFAULT_OUTPUT_PATH)
@@ -210,7 +210,7 @@ def collect_preserved_field_issues(
     issues: set[str] = set()
     if len(output_entries) != len(source_athletes):
         issues.add(
-            f"output row count {len(output_entries)} != convex athlete count "
+            f"output row count {len(output_entries)} != source athlete count "
             f"{len(source_athletes)}"
         )
         return sorted(issues)
@@ -355,7 +355,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
 
     output_entries = load_output_entries(settings.output_path)
-    athletes = fetch_all_source_athletes_from_convex(settings.source_meet_names)
+    athletes = fetch_all_source_athletes(settings.source_meet_names)
 
     pdf_file = download_pdf(settings.pdf_url)
     schedule = extract_assignment_schedule_data(
@@ -393,11 +393,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     lines: list[str] = []
     lines.append(f"Schedule meet: {settings.schedule_meet_name}")
     lines.append(f"Source meets: {len(settings.source_meet_names)}")
-    lines.append(f"Convex athletes: {len(athletes)}")
+    lines.append(f"Source athletes: {len(athletes)}")
     lines.append(f"Assignment schedule rows: {len(schedule)}")
     lines.append(f"Output rows: {len(output_entries)}")
     lines.append(f"Recomputed placements: {len(recomputed_placements)}")
-    lines.append(f"Output matches Convex athlete count: {len(output_entries) == len(athletes)}")
+    lines.append(f"Output matches source athlete count: {len(output_entries) == len(athletes)}")
     lines.append(
         "Output matches recomputed placements: "
         f"{len(issues['assignmentMismatch']) == 0 and len(output_entries) == len(recomputed_placements)}"

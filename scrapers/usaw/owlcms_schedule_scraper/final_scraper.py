@@ -1,11 +1,11 @@
 """
-Scrape OWLCMS final schedule PDFs and either export CSV (dry-run) or ingest to Convex.
+Scrape OWLCMS final schedule PDFs and either export CSV (dry-run) or ingest to Postgres.
 
 Usage:
   python final_scraper.py dry-run
   python final_scraper.py dry-run --output final_schedule_preview.csv
-  python final_scraper.py convex
-  python final_scraper.py convex --url "https://...pdf" --meet "2026 VIRUS Weightlifting Series 1"
+  python final_scraper.py ingest
+  python final_scraper.py ingest --url "https://...pdf" --meet "2026 VIRUS Weightlifting Series 1"
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import date as date_cls
@@ -38,9 +39,9 @@ load_dotenv()
 load_dotenv(Path(__file__).resolve().parents[3] / ".env.local")
 load_dotenv(Path(__file__).resolve().parents[3] / ".env")
 
-
-def get_convex_url() -> Optional[str]:
-    return os.getenv("CONVEX_URL") or os.getenv("EXPO_PUBLIC_CONVEX_URL")
+SCRAPERS_DIR = Path(__file__).resolve().parents[2]
+if str(SCRAPERS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRAPERS_DIR))
 
 # ---------------------------
 # Top-level scraper config
@@ -66,8 +67,6 @@ PLATFORM_VALUES = {
     "STRIPES",
     "ROGUE",
 }
-CONVEX_INGEST_PATH = "scraperIngestion:ingestSessionSchedule"
-CONVEX_DELETE_PATH = "scraperIngestion:deleteSessionScheduleByMeet"
 PLATFORM_SORT_ORDER = {
     "Red": 0,
     "White": 1,
@@ -161,9 +160,8 @@ class ScheduleRow:
             "meet": self.meet,
         }
 
-    def to_convex_args(self, scraper_secret: str) -> dict:
+    def to_ingest_args(self) -> dict:
         return {
-            "scraperSecret": scraper_secret,
             "date": self.date,
             "sessionId": self.session_id,
             "startTime": self.start_time,
@@ -2401,45 +2399,25 @@ def export_ts(rows: Sequence[ScheduleRow], output_path: str) -> None:
         handle.write("]\n")
 
 
-def ingest_to_convex(rows: Sequence[ScheduleRow]) -> dict:
-    convex_url = get_convex_url()
-    scraper_secret = os.getenv("SCRAPER_SECRET")
+def ingest_to_postgres(rows: Sequence[ScheduleRow]) -> dict:
+    from common import postgres_writer as pg
 
-    if not convex_url or not scraper_secret:
-        raise ValueError(
-            "CONVEX_URL (or EXPO_PUBLIC_CONVEX_URL) and SCRAPER_SECRET are required for convex mode"
-        )
-
-    endpoint = f"{convex_url.rstrip('/')}/api/action"
     inserted = 0
     updated = 0
     failed = 0
 
-    for row in rows:
-        payload = {
-            "path": CONVEX_INGEST_PATH,
-            "args": row.to_convex_args(scraper_secret=scraper_secret),
-        }
-        try:
-            response = requests.post(
-                endpoint, json=payload, timeout=REQUEST_TIMEOUT_SECONDS
-            )
-            if not response.ok:
+    with pg.connect() as conn:
+        for row in rows:
+            try:
+                value = pg.upsert_session_schedule(conn, row.to_ingest_args())
+                if value.get("wasInsert") is True:
+                    inserted += 1
+                else:
+                    updated += 1
+            except Exception as exc:  # noqa: BLE001
                 failed += 1
-                print(
-                    f"HTTP {response.status_code} for session {row.session_id} {row.platform}: {response.text}"
-                )
-                continue
-
-            data = response.json()
-            value = data.get("value", {}) if isinstance(data, dict) else {}
-            if value.get("wasInsert") is True:
-                inserted += 1
-            else:
-                updated += 1
-        except Exception as exc:  # noqa: BLE001
-            failed += 1
-            print(f"Convex error for session {row.session_id} {row.platform}: {exc}")
+                print(f"Postgres error for session {row.session_id} {row.platform}: {exc}")
+        conn.commit()
 
     return {
         "total": len(rows),
@@ -2449,27 +2427,16 @@ def ingest_to_convex(rows: Sequence[ScheduleRow]) -> dict:
     }
 
 
-def delete_schedule_from_convex(meet_name: str) -> dict:
-    convex_url = get_convex_url()
-    scraper_secret = os.getenv("SCRAPER_SECRET")
+def delete_schedule_from_postgres(meet_name: str) -> dict:
+    from common import postgres_writer as pg
 
-    if not convex_url or not scraper_secret:
-        raise ValueError(
-            "CONVEX_URL (or EXPO_PUBLIC_CONVEX_URL) and SCRAPER_SECRET are required for convex mode"
-        )
-
-    endpoint = f"{convex_url.rstrip('/')}/api/action"
-    response = requests.post(
-        endpoint,
-        json={
-            "path": CONVEX_DELETE_PATH,
-            "args": {"scraperSecret": scraper_secret, "meet": meet_name},
-        },
-        timeout=REQUEST_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return data.get("value", {}) if isinstance(data, dict) else {}
+    with pg.connect() as conn:
+        deleted = conn.execute(
+            "DELETE FROM session_schedule WHERE meet = %s RETURNING 1",
+            (meet_name,),
+        ).rowcount
+        conn.commit()
+    return {"deleted": deleted}
 
 
 def run(
@@ -2497,19 +2464,19 @@ def run(
         return
 
     if replace_existing:
-        stats = delete_schedule_from_convex(meet_name)
-        print("Deleted existing Convex schedule rows:")
+        stats = delete_schedule_from_postgres(meet_name)
+        print("Deleted existing Postgres schedule rows:")
         print(stats)
 
-    stats = ingest_to_convex(rows_with_ids)
-    print("Convex ingest complete:")
+    stats = ingest_to_postgres(rows_with_ids)
+    print("Postgres ingest complete:")
     print(stats)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Scrape OWLCMS final schedule PDF")
     parser.add_argument(
-        "mode", choices=["dry-run", "convex"], help="dry-run writes CSV, convex uploads"
+        "mode", choices=["dry-run", "ingest"], help="dry-run writes CSV, ingest uploads to Postgres"
     )
     parser.add_argument(
         "--url", default=PDF_URL, help="PDF URL (defaults to top-level PDF_URL)"
@@ -2536,7 +2503,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--replace-existing",
         action="store_true",
-        help="In convex mode, delete existing schedule rows for the meet before ingesting.",
+        help="In ingest mode, delete existing schedule rows for the meet before ingesting.",
     )
     return parser
 
