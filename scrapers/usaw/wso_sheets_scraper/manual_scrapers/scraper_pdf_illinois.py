@@ -197,10 +197,6 @@ class WSORecordsIllinoisScraper:
         if not self.ingest_client:
             raise ValueError("Ingest client not initialized")
 
-        scraper_secret = os.getenv("SCRAPER_SECRET")
-        if not scraper_secret:
-            raise ValueError("SCRAPER_SECRET must be set")
-
         payload_records = []
         for record in records:
             payload_record = {
@@ -217,7 +213,6 @@ class WSORecordsIllinoisScraper:
             payload_records.append(payload_record)
 
         payload = {
-            "scraperSecret": scraper_secret,
             "wso": self.wso_name,
             "records": payload_records,
         }

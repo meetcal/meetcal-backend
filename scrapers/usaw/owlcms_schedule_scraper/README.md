@@ -138,6 +138,8 @@ C -> Blue
 
 Postgres ingestion requires `DATABASE_URL`. Rows are upserted via `common.postgres_writer.upsert_session_schedule`.
 
+`--replace-existing` deletes the meet's current `session_schedule` rows and inserts the parsed rows in **one transaction**. If ingest fails, the delete is rolled back and the previous schedule stays in place.
+
 ## Troubleshooting
 
 - `No rows parsed`: the PDF likely uses an unsupported layout, OCR is unavailable, or OCR confidence was too poor to recover the schedule columns.

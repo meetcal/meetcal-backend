@@ -75,6 +75,22 @@ jobs:
 
   python:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: meetcal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d meetcal"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/meetcal
     defaults:
       run:
         working-directory: scrapers
@@ -85,11 +101,17 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install Python scraper dependencies
+        run: pip install -r requirements.txt
+
       - name: Compile scraper sources
-        run: python -m compileall -q usaw usamw bwl
+        run: python -m compileall -q common iwf usaw usamw bwl
 
       - name: Meet automation unit tests
         run: PYTHONPATH=. python -m unittest discover -s usaw/meet_automation/tests -p 'test_*.py'
+
+      - name: Postgres ingest tests
+        run: PYTHONPATH=. python -m unittest discover -s common/tests -p 'test_*.py'
 
   dependency-audit:
     name: Rust dependency audit

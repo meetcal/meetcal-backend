@@ -302,17 +302,12 @@ class UMWFRecordsScraper:
         if not self.ingest_client:
             self.setup_ingest_client()
 
-        scraper_secret = os.getenv("SCRAPER_SECRET")
-        if not scraper_secret:
-            raise ValueError("SCRAPER_SECRET must be set in .env")
-
         inserted = []
         updated = []
 
         for record in records:
             try:
                 result = self.ingest_client.action("scraperIngestion:ingestRecord", {
-                    "scraperSecret": scraper_secret,
                     "recordType": record['record_type'],
                     "ageCategory": record['age_category'],
                     "gender": record['gender'],

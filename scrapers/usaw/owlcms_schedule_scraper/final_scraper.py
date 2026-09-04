@@ -2399,44 +2399,37 @@ def export_ts(rows: Sequence[ScheduleRow], output_path: str) -> None:
         handle.write("]\n")
 
 
-def ingest_to_postgres(rows: Sequence[ScheduleRow]) -> dict:
+def ingest_to_postgres(
+    rows: Sequence[ScheduleRow],
+    meet_name: str,
+    replace_existing: bool = False,
+) -> dict:
     from common import postgres_writer as pg
 
     inserted = 0
     updated = 0
-    failed = 0
+    deleted = 0
 
     with pg.connect() as conn:
+        if replace_existing:
+            deleted = conn.execute(
+                "DELETE FROM session_schedule WHERE meet = %s RETURNING 1",
+                (meet_name,),
+            ).rowcount
         for row in rows:
-            try:
-                value = pg.upsert_session_schedule(conn, row.to_ingest_args())
-                if value.get("wasInsert") is True:
-                    inserted += 1
-                else:
-                    updated += 1
-            except Exception as exc:  # noqa: BLE001
-                failed += 1
-                print(f"Postgres error for session {row.session_id} {row.platform}: {exc}")
+            value = pg.upsert_session_schedule(conn, row.to_ingest_args())
+            if value.get("wasInsert") is True:
+                inserted += 1
+            else:
+                updated += 1
         conn.commit()
 
     return {
         "total": len(rows),
         "inserted": inserted,
         "updated": updated,
-        "failed": failed,
+        "deleted": deleted,
     }
-
-
-def delete_schedule_from_postgres(meet_name: str) -> dict:
-    from common import postgres_writer as pg
-
-    with pg.connect() as conn:
-        deleted = conn.execute(
-            "DELETE FROM session_schedule WHERE meet = %s RETURNING 1",
-            (meet_name,),
-        ).rowcount
-        conn.commit()
-    return {"deleted": deleted}
 
 
 def run(
@@ -2463,12 +2456,9 @@ def run(
         print(f"Preview file: {output_path}")
         return
 
-    if replace_existing:
-        stats = delete_schedule_from_postgres(meet_name)
-        print("Deleted existing Postgres schedule rows:")
-        print(stats)
-
-    stats = ingest_to_postgres(rows_with_ids)
+    stats = ingest_to_postgres(
+        rows_with_ids, meet_name=meet_name, replace_existing=replace_existing
+    )
     print("Postgres ingest complete:")
     print(stats)
 
@@ -2503,7 +2493,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--replace-existing",
         action="store_true",
-        help="In ingest mode, delete existing schedule rows for the meet before ingesting.",
+        help="In ingest mode, delete existing schedule rows for the meet in the same transaction as the ingest.",
     )
     return parser
 

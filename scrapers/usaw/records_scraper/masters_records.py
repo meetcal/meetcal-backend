@@ -428,12 +428,6 @@ class USAMWMastersRecordsScraper:
         if not self.ingest_client:
             self.setup_ingest_client()
 
-        scraper_secret = (
-            "24867d854eb4f5677cb12a0d4bc8b9ddafe4957c3d11de7930b6a7e5eba9c9f8"
-        )
-        if not scraper_secret:
-            raise ValueError("SCRAPER_SECRET must be set in .env")
-
         inserted = []
         updated = []
 
@@ -442,7 +436,6 @@ class USAMWMastersRecordsScraper:
                 result = self.ingest_client.action(
                     "scraperIngestion:ingestRecord",
                     {
-                        "scraperSecret": scraper_secret,
                         "recordType": record["record_type"],
                         "ageCategory": record["age_category"],
                         "gender": record["gender"],

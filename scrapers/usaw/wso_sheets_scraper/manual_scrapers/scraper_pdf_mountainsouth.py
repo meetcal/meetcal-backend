@@ -250,16 +250,14 @@ class WSORecordsMountainSouthScraper:
         if not self.ingest_client:
             raise ValueError("Ingest client not initialized")
 
-        scraper_secret = os.getenv("SCRAPER_SECRET")
-        if not scraper_secret:
-            raise ValueError("SCRAPER_SECRET must be set in .env")
-
         inserted = []
         updated = []
 
         for record in records:
             try:
-                result = self.ingest_client.action("scraperIngestion:ingestWSORecord", wso_record_ingest_args(record, scraper_secret))
+                result = self.ingest_client.action(
+                    "scraperIngestion:ingestWSORecord", wso_record_ingest_args(record)
+                )
                 if result.get('wasInsert'):
                     inserted.append(record)
                     print(f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}")

@@ -8,7 +8,8 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 if (!process.env.DATABASE_URL) {
-    console.warn('DATABASE_URL not provided. Database updates will be skipped.');
+    console.error('Missing DATABASE_URL. Exiting.');
+    process.exit(1);
 }
 
 // Read the target URL from file

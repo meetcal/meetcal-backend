@@ -298,7 +298,6 @@ def ingest_to_postgres(placements: Sequence[dict]) -> dict:
 
     inserted = 0
     updated = 0
-    failed = 0
     skipped = 0
 
     with pg.connect() as conn:
@@ -323,22 +322,17 @@ def ingest_to_postgres(placements: Sequence[dict]) -> dict:
             if placement.get("wso"):
                 row["wso"] = placement["wso"]
 
-            try:
-                value = pg.upsert_athlete(conn, row)
-                if value.get("wasInsert") is True:
-                    inserted += 1
-                else:
-                    updated += 1
-            except Exception as exc:  # noqa: BLE001
-                failed += 1
-                print(f"Postgres error for {placement['name']}: {exc}")
+            value = pg.upsert_athlete(conn, row)
+            if value.get("wasInsert") is True:
+                inserted += 1
+            else:
+                updated += 1
         conn.commit()
 
     return {
         "total": len(placements),
         "inserted": inserted,
         "updated": updated,
-        "failed": failed,
         "skippedUnassigned": skipped,
     }
 
