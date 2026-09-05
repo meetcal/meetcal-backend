@@ -1,0 +1,50 @@
+Meet: 2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+Source: Postgres athletes table
+Athletes: 619
+Assigned: 619
+Unassigned: 0
+Schedule rows: 59
+Youth in OPEN (should be 0): 0
+
+Session fills:
+  S 1:   7  (Red:2, White:3, Blue:2)
+  S 2:   7  (Red:1, White:5, Blue:1)
+  S 3:  18  (Red:4, White:6, Blue:8)
+  S 4:  23  (Red:11, White:11, Blue:1)
+  S 5:  26  (Red:5, White:8, Blue:13)
+  S 6:  39  (Red:11, White:17, Blue:11)
+  S 7:  32  (Red:10, White:10, Blue:12)
+  S 8:  35  (Red:8, White:10, Blue:17)
+  S 9:  74  (Red:53, White:6, Blue:15)
+  S10:  29  (Red:24, White:3, Blue:2)
+  S11:  26  (Red:11, White:7, Blue:8)
+  S12:  40  (Red:17, White:10, Blue:13)
+  S13:  52  (Red:32, White:10, Blue:10)
+  S14:  53  (Red:29, White:11, Blue:13)
+  S15:  17  (Red:6, White:6, Blue:5)
+  S16:  18  (Red:11, White:7, Blue:0)
+  S17:  34  (Red:7, White:14, Blue:13)
+  S18:  35  (Red:14, White:12, Blue:9)
+  S19:  33  (Red:11, White:11, Blue:11)
+  S20:  21  (Red:11, White:10, Blue:0)
+
+Platforms < 7:
+  S1 Red: 2 | F OPEN 49kg & 53kg B totals=60-96
+  S1 White: 3 | F OPEN 57kg C totals=49-100
+  S1 Blue: 2 | M OPEN 60kg & 65kg B totals=68-190
+  S2 Red: 1 | M OPEN 70kg B totals=102-195
+  S2 White: 5 | F OPEN 57kg B totals=100-118
+  S2 Blue: 1 | M OPEN 75kg D totals=73-180
+  S3 Red: 4 | F OPEN 49kg & 53kg A totals=99-185
+  S3 White: 6 | F OPEN 69kg E totals=50-110
+  S4 Blue: 1 | F OPEN 61kg D totals=60-110
+  S5 Red: 5 | M OPEN 70kg A totals=199-300
+  S9 White: 6 | F OPEN 77kg F totals=55-100
+  S10 White: 3 | F OPEN 77kg E totals=100-120
+  S10 Blue: 2 | M OPEN 85kg E totals=0-180
+  S15 Red: 6 | M OPEN 95kg E totals=70-190
+  S15 White: 6 | F OPEN 86kg D totals=50-110
+  S15 Blue: 5 | F OPEN 86+kg C totals=80-139
+  S16 Blue: 0 | M OPEN 110kg C totals=0-230
+
+Unassigned:
