@@ -7,7 +7,7 @@ import argparse
 import os
 import re
 import sys
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from PyPDF2 import PdfReader
@@ -15,17 +15,29 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-if TYPE_CHECKING:
-    from common.convex_compat import ConvexClient
-
-
 class WSORecordsIllinoisScraper:
+    ROW_PATTERN = re.compile(
+        r"^(?P<age>U\d+|JR|Open|[WM]\d{2})\s+"
+        r"(?P<gender>[FM])\s+"
+        r"(?P<weight>(?:>\s*)?\d+\+?)\s+"
+        r"(?P<lift>Snatch|Clean\s*&\s*Jerk|Total)\s+"
+        r"(?P<record>\d+(?:\.\d+)?)\s+"
+        r".+?\b\d{4}-\d{2}-\d{2}(?!\d)",
+        re.IGNORECASE,
+    )
+    RECORD_ROW_PREFIX = re.compile(
+        r"^(?:U\d+|JR|Open|[WM]\d{2})\s+[FM]\s+", re.IGNORECASE
+    )
+    MIN_RECORD_ROWS = 250
+    MIN_LIFT_VALUES = 750
+
     def __init__(self, wso_name: str, pdf_url: str):
         self.wso_name = wso_name
         self.pdf_url = pdf_url
         self.convex_client: Optional[Any] = None
         self.slack_webhook_url: Optional[str] = None
         self.pdf_path = "temp_illinois_wso_records.pdf"
+        self.parse_warnings: List[str] = []
 
     def setup_convex_client(self):
         from common.convex_compat import ConvexClient
@@ -63,137 +75,193 @@ class WSORecordsIllinoisScraper:
             pages.append(text)
         return "\n".join(pages)
 
-    def _clean_text(self, text: str) -> str:
-        lines = []
-        for raw_line in text.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            line = re.sub(r"^Illinois State Records \u00b7 \d+", "", line).strip()
-            if not line:
-                continue
-            if line.startswith("-- ") and " of " in line:
-                continue
-            if line in {
-                "ILLINOIS STATE RECORDS",
-                "Olympic Weightlifting \u00b7 Men & Women",
-                "Public reference edition \u00b7 Event and date shown for each record \u00b7 Ties preserved",
-            }:
-                continue
-            if line.startswith("Through "):
-                continue
-            if line.startswith("Notes:"):
-                break
-            lines.append(line)
-        return "\n".join(lines)
-
     def _normalize_weight_class(self, raw_weight_class: str) -> str:
         normalized = raw_weight_class.strip().lower().replace("kg", "")
         normalized = normalized.replace(" ", "")
+        if normalized.startswith(">"):
+            return normalized[1:].rstrip("+") + "+"
         if normalized.endswith("+"):
             return normalized[:-1] + "+"
         return normalized
 
-    def _extract_lift_values(self, block: str) -> Tuple[Optional[int], Optional[int], Optional[int]]:
-        values = [int(value) for value in re.findall(r"(\d+)\s*kg\s*(?:-|\u2014)", block)]
-        collapsed: List[int] = []
-        for value in values:
-            if not collapsed or collapsed[-1] != value:
-                collapsed.append(value)
-        padded = (collapsed + [None, None, None])[:3]
-        return padded[0], padded[1], padded[2]
+    def _map_age_category(self, raw_age: str, raw_gender: str) -> str:
+        age = raw_age.strip().upper()
+        gender = raw_gender.strip().upper()
+        if age.startswith("U"):
+            return age
+        if age == "JR":
+            return "Junior"
+        if age == "OPEN":
+            return "Senior"
 
-    def _build_record(
+        masters_match = re.fullmatch(r"([WM])(\d{2})", age)
+        if not masters_match:
+            raise ValueError(f"Unsupported Illinois age group: {raw_age}")
+
+        expected_prefix = "W" if gender == "F" else "M"
+        if masters_match.group(1) != expected_prefix:
+            raise ValueError(
+                f"Illinois age/gender mismatch: age={raw_age}, gender={raw_gender}"
+            )
+        return f"Masters {masters_match.group(2)}"
+
+    def _parse_record_value(self, raw_value: str) -> Any:
+        value = float(raw_value)
+        return int(value) if value.is_integer() else value
+
+    def _set_lift_value(
         self,
-        age_category: str,
-        gender: str,
-        weight_class: str,
-        block: str,
-    ) -> Optional[Dict[str, Any]]:
-        snatch, cj, total = self._extract_lift_values(block)
-        if snatch is None and cj is None and total is None:
-            return None
-        return {
-            "wso": self.wso_name,
-            "age_category": age_category,
-            "gender": gender,
-            "weight_class": self._normalize_weight_class(weight_class),
-            "snatch_record": snatch,
-            "cj_record": cj,
-            "total_record": total,
-        }
+        record: Dict[str, Any],
+        field: str,
+        value: Any,
+        source_line: str,
+    ) -> None:
+        if field not in record:
+            record[field] = value
+            return
 
-    def _map_age_heading(self, heading: str) -> Optional[str]:
-        mapped = {
-            "U11": "U11",
-            "U13": "U13",
-            "14-15": "U15",
-            "16-17": "U17",
-            "Junior": "Junior",
-            "Open": "Senior",
-        }
-        return mapped.get(heading)
+        existing = record[field]
+        if existing == value:
+            return
+        if existing == 0 and value > 0:
+            record[field] = value
+            self.parse_warnings.append(
+                f"Preferred non-zero duplicate ({value}) over zero: {source_line}"
+            )
+            return
+        if value == 0 and existing > 0:
+            self.parse_warnings.append(
+                f"Ignored zero duplicate in favor of {existing}: {source_line}"
+            )
+            return
 
-    def _parse_standard_sections(self, section_text: str, gender: str) -> List[Dict[str, Any]]:
-        records: List[Dict[str, Any]] = []
-        age_matches = list(re.finditer(r"(?m)^(U11|U13|14[\u2013-]15|16[\u2013-]17|Junior|Open)$", section_text))
-        for index, match in enumerate(age_matches):
-            raw_heading = match.group(1).replace("\u2013", "-")
-            age_category = self._map_age_heading(raw_heading)
-            if not age_category:
-                continue
-            segment_start = match.end()
-            segment_end = age_matches[index + 1].start() if index + 1 < len(age_matches) else len(section_text)
-            segment = section_text[segment_start:segment_end]
-            weight_matches = list(re.finditer(r"(?m)^(\d+\+?kg)", segment))
-            for weight_index, weight_match in enumerate(weight_matches):
-                block_start = weight_match.start()
-                block_end = weight_matches[weight_index + 1].start() if weight_index + 1 < len(weight_matches) else len(segment)
-                block = segment[block_start:block_end]
-                record = self._build_record(age_category, gender, weight_match.group(1), block)
-                if record:
-                    records.append(record)
-        return records
-
-    def _parse_masters_section(self, section_text: str, gender: str) -> List[Dict[str, Any]]:
-        records: List[Dict[str, Any]] = []
-        masters_matches = list(
-            re.finditer(r"(?m)^(\d{2}[\u2013-]\d{2})\s*\u00b7\s*(\d+\+?kg)", section_text)
+        raise ValueError(
+            f"Conflicting Illinois values for {field}: {existing} and {value}: "
+            f"{source_line}"
         )
-        for index, match in enumerate(masters_matches):
-            start_age = match.group(1).replace("\u2013", "-").split("-")[0]
-            age_category = f"Masters {start_age}"
-            block_start = match.start()
-            block_end = masters_matches[index + 1].start() if index + 1 < len(masters_matches) else len(section_text)
-            block = section_text[block_start:block_end]
-            record = self._build_record(age_category, gender, match.group(2), block)
-            if record:
-                records.append(record)
+
+    def _validate_records(self, records: List[Dict[str, Any]]) -> None:
+        if len(records) < self.MIN_RECORD_ROWS:
+            raise ValueError(
+                f"Illinois PDF yielded only {len(records)} record rows; "
+                f"expected at least {self.MIN_RECORD_ROWS}"
+            )
+
+        lift_fields = ("snatch_record", "cj_record", "total_record")
+        lift_value_count = sum(
+            field in record for record in records for field in lift_fields
+        )
+        if lift_value_count < self.MIN_LIFT_VALUES:
+            raise ValueError(
+                f"Illinois PDF yielded only {lift_value_count} lift values; "
+                f"expected at least {self.MIN_LIFT_VALUES}"
+            )
+
+        expected_age_categories = {
+            "U13",
+            "U15",
+            "U17",
+            "Junior",
+            "Senior",
+            *(f"Masters {age}" for age in range(35, 91, 5)),
+        }
+        for gender in ("Men", "Women"):
+            actual = {
+                record["age_category"]
+                for record in records
+                if record["gender"] == gender
+            }
+            missing = expected_age_categories - actual
+            if missing:
+                raise ValueError(
+                    f"Illinois PDF is missing {gender} age groups: "
+                    f"{', '.join(sorted(missing))}"
+                )
+
+        lift_labels = {
+            "snatch_record": "snatch",
+            "cj_record": "clean & jerk",
+            "total_record": "total",
+        }
+        for record in records:
+            missing_lifts = [
+                label for field, label in lift_labels.items() if field not in record
+            ]
+            identity = (
+                f"{record['age_category']} {record['gender']} "
+                f"{record['weight_class']}"
+            )
+            if missing_lifts:
+                self.parse_warnings.append(
+                    f"Source row is missing {', '.join(missing_lifts)}: {identity}"
+                )
+
+            total = record.get("total_record")
+            individual_lifts = [
+                record.get("snatch_record"), record.get("cj_record")
+            ]
+            positive_lifts = [value for value in individual_lifts if value is not None]
+            if total and positive_lifts and total < max(positive_lifts):
+                self.parse_warnings.append(
+                    f"Source total ({total}) is below an individual lift "
+                    f"({max(positive_lifts)}): {identity}"
+                )
+
+    def parse_pdf_text(
+        self, text: str, *, validate: bool = True
+    ) -> List[Dict[str, Any]]:
+        self.parse_warnings = []
+        grouped: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+        unparsed_record_lines: List[str] = []
+        lift_fields = {
+            "snatch": "snatch_record",
+            "clean&jerk": "cj_record",
+            "total": "total_record",
+        }
+
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            match = self.ROW_PATTERN.match(line)
+            if not match:
+                if self.RECORD_ROW_PREFIX.match(line):
+                    unparsed_record_lines.append(line)
+                continue
+
+            raw_gender = match.group("gender").upper()
+            gender = "Women" if raw_gender == "F" else "Men"
+            age_category = self._map_age_category(match.group("age"), raw_gender)
+            weight_class = self._normalize_weight_class(match.group("weight"))
+            key = (age_category, gender, weight_class)
+            record = grouped.setdefault(
+                key,
+                {
+                    "wso": self.wso_name,
+                    "age_category": age_category,
+                    "gender": gender,
+                    "weight_class": weight_class,
+                },
+            )
+            normalized_lift = re.sub(r"\s+", "", match.group("lift").lower())
+            field = lift_fields[normalized_lift]
+            value = self._parse_record_value(match.group("record"))
+            self._set_lift_value(record, field, value, line)
+
+        if unparsed_record_lines:
+            examples = "\n".join(f"  {line}" for line in unparsed_record_lines[:5])
+            raise ValueError(
+                f"Could not parse {len(unparsed_record_lines)} Illinois record rows:\n"
+                f"{examples}"
+            )
+
+        records = list(grouped.values())
+        if validate:
+            self._validate_records(records)
         return records
 
     def scrape_pdf(self) -> List[Dict[str, Any]]:
-        cleaned_text = self._clean_text(self.extract_pdf_text())
-        gender_matches = list(re.finditer(r"(?m)^(MEN|WOMEN)$", cleaned_text))
-        records: List[Dict[str, Any]] = []
-
-        for index, match in enumerate(gender_matches):
-            gender = "Men" if match.group(1) == "MEN" else "Women"
-            section_start = match.end()
-            section_end = gender_matches[index + 1].start() if index + 1 < len(gender_matches) else len(cleaned_text)
-            section = cleaned_text[section_start:section_end]
-
-            masters_match = re.search(r"(?m)^Masters$", section)
-            if masters_match:
-                standard_section = section[:masters_match.start()]
-                masters_section = section[masters_match.end():]
-            else:
-                standard_section = section
-                masters_section = ""
-
-            records.extend(self._parse_standard_sections(standard_section, gender))
-            if masters_section:
-                records.extend(self._parse_masters_section(masters_section, gender))
-
+        records = self.parse_pdf_text(self.extract_pdf_text())
+        for warning in self.parse_warnings:
+            print(f"Parser warning: {warning}")
         return records
 
     def replace_in_convex(self, records: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -278,10 +346,14 @@ class WSORecordsIllinoisScraper:
             if dry_run:
                 print("Sample records:")
                 for record in records[:10]:
+                    snatch = record.get("snatch_record")
+                    cj = record.get("cj_record")
+                    total = record.get("total_record")
                     print(
                         f"  {record['age_category']:10} | {record['gender']:5} | "
-                        f"{record['weight_class']:5} | {record.get('snatch_record') or '-':>3} | "
-                        f"{record.get('cj_record') or '-':>3} | {record.get('total_record') or '-':>3}"
+                        f"{record['weight_class']:5} | {snatch if snatch is not None else '-':>3} | "
+                        f"{cj if cj is not None else '-':>3} | "
+                        f"{total if total is not None else '-':>3}"
                     )
                 if len(records) > 10:
                     print(f"  ... and {len(records) - 10} more")

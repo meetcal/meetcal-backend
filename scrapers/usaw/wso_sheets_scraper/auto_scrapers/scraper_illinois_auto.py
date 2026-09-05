@@ -71,12 +71,24 @@ class IllinoisAutoScraper:
 
 def main():
     parser = argparse.ArgumentParser(description="Automated scraper for Illinois WSO records")
-    parser.add_argument("--dry-run", action="store_true", help="Parse without updating Convex")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse without updating the database (also the default)",
+    )
+    mode.add_argument(
+        "--apply",
+        action="store_true",
+        help="Replace the Illinois database records with the parsed PDF records",
+    )
     args = parser.parse_args()
 
     load_dotenv()
 
-    scraper = IllinoisAutoScraper(dry_run=args.dry_run)
+    if not args.apply:
+        print("Illinois database write approval gate is active; running dry-run only")
+    scraper = IllinoisAutoScraper(dry_run=not args.apply)
     scraper.run()
 
 

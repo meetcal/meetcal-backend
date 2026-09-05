@@ -193,7 +193,8 @@ wso_scrapers() {
   python_job "${dir}" auto_scrapers/scraper_newengland_auto.py
   python_job "${dir}" auto_scrapers/scraper_mountainsouth_auto.py
   python_job "${dir}" auto_scrapers/scraper_newyork_auto.py
-  python_job "${dir}" auto_scrapers/scraper_illinois_auto.py
+  python_job "${dir}" auto_scrapers/scraper_illinois_auto.py --apply
+  python_job "${dir}" auto_scrapers/scraper_california_south_auto.py --wso "California South" --sheet-url "https://docs.google.com/spreadsheets/d/1PHYJ-lhkXYMrQIIo6YaipePFxruSfbRw1TEUtIoknR0/edit?usp=sharing"
 }
 
 results_sport80() {

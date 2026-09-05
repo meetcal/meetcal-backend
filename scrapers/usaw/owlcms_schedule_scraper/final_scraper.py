@@ -476,6 +476,11 @@ def extract_ncw_prelim_entry(
         row, header_map, "entry_totals_idx", 8, offset
     ).strip()
 
+    # Bare "All" loses age/gender in session_schedule; keep them on the label.
+    if weight_class.strip().lower() == "all":
+        parts = [part for part in (gender, age_group, "All") if part]
+        weight_class = " ".join(parts)
+
     date_str = ncw_prelim_cell(row, header_map, "date_idx", 0, offset)
     if date_str:
         parsed_date = parse_long_form_date(date_str)
