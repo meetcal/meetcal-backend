@@ -36,6 +36,7 @@ pub async fn get_athletes_by_meet(
     State(state): State<AppState>,
     Query(params): Query<MeetsParams>,
 ) -> Result<Json<Vec<Athlete>>, AppError> {
+    crate::common::query::require_non_empty("meet", &params.meet)?;
     let mut rows = sqlx::query_as::<_, Athlete>(
         r#"
         SELECT member_id, adaptive, age, club, entry_total, gender, meet, name,

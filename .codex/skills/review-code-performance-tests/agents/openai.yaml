@@ -1,0 +1,4 @@
+interface:
+  display_name: Review code, performance, and tests
+  short_description: Three-pass MeetCal backend review — architecture, API/ingest performance, then risk-based tests. Open a PR; merge only when authorized and CI is green.
+  default_prompt: Follow .codex/skills/review-code-performance-tests/SKILL.md against app/src/, scrapers/common/, and scrapers/usaw/meet_automation/. Use cargo for Rust, bun for the coverage script, unittest for Python. Postgres is the only ingest path; do not reintroduce Convex. Open one PR against master with fmt, clippy, cargo test, and Python unittest evidence.

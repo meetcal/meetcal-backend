@@ -22,7 +22,11 @@ impl From<anyhow::Error> for AppError {
 
 impl From<sqlx::Error> for AppError {
     fn from(err: sqlx::Error) -> Self {
-        AppError::Database(err)
+        if matches!(err, sqlx::Error::RowNotFound) {
+            AppError::NotFound
+        } else {
+            AppError::Database(err)
+        }
     }
 }
 
@@ -68,5 +72,13 @@ mod tests {
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert_eq!(body, r#"{"error":"Internal server error"}"#);
         assert!(!body.contains("sensitive database detail"));
+    }
+
+    #[tokio::test]
+    async fn missing_rows_are_not_found() {
+        let response = AppError::from(sqlx::Error::RowNotFound).into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(body.as_ref(), br#"{"error":"Not found"}"#);
     }
 }

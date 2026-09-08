@@ -47,6 +47,7 @@ pub async fn get_athletes_by_club(
     State(state): State<AppState>,
     Query(params): Query<ClubsAthletesParams>,
 ) -> Result<Json<Vec<ClubsAthletes>>, AppError> {
+    crate::common::query::require_non_empty("club", &params.club)?;
     let names: Vec<ClubsAthletes> = sqlx::query_as(
         r#"
         SELECT name, meet, club, gender, weight_class, entry_total, member_id

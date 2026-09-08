@@ -53,6 +53,7 @@ pub async fn get_results_current_year(
     State(state): State<AppState>,
     Query(params): Query<ResultsCurrentYearParams>,
 ) -> Result<Json<YearBests>, AppError> {
+    crate::common::query::require_non_empty("name", &params.name)?;
     let rows = if let Some(cutoff_date) = params.cutoff_date {
         sqlx::query_as::<_, YearBests>(
             r#"
@@ -128,6 +129,7 @@ pub async fn get_results_bests(
     State(state): State<AppState>,
     Query(params): Query<BatchYearBestsParams>,
 ) -> Result<Json<BTreeMap<String, YearBests>>, AppError> {
+    crate::common::query::require_name_list(&params.names)?;
     let mut by_name: BTreeMap<String, YearBests> = params
         .names
         .iter()
@@ -142,10 +144,6 @@ pub async fn get_results_bests(
             )
         })
         .collect();
-
-    if params.names.is_empty() {
-        return Ok(Json(by_name));
-    }
 
     // Match results to the originally requested names case- and whitespace-insensitively,
     // while keeping the response keyed by the requested names the caller looks up by.

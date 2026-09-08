@@ -29,6 +29,7 @@ pub async fn get_athletes_by_wso(
     State(state): State<AppState>,
     Query(params): Query<WsoAthletesParams>,
 ) -> Result<Json<Vec<WsoAthlete>>, AppError> {
+    crate::common::query::require_non_empty("wso", &params.wso)?;
     let athletes = sqlx::query_as(
         r#"
         SELECT name, meet, club, wso, gender, weight_class, entry_total, member_id

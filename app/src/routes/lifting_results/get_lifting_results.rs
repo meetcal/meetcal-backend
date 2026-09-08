@@ -35,6 +35,7 @@ pub async fn get_lifting_results(
     State(state): State<AppState>,
     Query(params): Query<MeetsParams>,
 ) -> Result<Json<Vec<LiftingResults>>, AppError> {
+    crate::common::query::require_non_empty("meet", &params.meet)?;
     let rows = sqlx::query_as::<_, LiftingResults>(
         r#"
         SELECT

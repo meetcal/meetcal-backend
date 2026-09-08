@@ -58,6 +58,7 @@ pub async fn get_sessions_for_athletes(
     State(state): State<AppState>,
     Query(params): Query<SessionsAthletesParams>,
 ) -> Result<Json<Vec<SessionsAthletes>>, AppError> {
+    crate::common::query::require_non_empty("meet", &params.meet)?;
     let rows: Vec<SessionsAthletes> = match (params.session_number, params.platform) {
         (Some(session_number), Some(platform)) => {
             sqlx::query_as(

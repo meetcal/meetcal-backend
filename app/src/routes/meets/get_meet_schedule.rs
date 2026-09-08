@@ -31,6 +31,7 @@ pub async fn get_meet_schedule(
     State(state): State<AppState>,
     Query(params): Query<MeetsParams>,
 ) -> Result<Json<Vec<MeetSchedule>>, AppError> {
+    crate::common::query::require_non_empty("meet", &params.meet)?;
     let mut rows = sqlx::query_as::<_, MeetSchedule>(
         r#"
         SELECT date, meet, platform, session_id, start_time, weigh_in_time, weight_class

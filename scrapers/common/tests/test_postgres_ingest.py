@@ -52,6 +52,25 @@ CREATE TABLE IF NOT EXISTS session_schedule (
 )
 """
 
+ATHLETES_DDL = """
+CREATE TABLE IF NOT EXISTS athletes (
+    id BIGSERIAL PRIMARY KEY,
+    convex_id TEXT NOT NULL UNIQUE,
+    member_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    age DOUBLE PRECISION NOT NULL,
+    club TEXT NOT NULL,
+    wso TEXT,
+    gender TEXT NOT NULL,
+    weight_class TEXT NOT NULL,
+    entry_total DOUBLE PRECISION NOT NULL,
+    session_number DOUBLE PRECISION,
+    session_platform TEXT,
+    meet TEXT NOT NULL,
+    adaptive BOOLEAN NOT NULL DEFAULT FALSE
+)
+"""
+
 
 def _ranking(meet: str, gender: str, age_category: str, name: str, ranking: int) -> dict:
     return {
@@ -88,6 +107,7 @@ class PostgresIngestTests(unittest.TestCase):
         with psycopg.connect(url, autocommit=True) as conn:
             conn.execute(INTL_RANKINGS_DDL)
             conn.execute(SESSION_SCHEDULE_DDL)
+            conn.execute(ATHLETES_DDL)
 
     def setUp(self) -> None:
         self.token = uuid.uuid4().hex[:8]
@@ -201,3 +221,84 @@ class PostgresIngestTests(unittest.TestCase):
             (keep_meet, drop_meet),
         ).fetchall()
         self.assertEqual([row["meet"] for row in remaining], [keep_meet])
+
+    def test_delete_athletes_requires_meet(self) -> None:
+        with self.assertRaisesRegex(ValueError, "meet is required"):
+            dispatch(self.conn, "scraperIngestion:deleteAthletesByMeet", {"meet": ""})
+        with self.assertRaisesRegex(ValueError, "meet is required"):
+            dispatch(self.conn, "scraperIngestion:deleteSessionScheduleByMeet", {})
+
+    def test_replace_all_intl_rankings_rejects_empty_payload(self) -> None:
+        with self.assertRaisesRegex(ValueError, "empty payload"):
+            dispatch(self.conn, "scraperIngestion:replaceAllIntlRankings", {"rankings": []})
+
+    def test_replace_intl_rankings_group_requires_identity(self) -> None:
+        with self.assertRaisesRegex(ValueError, "meet is required"):
+            dispatch(
+                self.conn,
+                "scraperIngestion:replaceIntlRankingsForGroup",
+                {"meet": " ", "gender": "Women", "ageCategory": "Senior", "rankings": []},
+            )
+
+    def test_replace_intl_rankings_group_exact_set(self) -> None:
+        meet = f"__test_group_{self.token}__"
+        pg.upsert_intl_ranking(self.conn, _ranking(meet, "Women", "Senior", "Keep", 1))
+        pg.upsert_intl_ranking(self.conn, _ranking(meet, "Women", "Senior", "Drop", 2))
+        result = dispatch(
+            self.conn,
+            "scraperIngestion:replaceIntlRankingsForGroup",
+            {
+                "meet": meet,
+                "gender": "Women",
+                "ageCategory": "Senior",
+                "rankings": [
+                    _ranking(meet, "Women", "Senior", "Keep", 1),
+                    _ranking(meet, "Women", "Senior", "New", 3),
+                ],
+            },
+        )
+        self.assertEqual(result["inserted"], 1)
+        self.assertEqual(result["deleted"], 1)
+        names = {
+            row["name"]
+            for row in self.conn.execute(
+                "SELECT name FROM intl_rankings WHERE meet = %s", (meet,)
+            ).fetchall()
+        }
+        self.assertEqual(names, {"Keep", "New"})
+
+    def test_ingest_bundle_refuses_empty_meet_name(self) -> None:
+        from usaw.meet_automation import ingest
+
+        with self.assertRaisesRegex(ValueError, "meet_name is required"):
+            ingest.ingest_bundle([], [], None, "  ", replace=True)
+
+    def test_ingest_replace_rolls_back_on_write_failure(self) -> None:
+        from unittest.mock import patch
+
+        from usaw.meet_automation import ingest
+
+        meet = f"__test_rb_{self.token}__"
+        athlete = {
+            "memberId": "1",
+            "name": "Keep Me",
+            "age": 24,
+            "club": "Test",
+            "gender": "Female",
+            "weightClass": "71",
+            "entryTotal": 200,
+            "meet": meet,
+        }
+        pg.upsert_athlete(self.conn, athlete)
+        self.conn.commit()
+        try:
+            with patch.object(pg, "upsert_athlete", side_effect=RuntimeError("boom")):
+                with self.assertRaises(RuntimeError):
+                    ingest.ingest_bundle([athlete], [], None, meet, replace=True)
+            remaining = self.conn.execute(
+                "SELECT COUNT(*) AS c FROM athletes WHERE meet = %s", (meet,)
+            ).fetchone()
+            self.assertEqual(remaining["c"], 1)
+        finally:
+            self.conn.execute("DELETE FROM athletes WHERE meet = %s", (meet,))
+            self.conn.commit()

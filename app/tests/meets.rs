@@ -247,3 +247,24 @@ async fn fail_get_meet_package() {
 
     assert_ne!(response.status(), 200);
 }
+
+#[tokio::test]
+async fn unknown_meet_details_are_not_found() {
+    let app = support::spawn_test_app().await;
+    let response = reqwest::get(format!(
+        "{}/meets/details?meet=Definitely%20Not%20A%20Meet",
+        app.address
+    ))
+    .await
+    .unwrap();
+    assert_eq!(response.status(), 404);
+}
+
+#[tokio::test]
+async fn empty_meet_package_query_is_rejected() {
+    let app = support::spawn_test_app().await;
+    let response = reqwest::get(format!("{}/meets/package?meet=%20", app.address))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+}

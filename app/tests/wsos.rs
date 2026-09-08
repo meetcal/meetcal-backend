@@ -29,6 +29,15 @@ async fn missing_wso_query_is_rejected() {
 }
 
 #[tokio::test]
+async fn empty_wso_is_rejected() {
+    let app = support::spawn_test_app().await;
+    let response = reqwest::get(format!("{}/wsos/athletes?wso=%20", app.address))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+}
+
+#[tokio::test]
 async fn unknown_wso_returns_an_empty_list() {
     let app = support::spawn_test_app().await;
     let response = reqwest::get(format!(

@@ -24,6 +24,9 @@ def _ingest_postgres(
     meet_name: str,
     replace: bool,
 ) -> Dict[str, Any]:
+    if not isinstance(meet_name, str) or not meet_name.strip():
+        raise ValueError("meet_name is required")
+
     from common import postgres_writer as pg
 
     stats = {"athletes": {"inserted": 0, "updated": 0, "unchanged": 0},
