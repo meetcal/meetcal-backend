@@ -43,6 +43,27 @@ async fn success_get_athletes_by_clubs() {
 }
 
 #[tokio::test]
+async fn club_athletes_include_registrations_for_non_completed_meets() {
+    let app = support::spawn_test_app().await;
+    let url = format!(
+        "{}/clubs/athletes?club=Vardanian%20Weightlifting",
+        app.address
+    );
+    let response = reqwest::get(&url).await.unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: Vec<ClubsAthletes> = response.json().await.unwrap();
+
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0].name, "Kyle Schulman");
+    assert_eq!(
+        body[0].meet,
+        "2026 USA Weightlifting National Championships, Powered by Rogue Fitness"
+    );
+}
+
+#[tokio::test]
 async fn fail_get_athletes_by_clubs() {
     let app = support::spawn_test_app().await;
     let url = format!("{}/clubs/athletes", app.address);

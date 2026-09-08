@@ -6,3 +6,4 @@ pub mod meets;
 pub mod results;
 pub mod scrapers;
 pub mod users;
+pub mod wsos;
