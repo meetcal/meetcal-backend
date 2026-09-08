@@ -22,7 +22,6 @@ from common import postgres_writer as pg  # noqa: E402
 
 PAGE_URL = "https://usamasters.net/masters-records-grand-slam"
 RECORD_TYPE = "USAMW"
-INGEST_PATH = "scraperIngestion:ingestRecord"
 REQUEST_TIMEOUT_SECONDS = 45
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -176,42 +175,11 @@ def ingest_postgres(rows: list[dict[str, Any]]) -> dict[str, int] | None:
     return summarize(results)
 
 
-def convex_action(endpoint: str, args: dict[str, Any]) -> dict[str, Any]:
-    response = requests.post(
-        endpoint,
-        json={"path": INGEST_PATH, "args": args},
-        timeout=REQUEST_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return data.get("value", data) if isinstance(data, dict) else {}
-
-
-def ingest_convex(rows: list[dict[str, Any]]) -> dict[str, int] | None:
-    convex_url = os.getenv("CONVEX_URL") or os.getenv("EXPO_PUBLIC_CONVEX_URL")
-    scraper_secret = os.getenv("SCRAPER_SECRET")
-    if not convex_url or not convex_url.startswith(("http://", "https://")) or not scraper_secret:
-        return None
-
-    endpoint = f"{convex_url.rstrip('/')}/api/action"
-    results = [
-        convex_action(endpoint, {"scraperSecret": scraper_secret, **row})
-        for row in rows
-    ]
-    return summarize(results)
-
-
 def ingest(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
-    stats: dict[str, dict[str, int]] = {}
     postgres = ingest_postgres(rows)
-    if postgres:
-        stats["postgres"] = postgres
-    convex = ingest_convex(rows)
-    if convex:
-        stats["convex"] = convex
-    if not stats:
-        raise RuntimeError("No ingest targets configured. Set DATABASE_URL and/or CONVEX_URL + SCRAPER_SECRET.")
-    return stats
+    if not postgres:
+        raise RuntimeError("DATABASE_URL must be set for Postgres ingest.")
+    return {"postgres": postgres}
 
 
 def post_slack(text: str) -> None:

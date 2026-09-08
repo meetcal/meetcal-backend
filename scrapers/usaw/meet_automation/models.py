@@ -1,8 +1,7 @@
 """Canonical staged data shapes shared across the pipeline.
 
-Athletes and schedule rows are kept in the camelCase "Convex shape" that both
-ingest targets (Postgres ``postgres_writer`` and the Convex ``/api/action``
-endpoint) already accept, so no per-target translation is needed downstream.
+Athletes and schedule rows are kept in camelCase ingest shape that
+``postgres_writer`` already accepts, so no translation is needed downstream.
 """
 
 from __future__ import annotations

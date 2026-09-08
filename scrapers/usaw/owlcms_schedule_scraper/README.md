@@ -1,13 +1,13 @@
 # OWLCMS Final Schedule Scraper
 
-`final_scraper.py` downloads an OWLCMS final schedule PDF, extracts session rows, and either writes dry-run TypeScript rows or ingests rows into Convex.
+`final_scraper.py` downloads an OWLCMS final schedule PDF, extracts session rows, and either writes dry-run TypeScript rows or ingests rows into Postgres.
 
 ## Usage
 
 ```sh
 scrapers/usaw/owlcms_schedule_scraper/venv/bin/python scrapers/usaw/owlcms_schedule_scraper/final_scraper.py dry-run
 scrapers/usaw/owlcms_schedule_scraper/venv/bin/python scrapers/usaw/owlcms_schedule_scraper/final_scraper.py dry-run --output /tmp/final_schedule_preview.ts
-scrapers/usaw/owlcms_schedule_scraper/venv/bin/python scrapers/usaw/owlcms_schedule_scraper/final_scraper.py convex
+scrapers/usaw/owlcms_schedule_scraper/venv/bin/python scrapers/usaw/owlcms_schedule_scraper/final_scraper.py ingest
 ```
 
 Override the source PDF or meet name with:
@@ -20,7 +20,7 @@ scrapers/usaw/owlcms_schedule_scraper/venv/bin/python scrapers/usaw/owlcms_sched
 
 ## Output Shape
 
-Dry-run TypeScript output is an array of session objects. Each object represents one session/platform/time slot and is normalized to the Convex `session_schedule` shape:
+Dry-run TypeScript output is an array of session objects. Each object represents one session/platform/time slot and is normalized to the Postgres `session_schedule` shape:
 
 ```ts
 [
@@ -30,18 +30,10 @@ Dry-run TypeScript output is an array of session objects. Each object represents
 
 Times are emitted as `HH:MM:SS`. Dates are emitted as `YYYY-MM-DD`. Session IDs are numeric. When a session contains multiple age/category groups, they are combined into one comma-separated `weightClass` value.
 
-The fields match this Convex table:
+The fields match the Postgres `session_schedule` table:
 
-```ts
-session_schedule: defineTable({
-  date: v.string(),
-  meet: v.string(),
-  platform: v.string(),
-  sessionId: v.float64(),
-  startTime: v.string(),
-  weighInTime: v.string(),
-  weightClass: v.string(),
-})
+```text
+date, meet, platform, session_id, start_time, weigh_in_time, weight_class
 ```
 
 If the dry-run `--output` path ends in `.csv`, the scraper writes the older CSV shape instead.
@@ -142,20 +134,11 @@ C -> Blue
 - `WEIGH_IN_OFFSET_HOURS` controls calculated weigh-in times when the source only includes a start time.
 - The default offset is `2` hours.
 
-## Convex Mode
+## Ingest Mode
 
-Convex ingestion requires these environment variables:
+Postgres ingestion requires `DATABASE_URL`. Rows are upserted via `common.postgres_writer.upsert_session_schedule`.
 
-```sh
-CONVEX_URL=...
-SCRAPER_SECRET=...
-```
-
-Rows are sent to:
-
-```text
-scraperIngestion:ingestSessionSchedule
-```
+`--replace-existing` deletes the meet's current `session_schedule` rows and inserts the parsed rows in **one transaction**. If ingest fails, the delete is rolled back and the previous schedule stays in place.
 
 ## Troubleshooting
 

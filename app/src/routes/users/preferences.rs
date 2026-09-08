@@ -74,7 +74,7 @@ pub async fn patch_auto_unsave(
 ) -> Result<Json<UserPreferencesResponse>, AppError> {
     let user_id = user_id_from_headers(&headers, state.auth.as_deref()).await?;
     let updated_at = now_millis()?;
-    let convex_id = format!("user_preferences:{user_id}");
+    let row_id = format!("user_preferences:{user_id}");
     let mut tx = state.db.begin().await?;
     set_request_user(&mut tx, &user_id).await?;
 
@@ -93,7 +93,7 @@ pub async fn patch_auto_unsave(
         RETURNING auto_unsave_started_sessions
         "#,
     )
-    .bind(convex_id)
+    .bind(row_id)
     .bind(&user_id)
     .bind(body.enabled)
     .bind(updated_at)

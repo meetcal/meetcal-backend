@@ -29,7 +29,7 @@
 ## Parsing Notes For Future Files
 
 - Treat `UNI` as a competition marker, not part of the school name.
-- Parse and keep `wso`; it is present in this document and maps cleanly to the Convex `wso` field.
+- Parse and keep `wso`; it is present in this document and maps cleanly to the athlete `wso` field.
 - Default missing clubs to `Unaffiliated`.
 - Keep the parser anchored on the tail and the `year + age` pair, because those have been more stable than the club and competition columns.
 - Keep output paths anchored to the script directory so reruns do not write files into the repo root when invoked from elsewhere.
@@ -115,7 +115,7 @@
 - There is no `Lot`, `Club`, `WSO`, `Session`, `Platform`, `Day`, or `Comp Time` data in this source. The parser handles this as a separate `registration` source format instead of forcing it through the masters inline-tail parser.
 - Mapping choices:
   - `name` joins `First Name` and `Last Names`.
-  - `club` stores the `Country` value because the Convex athlete shape has no country/federation field.
+  - `club` stores the `Country` value because the athlete ingest shape has no country/federation field.
   - `age` stores the lower bound of the `Master Age` bucket, e.g. `75-79` becomes `75` and `30-34` becomes `30`.
   - `sessionNumber`, `sessionPlatform`, and `wso` are omitted because the source does not expose them.
   - `adaptive` is true when `Adaptive Athlete` starts with `YES`, including variants like `YES/Mobility`, `Yes/Mobility`, and `Yes / Mobilidad`.

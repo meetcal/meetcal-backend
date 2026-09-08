@@ -75,12 +75,12 @@ def main():
     mode.add_argument(
         "--dry-run",
         action="store_true",
-        help="Parse without updating the database (also the default)",
+        help="Parse without updating Postgres (also the default)",
     )
     mode.add_argument(
         "--apply",
         action="store_true",
-        help="Replace the Illinois database records with the parsed PDF records",
+        help="Replace the Illinois Postgres records with the parsed PDF records",
     )
     args = parser.parse_args()
 

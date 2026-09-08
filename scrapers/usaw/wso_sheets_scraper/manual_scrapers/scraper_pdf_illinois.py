@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
 class WSORecordsIllinoisScraper:
     ROW_PATTERN = re.compile(
         r"^(?P<age>U\d+|JR|Open|[WM]\d{2})\s+"
@@ -34,19 +35,16 @@ class WSORecordsIllinoisScraper:
     def __init__(self, wso_name: str, pdf_url: str):
         self.wso_name = wso_name
         self.pdf_url = pdf_url
-        self.convex_client: Optional[Any] = None
+        self.ingest_client: Optional[Any] = None
         self.slack_webhook_url: Optional[str] = None
         self.pdf_path = "temp_illinois_wso_records.pdf"
         self.parse_warnings: List[str] = []
 
-    def setup_convex_client(self):
-        from common.convex_compat import ConvexClient
+    def setup_ingest_client(self):
+        from common.postgres_ingest import IngestClient
 
-        convex_url = os.getenv("CONVEX_URL")
-        if not convex_url:
-            raise ValueError("CONVEX_URL must be set")
-        self.convex_client = ConvexClient(convex_url)
-        print("Convex client initialized")
+        self.ingest_client = IngestClient()
+        print("Postgres ingest client initialized")
 
     def setup_slack(self):
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
@@ -264,13 +262,9 @@ class WSORecordsIllinoisScraper:
             print(f"Parser warning: {warning}")
         return records
 
-    def replace_in_convex(self, records: List[Dict[str, Any]]) -> Dict[str, int]:
-        if not self.convex_client:
-            raise ValueError("Convex client not initialized")
-
-        scraper_secret = os.getenv("SCRAPER_SECRET")
-        if not scraper_secret:
-            raise ValueError("SCRAPER_SECRET must be set")
+    def replace_in_postgres(self, records: List[Dict[str, Any]]) -> Dict[str, int]:
+        if not self.ingest_client:
+            raise ValueError("Ingest client not initialized")
 
         payload_records = []
         for record in records:
@@ -288,11 +282,10 @@ class WSORecordsIllinoisScraper:
             payload_records.append(payload_record)
 
         payload = {
-            "scraperSecret": scraper_secret,
             "wso": self.wso_name,
             "records": payload_records,
         }
-        return self.convex_client.action("scraperIngestion:replaceWSORecordSet", payload)
+        return self.ingest_client.action("scraperIngestion:replaceWSORecordSet", payload)
 
     def send_slack_notification(self, result: Dict[str, int], record_count: int):
         if result["inserted"] + result["updated"] + result["deleted"] == 0:
@@ -332,7 +325,7 @@ class WSORecordsIllinoisScraper:
             print()
 
             if not dry_run:
-                self.setup_convex_client()
+                self.setup_ingest_client()
                 self.setup_slack()
 
             self.download_pdf()
@@ -359,7 +352,7 @@ class WSORecordsIllinoisScraper:
                     print(f"  ... and {len(records) - 10} more")
                 return
 
-            result = self.replace_in_convex(records)
+            result = self.replace_in_postgres(records)
             print(
                 f"Sync result: inserted={result['inserted']}, updated={result['updated']}, "
                 f"deleted={result['deleted']}, unchanged={result['unchanged']}"
@@ -373,7 +366,7 @@ def main():
     parser = argparse.ArgumentParser(description="PDF scraper for Illinois WSO records")
     parser.add_argument("--wso", required=True, help="WSO name")
     parser.add_argument("--pdf-url", required=True, help="PDF URL")
-    parser.add_argument("--dry-run", action="store_true", help="Parse without updating Convex")
+    parser.add_argument("--dry-run", action="store_true", help="Parse without updating Postgres")
     args = parser.parse_args()
 
     load_dotenv()

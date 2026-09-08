@@ -23,7 +23,7 @@ import sys
 from typing import Dict, List, Optional
 
 import requests
-from common.convex_compat import ConvexClient
+from common.postgres_ingest import IngestClient
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,13 +40,11 @@ class WSORecordsCaliforniaSouthScraper:
     def __init__(self, wso_name: str, sheet_url: str):
         self.wso_name = wso_name
         self.sheet_url = sheet_url
-        self.convex_client = None
-        self.scraper_secret = None
+        self.ingest_client = None
 
-    def setup_convex_client(self):
-        self.convex_client = ConvexClient(os.getenv("CONVEX_URL"))
-        self.scraper_secret = os.getenv("SCRAPER_SECRET")
-        print("✓ Convex client initialized")
+    def setup_ingest_client(self):
+        self.ingest_client = IngestClient()
+        print("Postgres ingest client initialized")
 
     def _normalize_age_group(self, age_group: str) -> str:
         """Map sheet ageGroup labels to MeetCal age_category values."""
@@ -159,9 +157,9 @@ class WSORecordsCaliforniaSouthScraper:
 
     def upsert_records(self, records: List[Dict]) -> None:
         for record in records:
-            self.convex_client.action(
+            self.ingest_client.action(
                 "scraperIngestion:ingestWSORecord",
-                wso_record_ingest_args(record, self.scraper_secret),
+                wso_record_ingest_args(record),
             )
             print(
                 f"  ✓ Upserted: {record['age_category']} "
@@ -172,13 +170,13 @@ class WSORecordsCaliforniaSouthScraper:
         print(f"Starting scraper for {self.wso_name}")
         print(f"Sheet URL: {self.sheet_url}")
 
-        self.setup_convex_client()
+        self.setup_ingest_client()
 
         print("Scraping Google Sheet...")
         records = self.scrape_sheet()
         print(f"Found {len(records)} records")
 
-        print("Upserting records to Convex...")
+        print("Upserting records to Postgres...")
         self.upsert_records(records)
 
         print("Done!")

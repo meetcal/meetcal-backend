@@ -6,7 +6,7 @@ manager on a self-hosted server. Two cooperating pieces:
 - **The Rust API** (always-on) hosts the Slack control surfaces. It edits JSON
   files on the server's disk and drops approval decisions. No DB writes.
 - **The Python pipeline** (cron) watches meet pages, scrapes, validates, posts
-  Slack reviews, and on approval dual-writes to Postgres + Convex.
+  Slack reviews, and on approval writes to Postgres.
 
 They communicate through files on the **same server**: `watches.json`,
 `entries_targets.json`, and `state/` (staged runs + approval decisions). Slack
@@ -15,7 +15,7 @@ edits take effect with **no redeploy or git pull**.
 ```
 Slack ─slash cmd─▶ Rust API ─writes─▶ watches.json / entries_targets.json ─read─▶ cron jobs
 Slack ─/meet-run─▶ Rust API ─writes─▶ state/run_requests/<key>.json ─read─▶ run --requested cron ─▶ Slack review
-Slack ─button────▶ Rust API ─writes─▶ state/decisions/<run>.json ─read─▶ approve cron ─▶ Postgres + Convex
+Slack ─button────▶ Rust API ─writes─▶ state/decisions/<run>.json ─read─▶ approve cron ─▶ Postgres
 ```
 
 ---
@@ -104,7 +104,6 @@ cp watches.example.json watches.json
 | Variable | Used by | Purpose |
 | --- | --- | --- |
 | `DATABASE_URL` | pipeline | Postgres ingest target (point at TEST db while testing) |
-| `CONVEX_URL`, `SCRAPER_SECRET` | pipeline | Convex ingest target (being phased out) |
 | `SLACK_SIGNING_SECRET` | API | Verifies Slack requests; **required to enable both endpoints** |
 | `SLACK_BOT_TOKEN` | pipeline | Posts reviews, reads replies, posts confirmations |
 | `SLACK_MEET_AUTOMATION_CHANNEL` | API, pipeline | Channel for meet reviews / meet commands |
@@ -130,7 +129,7 @@ Use the venv's python and `PYTHONPATH=<repo>/scrapers`.
 0 8 * * *   cd /path/meetcal-backend/scrapers && PYTHONPATH=. usaw/meet_automation/.venv/bin/python -m usaw.meet_automation.pipeline run --all       >> logs/meet-automation.log 2>&1
 # On-demand /meet-run requests: drain Slack-triggered runs every couple minutes
 */2 * * * * cd /path/meetcal-backend/scrapers && PYTHONPATH=. usaw/meet_automation/.venv/bin/python -m usaw.meet_automation.pipeline run --requested  >> logs/meet-automation-requests.log 2>&1
-# Act on button clicks / replies → dual-write + per-DB confirmations
+# Act on button clicks / replies → Postgres write + confirmation
 */5 * * * * cd /path/meetcal-backend/scrapers && PYTHONPATH=. usaw/meet_automation/.venv/bin/python -m usaw.meet_automation.pipeline approve --all-pending >> logs/meet-automation-approve.log 2>&1
 ```
 
@@ -155,7 +154,7 @@ from your phone.
    couple minutes and posts the same review. Forces a fresh stage even if the
    PDFs haven't changed.
 3. Tap **Approve & publish** (or reply `okay`). The `approve` cron publishes to
-   Postgres + Convex and posts one confirmation **per DB**.
+   Postgres and posts a confirmation.
 4. For entries: `/entries-add <label> | <sport80 entries url>`. The nightly
    entries job scrapes whatever is in the list.
 
@@ -165,7 +164,7 @@ from your phone.
 PY=usaw/meet_automation/.venv/bin/python; export PYTHONPATH=.
 $PY -m usaw.meet_automation.pipeline list                 # staged runs + status
 $PY -m usaw.meet_automation.pipeline show <run_id>        # details + preview path
-$PY -m usaw.meet_automation.pipeline ingest <run_id>      # publish now (both DBs)
+$PY -m usaw.meet_automation.pipeline ingest <run_id>      # publish now
 $PY -m usaw.meet_automation.pipeline reject <run_id>      # discard
 ```
 

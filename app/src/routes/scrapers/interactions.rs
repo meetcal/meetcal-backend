@@ -4,7 +4,7 @@
 //! and *Reject* buttons. When clicked, Slack POSTs here. We verify the
 //! signature, then record the decision as a file under
 //! `<state_dir>/decisions/<run_id>.json`. The Python `approve` cron picks that
-//! up and performs the actual dual-write to Postgres + Convex, posting per-DB
+//! up and performs the actual Postgres write, posting a confirmation.
 //! confirmations.
 //!
 //! Keeping the DB write in Python means this read-only API never gains database

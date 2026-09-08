@@ -25,7 +25,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from dotenv import load_dotenv
 
-from common.convex_compat import ConvexClient
+from common.postgres_ingest import IngestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils import wso_record_ingest_args
@@ -44,17 +44,14 @@ class WSORecordsNewEnglandScraper:
         """
         self.wso_name = wso_name
         self.pdf_url = pdf_url
-        self.convex_client: Optional[ConvexClient] = None
+        self.ingest_client: Optional[IngestClient] = None
         self.slack_webhook_url: Optional[str] = None
         self.pdf_path = "temp_wso_records.pdf"
 
-    def setup_convex_client(self):
-        """Initialize Convex client."""
-        convex_url = os.getenv("CONVEX_URL")
-        if not convex_url:
-            raise ValueError("CONVEX_URL must be set in .env")
-        self.convex_client = ConvexClient(convex_url)
-        print("✓ Convex client initialized")
+    def setup_ingest_client(self):
+        """Initialize Postgres ingest client."""
+        self.ingest_client = IngestClient()
+        print("Postgres ingest client initialized")
     
     def setup_slack(self):
         """Initialize Slack webhook."""
@@ -247,21 +244,19 @@ class WSORecordsNewEnglandScraper:
         
         return records
     
-    def upsert_to_convex(self, records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-        """Upsert records to Convex via scraperIngestion:ingestWSORecord."""
-        if not self.convex_client:
-            raise ValueError("Convex client not initialized")
-
-        scraper_secret = os.getenv("SCRAPER_SECRET")
-        if not scraper_secret:
-            raise ValueError("SCRAPER_SECRET must be set in .env")
+    def upsert_to_postgres(self, records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Upsert records to Postgres via scraperIngestion:ingestWSORecord."""
+        if not self.ingest_client:
+            raise ValueError("Ingest client not initialized")
 
         inserted = []
         updated = []
 
         for record in records:
             try:
-                result = self.convex_client.action("scraperIngestion:ingestWSORecord", wso_record_ingest_args(record, scraper_secret))
+                result = self.ingest_client.action(
+                    "scraperIngestion:ingestWSORecord", wso_record_ingest_args(record)
+                )
                 if result.get('wasInsert'):
                     inserted.append(record)
                     print(f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}")
@@ -324,7 +319,7 @@ class WSORecordsNewEnglandScraper:
     
     def dry_run_compare(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Show what would be upserted without making changes."""
-        print(f"Would upsert {len(records)} records to Convex")
+        print(f"Would upsert {len(records)} records to Postgres")
         return {
             'to_insert': records,
             'to_update': [],
@@ -339,7 +334,7 @@ class WSORecordsNewEnglandScraper:
             print(f"{'='*80}")
             print(f"PDF URL: {self.pdf_url}\n")
             
-            self.setup_convex_client()
+            self.setup_ingest_client()
             if not dry_run:
                 self.setup_slack()
             
@@ -378,8 +373,8 @@ class WSORecordsNewEnglandScraper:
                         for field, old_val, new_val in item['changes']:
                             print(f"    → {field}: {old_val} → {new_val}")
             else:
-                print("\nUpserting records to Convex...")
-                result = self.upsert_to_convex(records)
+                print("\nUpserting records to Postgres...")
+                result = self.upsert_to_postgres(records)
                 
                 print("\nSending Slack notification...")
                 self.send_slack_notification(result['inserted'], result['updated'])

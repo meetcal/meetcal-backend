@@ -66,7 +66,7 @@ Do not assume:
 
 ## Parser Rules To Preserve
 
-- Output must stay in Convex shape:
+- Output must stay in camelCase ingest shape:
   - `memberId`
   - `name`
   - `age`

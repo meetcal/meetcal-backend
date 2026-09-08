@@ -48,7 +48,6 @@ class IWFWorldRecordsScraper:
         })
         
         # Environment variables
-        self.convex_url = os.getenv('CONVEX_URL')
         self.scraper_secret = os.getenv('SCRAPER_SECRET')
         self.slack_webhook = os.getenv('SLACK_IWF_RECORDS_WEBHOOK_URL')
         
@@ -310,10 +309,10 @@ class IWFWorldRecordsScraper:
         
         print("\n" + "=" * 80)
     
-    def upsert_to_convex(self, records: List[Dict]) -> Dict:
+    def upsert_to_postgres(self, records: List[Dict]) -> Dict:
         """Replace all IWF records in Postgres via scraperIngestion:replaceIWFRecords."""
-        if not self.convex_url or not self.scraper_secret:
-            return {"status": "skipped", "message": "CONVEX_URL or SCRAPER_SECRET not configured"}
+        if not os.getenv("DATABASE_URL"):
+            return {"status": "skipped", "message": "DATABASE_URL not configured"}
 
         existing_records = self.get_existing_records()
         changes = self.compare_records(records, existing_records)
@@ -328,12 +327,12 @@ class IWFWorldRecordsScraper:
             }
 
         try:
-            from common.convex_compat import ConvexClient
+            from common.postgres_ingest import IngestClient
 
-            client = ConvexClient(self.convex_url)
+            client = IngestClient()
 
             # Bulk replace: delete all IWF records then insert new ones atomically
-            convex_records = [
+            ingest_records = [
                 {
                     "recordType": r['record_type'],
                     "ageCategory": r['age_category'],
@@ -345,10 +344,10 @@ class IWFWorldRecordsScraper:
                 }
                 for r in records
             ]
-            print(f"Replacing {len(convex_records)} IWF records in Postgres...")
+            print(f"Replacing {len(ingest_records)} IWF records in Postgres...")
             result = client.action("scraperIngestion:replaceIWFRecords", {
                 "scraperSecret": self.scraper_secret,
-                "records": convex_records,
+                "records": ingest_records,
             })
             print(f"✅ Replaced IWF records: {result}")
 
@@ -484,7 +483,7 @@ class IWFWorldRecordsScraper:
         # Step 2: Compare with Supabase (dry run) or Save CSV (normal mode)
         if self.dry_run:
             print(f"\n[{step_num}/{total_steps}] Dry run (no DB writes)...")
-            upsert_result = self.upsert_to_convex(records)
+            upsert_result = self.upsert_to_postgres(records)
 
             if upsert_result['status'] == 'dry_run':
                 print(f"✅ {upsert_result['message']}")
@@ -493,7 +492,7 @@ class IWFWorldRecordsScraper:
             else:
                 print(f"❌ {upsert_result['message']}")
         else:
-            # Normal mode: save CSV, upsert to Convex, notify
+            # Normal mode: save CSV, upsert to Postgres, notify
             print(f"\n[{step_num}/{total_steps}] Saving to CSV...")
             try:
                 self.save_to_csv(records)
@@ -502,9 +501,8 @@ class IWFWorldRecordsScraper:
 
             step_num += 1
 
-            # Step 3: Replace IWF records in Convex
-            print(f"\n[{step_num}/{total_steps}] Replacing IWF records in Convex...")
-            upsert_result = self.upsert_to_convex(records)
+            print(f"\n[{step_num}/{total_steps}] Replacing IWF records in Postgres...")
+            upsert_result = self.upsert_to_postgres(records)
 
             if upsert_result['status'] == 'success':
                 print(f"✅ {upsert_result['message']}")
@@ -525,7 +523,7 @@ class IWFWorldRecordsScraper:
         print("=" * 60)
         print(f"Records scraped: {len(records)}")
         if not self.dry_run:
-            print(f"Convex status: {upsert_result['status']}")
+            print(f"Postgres status: {upsert_result['status']}")
         print("=" * 60)
         
         return 0

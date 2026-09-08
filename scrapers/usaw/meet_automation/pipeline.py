@@ -247,14 +247,6 @@ def _format_target_confirmation(run_id: str, target: str, stats: dict) -> str:
                 f"{stats.get('deleted_schedule', 0)} schedule rows)"
             )
         return msg
-    if target == "convex":
-        msg = (
-            f":white_check_mark: *Convex* updated for `{run_id}` — "
-            f"athletes: {stats.get('athletes', 0)}, schedule: {stats.get('schedule', 0)}"
-        )
-        if stats.get("failed"):
-            msg += f" :warning: {stats['failed']} failed"
-        return msg
     return f":white_check_mark: *{target}* updated for `{run_id}`"
 
 
@@ -271,7 +263,7 @@ def _slack_target_reporter(slack_cfg: SlackConfig, bundle: StagedBundle):
 
 
 def _do_ingest(
-    bundle: StagedBundle, target: str, replace: bool, slack_cfg: Optional[SlackConfig] = None
+    bundle: StagedBundle, replace: bool, slack_cfg: Optional[SlackConfig] = None
 ) -> StagedBundle:
     on_target_done = (
         _slack_target_reporter(slack_cfg, bundle)
@@ -280,7 +272,7 @@ def _do_ingest(
     )
     result = ingest.ingest_bundle(
         bundle.athletes, bundle.schedule, bundle.meet, bundle.meet_name,
-        target=target, replace=replace, on_target_done=on_target_done,
+        replace=replace, on_target_done=on_target_done,
     )
     bundle.ingest_result = result
     bundle.status = STATUS_INGESTED
@@ -293,7 +285,7 @@ def cmd_ingest(args) -> int:
     if bundle.status == STATUS_INGESTED and not args.force:
         print(f"{args.run_id} already ingested; use --force to re-ingest")
         return 0
-    bundle = _do_ingest(bundle, args.target, replace=not args.no_replace, slack_cfg=SlackConfig.from_env())
+    bundle = _do_ingest(bundle, replace=not args.no_replace, slack_cfg=SlackConfig.from_env())
     print(f"ingested {args.run_id}: {bundle.ingest_result}")
     return 0
 
@@ -350,10 +342,9 @@ def cmd_approve(args) -> int:
                 slack.post_thread_reply(slack_cfg, bundle, f":rocket: Approved — publishing `{run_id}`…")
             except Exception:  # noqa: BLE001
                 pass
-            # _do_ingest posts one confirmation per DB as each upload completes.
-            bundle = _do_ingest(bundle, args.target, replace=not args.no_replace, slack_cfg=slack_cfg)
+            bundle = _do_ingest(bundle, replace=not args.no_replace, slack_cfg=slack_cfg)
             try:
-                slack.post_thread_reply(slack_cfg, bundle, f":checkered_flag: `{run_id}` published to all targets.")
+                slack.post_thread_reply(slack_cfg, bundle, f":checkered_flag: `{run_id}` published to Postgres.")
             except Exception:  # noqa: BLE001
                 pass
             _consume_decision(decision_path)
@@ -406,8 +397,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="meet_automation.pipeline")
     sub = p.add_subparsers(dest="command", required=True)
 
-    def add_target(sp):
-        sp.add_argument("--target", choices=["both", "postgres", "convex"], default="both")
+    def add_ingest_flags(sp):
         sp.add_argument("--no-replace", action="store_true",
                         help="upsert without deleting existing rows for the meet first")
 
@@ -438,13 +428,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="process every pending run (the default when no run_id is given)",
     )
-    add_target(a)
+    add_ingest_flags(a)
     a.set_defaults(func=cmd_approve)
 
     i = sub.add_parser("ingest", help="publish a staged run now (manual approval)")
     i.add_argument("run_id")
     i.add_argument("--force", action="store_true")
-    add_target(i)
+    add_ingest_flags(i)
     i.set_defaults(func=cmd_ingest)
 
     j = sub.add_parser("reject", help="discard a staged run")

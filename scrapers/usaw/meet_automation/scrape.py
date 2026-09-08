@@ -53,7 +53,7 @@ def scrape_start_list(
         source_format=detected,
         start_member_id=start_member_id,
     )
-    # entries are already in Convex shape (camelCase dicts).
+    # entries are already in camelCase ingest shape.
     return [dict(e) for e in entries]
 
 

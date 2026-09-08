@@ -4,7 +4,7 @@ import requests
 import logging
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from common.convex_compat import ConvexClient
+from common.postgres_ingest import IngestClient
 
 # Load environment variables from .env file
 load_dotenv()
@@ -18,15 +18,12 @@ load_dotenv()
 from sport80 import SportEighty # Adjust if your structure differs
 
 # --- Configuration ---
-# Convex Configuration
-CONVEX_URL = os.environ.get("CONVEX_URL")
-SCRAPER_SECRET = os.environ.get("SCRAPER_SECRET")
-
 # Sport80 Configuration
 USAW_DOMAIN = "https://bwl.sport80.com"
 
 # Slack Configuration
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_BWL_RESULTS_WEBHOOK_URL")
+SCRAPER_SECRET = os.environ.get("SCRAPER_SECRET")
 
 # --- Logging Setup ---
 # GitHub Actions will capture stdout/stderr, so basic config is usually fine.
@@ -82,8 +79,8 @@ def parse_event_date(event_data_dict):
     return datetime.min.replace(tzinfo=timezone.utc)
 
 
-def add_meet_results_to_convex(client: ConvexClient, results_to_insert: list):
-    """Upsert a batch of results for a meet into Convex via ingestLiftingResult."""
+def add_meet_results_to_postgres(client: IngestClient, results_to_insert: list):
+    """Upsert a batch of results for a meet into Postgres via ingestLiftingResult."""
     if not results_to_insert:
         logging.info("No results to insert.")
         return
@@ -94,9 +91,9 @@ def add_meet_results_to_convex(client: ConvexClient, results_to_insert: list):
             client.action("scraperIngestion:ingestLiftingResult", result)
             success_count += 1
         except Exception as e:
-            logging.error(f"Error upserting result for '{result.get('name')}' in Convex: {e}")
+            logging.error(f"Error upserting result for '{result.get('name')}' in Postgres: {e}")
 
-    logging.info(f"Successfully upserted {success_count}/{len(results_to_insert)} results via Convex.")
+    logging.info(f"Successfully upserted {success_count}/{len(results_to_insert)} results via Postgres.")
 
 
 def fetch_recent_events_from_sport80(api_client: SportEighty, num_events: int = 30) -> list:
@@ -197,13 +194,13 @@ def send_slack_notification(added_meet_names: list[str]):
 
 
 def main():
-    logging.info("Starting Sport80 to Convex sync process...")
+    logging.info("Starting Sport80 to Postgres sync process...")
 
-    if not CONVEX_URL or not SCRAPER_SECRET:
-        logging.critical("CONVEX_URL and SCRAPER_SECRET must be set. Exiting.")
+    if not os.getenv("DATABASE_URL"):
+        logging.critical("DATABASE_URL must be set. Exiting.")
         return
 
-    client = ConvexClient(CONVEX_URL)
+    client = IngestClient()
 
     sport80_api = SportEighty(subdomain=USAW_DOMAIN, return_dict=True, debug=logging.WARNING)
     # Keeping num_events=1 for this test, can be changed back to 30 later.
@@ -257,7 +254,7 @@ def main():
             logging.info(f"Event ID '{current_event_id}' ('{current_meet_name}') was already processed in this script run. Skipping.")
             continue
 
-        logging.info(f"Processing meet for Convex upsert: '{current_meet_name}' (Event ID: {current_event_id})")
+        logging.info(f"Processing meet for Postgres upsert: '{current_meet_name}' (Event ID: {current_event_id})")
         
         detailed_results_list = fetch_meet_results_from_sport80(sport80_api, event_data_for_api)
 
@@ -266,7 +263,7 @@ def main():
             processed_event_ids_this_run.add(current_event_id)
             continue
 
-        formatted_results_for_convex = []
+        formatted_results = []
         meet_date_obj = parse_event_date(event_data_for_api)
         meet_date_for_db = meet_date_obj.strftime("%Y-%m-%d") if meet_date_obj > datetime.min.replace(tzinfo=timezone.utc) else None
 
@@ -284,7 +281,7 @@ def main():
             best_cj = get_nested_value(result_item, "best_cj", "Best Clean & Jerk") or get_nested_value(result_item, "best_c&j")
             total_lifted = get_nested_value(result_item, "total", "Total")
 
-            formatted_results_for_convex.append({
+            formatted_results.append({
                 "scraperSecret": SCRAPER_SECRET,
                 "eventId": current_event_id,
                 "meet": current_meet_name,
@@ -305,16 +302,16 @@ def main():
                 "federation": "BWL",
             })
 
-        if formatted_results_for_convex:
-            add_meet_results_to_convex(client, formatted_results_for_convex)
+        if formatted_results:
+            add_meet_results_to_postgres(client, formatted_results)
             added_meet_names.append(current_meet_name)  # Add the meet name to our list
-            logging.info(f"Successfully upserted {len(formatted_results_for_convex)} results for '{current_meet_name}' (ID: {current_event_id}).")
+            logging.info(f"Successfully upserted {len(formatted_results)} results for '{current_meet_name}' (ID: {current_event_id}).")
         else:
-            logging.warning(f"No results formatted for Convex for meet: '{current_meet_name}' (ID: {current_event_id}).")
+            logging.warning(f"No results formatted for Postgres for meet: '{current_meet_name}' (ID: {current_event_id}).")
         
         processed_event_ids_this_run.add(current_event_id) # Add here after attempting to process
 
-    logging.info(f"Finished Sport80 to Convex sync. Upserted results for {len(added_meet_names)} meet(s).")
+    logging.info(f"Finished Sport80 to Postgres sync. Upserted results for {len(added_meet_names)} meet(s).")
 
     # Send Slack notification with meet names
     send_slack_notification(added_meet_names)

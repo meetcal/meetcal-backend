@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 import pdfplumber
 from bs4 import BeautifulSoup
 
-from common.convex_compat import ConvexClient
+from common.postgres_ingest import IngestClient
 
 # Load environment variables
 load_dotenv()
@@ -43,7 +43,7 @@ class RecordsScraper:
         """Initialize the scraper."""
         self.base_url = "https://www.usaweightlifting.org/american-records"
         self.pdf_url: Optional[str] = None
-        self.convex: Optional[ConvexClient] = None
+        self.ingest: Optional[IngestClient] = None
         self.scraper_secret: Optional[str] = None
         self.slack_webhook_url: Optional[str] = None
     
@@ -169,16 +169,10 @@ class RecordsScraper:
             print(f"✗ Error fetching page: {e}")
             return None
     
-    def setup_convex_client(self):
-        """Initialize Convex client."""
-        convex_url = os.getenv("CONVEX_URL")
+    def setup_ingest_client(self):
         self.scraper_secret = os.getenv("SCRAPER_SECRET")
-
-        if not convex_url or not self.scraper_secret:
-            raise ValueError("CONVEX_URL and SCRAPER_SECRET must be set in .env")
-
-        self.convex = ConvexClient(convex_url)
-        print("✓ Convex client initialized")
+        self.ingest = IngestClient()
+        print("Postgres ingest client initialized")
     
     def setup_slack(self):
         """Initialize Slack webhook."""
@@ -469,15 +463,15 @@ class RecordsScraper:
 
         return {'to_insert': records, 'to_update': [], 'unchanged': [], 'total': len(records)}
     
-    def upsert_to_convex(self, records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    def upsert_to_postgres(self, records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Upsert records to Convex via scraperIngestion:ingestRecord.
+        Upsert records to Postgres via scraperIngestion:ingestRecord.
 
         Returns:
             Dictionary with 'inserted' and 'updated' lists
         """
-        if not self.convex:
-            self.setup_convex_client()
+        if not self.ingest:
+            self.setup_ingest_client()
 
         inserted = []
         updated = []
@@ -496,7 +490,7 @@ class RecordsScraper:
                 args["cjRecord"] = float(record['cj_record'])
             if record.get('total_record') is not None:
                 args["totalRecord"] = float(record['total_record'])
-            result = self.convex.action("scraperIngestion:ingestRecord", args)
+            result = self.ingest.action("scraperIngestion:ingestRecord", args)
             if result.get('wasInsert'):
                 inserted.append(record)
                 print(f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}")
@@ -582,9 +576,9 @@ class RecordsScraper:
         # Export to CSV
         self.export_to_csv(records)
         
-        # Setup Convex (needed for full run; dry-run skips DB)
+        # Setup ingest client (needed for full run; dry-run skips DB)
         if not dry_run:
-            self.setup_convex_client()
+            self.setup_ingest_client()
 
         # Setup Slack for notifications (works in both modes)
         self.setup_slack()
@@ -597,7 +591,7 @@ class RecordsScraper:
             print("\n" + "="*60)
             print("UPDATING DATABASE")
             print("="*60 + "\n")
-            result = self.upsert_to_convex(records)
+            result = self.upsert_to_postgres(records)
             print(f"\n✓ Complete: {len(result['inserted'])} upserted")
 
             # Send Slack notification

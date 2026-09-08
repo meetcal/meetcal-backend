@@ -1,7 +1,7 @@
 {
-  "name": "meet-to-convex",
+  "name": "meet-to-postgres",
   "version": "1.0.0",
-  "description": "Script to sync weightlifting meets data with Convex",
+  "description": "Script to sync weightlifting meets data with Postgres",
   "main": "scripts/sync-meets.js",
   "scripts": {
     "sync": "node scripts/sync-meets.js"

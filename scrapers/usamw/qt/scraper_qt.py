@@ -23,7 +23,7 @@ from io import BytesIO
 from typing import List, Dict, Any, Optional, Union
 from dotenv import load_dotenv
 
-from common.convex_compat import ConvexClient
+from common.postgres_ingest import IngestClient
 
 # Load environment variables
 load_dotenv()
@@ -324,7 +324,7 @@ class USAMWQTScraper:
         """Initialize the scraper."""
         self.pdf_url = pdf_url
         self.event_name = event_name
-        self.convex: Optional[ConvexClient] = None
+        self.ingest: Optional[IngestClient] = None
         self.scraper_secret: Optional[str] = None
     
     def download_pdf(self, url: str) -> BytesIO:
@@ -341,16 +341,10 @@ class USAMWQTScraper:
         print("✓ PDF downloaded")
         return BytesIO(response.content)
     
-    def setup_convex_client(self):
-        """Initialize Convex client."""
-        convex_url = os.getenv("CONVEX_URL")
+    def setup_ingest_client(self):
         self.scraper_secret = os.getenv("SCRAPER_SECRET")
-
-        if not convex_url or not self.scraper_secret:
-            raise ValueError("CONVEX_URL and SCRAPER_SECRET must be set in .env")
-
-        self.convex = ConvexClient(convex_url)
-        print("✓ Convex client initialized")
+        self.ingest = IngestClient()
+        print("Postgres ingest client initialized")
     
     def df_to_records(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
         """Convert DataFrame to list of records for database insertion."""
@@ -383,10 +377,10 @@ class USAMWQTScraper:
 
         return {'to_insert': records, 'to_update': [], 'unchanged': [], 'total': len(records)}
 
-    def upsert_to_convex(self, records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-        """Upsert qualifying totals to Convex via scraperIngestion:ingestQualifyingTotal."""
-        if not self.convex:
-            self.setup_convex_client()
+    def upsert_to_postgres(self, records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Upsert qualifying totals to Postgres via scraperIngestion:ingestQualifyingTotal."""
+        if not self.ingest:
+            self.setup_ingest_client()
 
         inserted = []
         updated = []
@@ -396,7 +390,7 @@ class USAMWQTScraper:
         print("="*60 + "\n")
 
         for record in records:
-            result = self.convex.action("scraperIngestion:ingestQualifyingTotal", {
+            result = self.ingest.action("scraperIngestion:ingestQualifyingTotal", {
                 "scraperSecret": self.scraper_secret,
                 "eventName": record['event_name'],
                 "gender": record['gender'],
@@ -465,8 +459,8 @@ class USAMWQTScraper:
                 result = self.dry_run(records)
                 print(f"\n✓ Dry run complete: {len(result['to_insert'])} to upsert")
             else:
-                self.setup_convex_client()
-                result = self.upsert_to_convex(records)
+                self.setup_ingest_client()
+                result = self.upsert_to_postgres(records)
                 print(f"\n✓ Complete: {len(result['inserted'])} upserted")
             
             # Display first few rows
