@@ -27,6 +27,7 @@ use crate::routes::{
             delete_saved_session, delete_saved_sessions, get_saved_sessions, put_saved_session,
         },
     },
+    wsos::get_athletes_by_wso::get_athletes_by_wso,
 };
 use axum::{
     Router,
@@ -110,6 +111,7 @@ pub async fn run_with_auth(
         .route("/data/wso/", get(get_wso_list))
         .route("/data/wso/age-groups", get(get_wso_age_groups))
         .route("/data/wso/records", get(get_wso_records))
+        .route("/wsos/athletes", get(get_athletes_by_wso))
         .route("/data/standards", get(get_standards))
         .route("/data/qualifying-totals", get(get_qualifying_totals))
         .route("/data/intl-rankings", get(get_intl_rankings))

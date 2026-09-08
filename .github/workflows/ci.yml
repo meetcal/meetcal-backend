@@ -113,6 +113,9 @@ jobs:
       - name: Postgres ingest tests
         run: PYTHONPATH=. python -m unittest discover -s common/tests -p 'test_*.py'
 
+      - name: WSO records writer unit tests
+        run: PYTHONPATH=. python -m unittest common.test_postgres_writer
+
   dependency-audit:
     name: Rust dependency audit
     runs-on: ubuntu-latest

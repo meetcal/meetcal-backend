@@ -1,0 +1,713 @@
+Schedule meet: 2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+Source meets: 1
+Convex athletes: 619
+Assignment schedule rows: 59
+Output rows: 619
+Recomputed placements: 619
+Output matches Convex athlete count: True
+Output matches recomputed placements: True
+Unassigned athletes: 0
+Missing sessions from schedule: 0
+Missing session/platform combos from schedule: 0
+
+sessionCoverage:
+- session 1 | platform Red | athletes 8
+- session 1 | platform White | athletes 9
+- session 1 | platform Blue | athletes 8
+- session 2 | platform Red | athletes 9
+- session 2 | platform White | athletes 12
+- session 2 | platform Blue | athletes 3
+- session 3 | platform Red | athletes 8
+- session 3 | platform White | athletes 12
+- session 3 | platform Blue | athletes 12
+- session 4 | platform Red | athletes 11
+- session 4 | platform White | athletes 14
+- session 4 | platform Blue | athletes 9
+- session 5 | platform Red | athletes 9
+- session 5 | platform White | athletes 8
+- session 5 | platform Blue | athletes 13
+- session 6 | platform Red | athletes 11
+- session 6 | platform White | athletes 17
+- session 6 | platform Blue | athletes 11
+- session 7 | platform Red | athletes 10
+- session 7 | platform White | athletes 10
+- session 7 | platform Blue | athletes 12
+- session 8 | platform Red | athletes 8
+- session 8 | platform White | athletes 7
+- session 8 | platform Blue | athletes 11
+- session 9 | platform Red | athletes 10
+- session 9 | platform White | athletes 9
+- session 9 | platform Blue | athletes 9
+- session 10 | platform Red | athletes 6
+- session 10 | platform White | athletes 6
+- session 10 | platform Blue | athletes 13
+- session 11 | platform Red | athletes 11
+- session 11 | platform White | athletes 13
+- session 11 | platform Blue | athletes 8
+- session 12 | platform Red | athletes 9
+- session 12 | platform White | athletes 10
+- session 12 | platform Blue | athletes 14
+- session 13 | platform Red | athletes 11
+- session 13 | platform White | athletes 10
+- session 13 | platform Blue | athletes 13
+- session 14 | platform Red | athletes 11
+- session 14 | platform White | athletes 11
+- session 14 | platform Blue | athletes 13
+- session 15 | platform Red | athletes 9
+- session 15 | platform White | athletes 9
+- session 15 | platform Blue | athletes 7
+- session 16 | platform Red | athletes 15
+- session 16 | platform White | athletes 10
+- session 16 | platform Blue | athletes 11
+- session 17 | platform Red | athletes 12
+- session 17 | platform White | athletes 14
+- session 17 | platform Blue | athletes 13
+- session 18 | platform Red | athletes 15
+- session 18 | platform White | athletes 12
+- session 18 | platform Blue | athletes 9
+- session 19 | platform Red | athletes 11
+- session 19 | platform White | athletes 11
+- session 19 | platform Blue | athletes 11
+- session 20 | platform Red | athletes 11
+- session 20 | platform White | athletes 10
+
+missingSessionCoverage:
+
+unassigned: 0
+
+sessions: 0
+
+scheduleMembership: 0
+
+assignmentMismatch: 0
+
+preservedFields: 0
+
+memberIds: 0
+
+meets: 617
+- ALEXANDER BOSCO | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- AMARIAH HERNANDEZ | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Aaron Denney | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Aaron Gatdula | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Aaron Rivero | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Abby Boon | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Adam Baggao | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Adam Beltran | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Adam Cosentino | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Adam Huddleston | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Adam Hurst | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Adam Wilkinson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Addison Barningham | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Adhithi Ganesan | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Adia Tomlinson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ahje Palmer | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Aimee Wong | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Albert Chun | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Albert Dunlap | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Aldo Ayala | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alejandra Yablonski | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alejandro Pasillas | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alejandro Travieso | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alexander Baron | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alexander Guzman | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alexandra Ivanova | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alexandra Navaja | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alexia Gonzalez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alexxandra Ballard | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alicia Mock | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Allen Hernandez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Allie Rose Grodzki | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Allisdair Davies | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Allison Kelley | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alyissa Wilson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alyssa Ballard | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alyssa Behmanesh | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alyssa Rocha | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alyssa Rosario | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Alysse Dennis | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Amanda Roberts | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Amanda Robles | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Amber Stroh | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Amy Haberstich | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Amy Hadsell | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Amy Livingston | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Amy Schultheis | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ana Whisenant | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Andia Azimi | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Andrew Guevara | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Andrew Robinson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Andrew Stegelmann | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Andrew Stephen | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Andrew Tipon | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Angel Vazquez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Angela Farinacci | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Anna Klein | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Anna Oberkircher | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Anna Shiffler | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Anthony Bravo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Antoine Nguyen | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Archer Praetorius | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Arianna Meade | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Armando Ordonez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Armando Rousseau | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Arthi Nithi | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ashantai Ellis | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Asher Hayhoe | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ashlee Kim | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ashley Smith | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Aubrey Junell | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Aurelia Bujanda | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Austin Buckley | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Autumn Lester | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ava Biesterfeld | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Azalia Vincent | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Bailly Coons | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Barbara Rivers | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Baylee Knorr | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ben Quachtran | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Benjamin Engelbracht | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Benson Robles | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Beth Kroman | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Beth Smith | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Betsy Kuhns | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Blake Stewart | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Bleu Williams | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Bobbie Catalano | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Bodie Stegelmann | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Bolton Swisher | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Bradford Chew | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Brady Grams | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Brenda Trevino | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Brenden Wilson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Brett Miquelon | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Brianna Bowens | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Brie Gomez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Brittany Disch | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Brittany Mutton | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Brock Anderson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Brody Head | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Bryan Cuellar | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Bryce Hovorka | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- CK Cone | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Caitlyn Cash | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Cara Le | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Cassandra Rendon Rendon | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Catharine Fortino | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Celia Gold | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Challen Pressley | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Charles Neilson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Charlotte Aoki | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Chase Dolfi | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Chase Durham | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Cheyenne Warmack | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Chloe Starr | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Chloe Torres | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Christa Hovis | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Christina Baron | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Christina Belknap | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Christina Girton | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Christina Lam | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Christopher Douglas | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Christopher Fusselman | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Christopher Hamlin | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Christopher Hart | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Christopher Patterson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Claire Nechiporenko | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Claire Ungashick | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Clara Blood | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Clint Hyde | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Cody Anderson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Cody Monsevais | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Cody Shaw | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Colby Hess | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Colby Langhorne | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Colten Clyburn | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Colton Carney | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Connor Brown | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Connor Tyler | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Cooper Johnson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Cooper Spurling | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Corynne Francis | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Courtney Burbridge | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Cristina Romo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- D. Irizarry | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- DJ Williams | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Dahlia Sokolow | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Damon Gandy | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Daniel Culbert | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Daniel Elkins | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Daniel Lema | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Daniel Pina | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Daniel Swank | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Daniel Wiitanen | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Danielle Daberer | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Danielle Mize | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Danlin Bao | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Darrel Barnes | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- David Bray | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- David De | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- David Ehresmann | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- David Grafton | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- David Jorge | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- David Lewis | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Deanna Johnson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Debbie Alexander | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Debbie Bennett | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Deborah Doran | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Deborah Robinson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Deborah Strobel | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Deja Beechum | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Dimitri Villanueva | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Dominique Thompson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Donald Ferguson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Dryden Yates | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Dustin Kunz | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- EJ Hein | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- ELIZABETH HALPIN | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Eduardo Travieso | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Elaine Kempf | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Elaine Tsay | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Elek Ancsin-fisher | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Elena Aigle | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Elhiana Inez Perez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Eligio Vargas | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Elijah Pak | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Elise Burkhardt | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Elizabeth Paller | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ella Vaughn | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Elle Mertens | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ellen Lehman | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ellie Hill | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Emery Gunnin | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Emilio Azukwu | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Emily Chang | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Emma Hannan | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Emma Smith | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Enrique Banda | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Enrique Carrillo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Enrique Rodarte | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Enyjai Tyson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Eric Chen | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Eric Kurschinski | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Eric Murphy | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Eric Schwartz | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Eric Zunker | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Erica Blaine Greenwood | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Erik Hayrapetyan | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Erika Evans | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Erin Becker | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Erin Traylor | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ernest Reyna | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Estelle Rohr | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ethan Barosela | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Eva Friend | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Evan Pounds | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Evelyn Otis | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Franklin Estrada | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Franz Blanchard | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Gabriel Torres | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Geesoo Yoon | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Gentry Stevenson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Gia Duva | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Gideon Hayhoe | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Grace Killough | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Grant Reed | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Gregory Sweat | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Griffin Vollertsen | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Gwen Chamberlin | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Gwen Townsend | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Hadley Chandler | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Hadley Stewart | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Haley Kopach | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Hampton Morris | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Hannah St | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Harper Sager | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Hayden Brandon | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Hector Ibanez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Hector Manuel Ortiz | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Henry Ludbrook | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Holly Cuozzo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Huntington Hayes | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Hutton Boles | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ian Rea | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ibrahem Aouda | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Intisar Hassouneh | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Isabel Lupkes | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Isauro Felix | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ishban Aziz | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- J Williams | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- JW Gurtis | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jack Halstead | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jacob Dains | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jacob Howard | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jacob St. | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jaden Lambert | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jadier Rivera | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jaedyn Orton | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jaiden Garcia | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jake Anderson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jake Langer | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jake Moreno | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- James Corsitto | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- James Murdock | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- James Tracy | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jamie Hegg | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jamie Pearce | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Janathan Balakrishnan | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jasmine Hau | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jasmine Idrogo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jason Gonzalez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jason Gunnin | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jason King | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jason Long | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jason Miotke | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Javier Veiguela | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jaycee Hickok | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jayden Son | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jean Banos | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jedidiah Kracl | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jeffrey Pumo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jenna Shumway | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jenna deCastro | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jennifer Galemmo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jennifer Valosek | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jennifer White | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jesse Castillo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jessica buettner | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jocelyn Ludlow | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jocelyn Shalaya Shade | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jodi Lin | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jody Mendosa | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- John Destacamento | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- John Dwyer | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- John Erwin | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Johnrey Santos | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jordan Lupkes | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jose De | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jose Orellana | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Jose Quezada | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Joseph Carpio | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Joseph Cunningham | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Joseph Frankl | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Joseph Mattera | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Joseph Rosales-Mancias | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Josh Cooke | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Joshua Blake | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Joshua Cruz | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Julian Pina | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Julie Bachman | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Julie Canepa | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Justin Perry | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kady Skinner | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kai Moore | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kaidi Zhang | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kailer Ramm | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kalinda Brown | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kareema Salah | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Karen Buchanan | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Karin Johnson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Karina Nigmatullina | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Karla Tapia | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Karston Spradley | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kassidy Girard | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Katalina Silva | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Katherine Cirone | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kathrine Cross | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kathryn Flores | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kathryn North | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Katie Brust | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Katie Toth | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Katy Shade | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kaydee Baker | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kayla Jefferies | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kayla Lew | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kayla Thompson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kayla Weber | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kaytee Bagley | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Keaton OConnor | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Keighly Sheridan | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Keith Gedick | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kela Kauhaahaa | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kelley Franceschi | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kelley Howell | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kelli Brightwell | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kelly Garber | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kenderic McMillian | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kennedy Bui | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kenny Wilkins | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kenton Chung | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kevin Chemleski | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kevin Real | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kieayre Davis | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kiley Gonyea | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kim Scott | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kimberlee Delany | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kimberly Andrew | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kira Lee Hubbell | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kirstin Boddy | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kolleen Simons | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kristen Louque | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kristin Brimhall | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kristin Curd | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kristin Maselli | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kristina Lacey | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kyle Martin | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Kylie Rathbun | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lan-Anh Nguyen-DeWein | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lana Eagle-King | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Landen Hawes | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Larisa Miranda | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Larry McCoy | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Latisha Hoover | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Laura Seals | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lauren Arredondo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lauren Chase | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Laurence Frago | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Laurence Nathan | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Layne Palm | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- LeAlyce Miller | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Leann Ramirez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lelanie Wilkinson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lenore Namou | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Leslee Gilbert | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lexie Mueller | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Liam Bujanda | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Liani Barboza | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Liliana Layman | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Linda Buitron | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Linda Lam | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Linda Tetrault | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lisa Gregoriew | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lisa MacLeod | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lisbet Celestino | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Liz Earley | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Liz Weil | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lizbeth Barcelo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lloyd Snell | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Logan Billick | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Luis Cruz | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lukas Sherrard | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Luke Maginnis | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Lynne Mester | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Maanas Sathaye | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Madison Mackay | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Madison Woodworth | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Maha Salah | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Mahalia Locklin | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Manuel Ferrer | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Marco Ledezma | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Maria Castillo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Maria McClelland | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Marielle Celi | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Mariette Kalinowski | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Marina Yu | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Marisa Cueva | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Marissa Reeves | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Maritza Almada | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Marley Dutton | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Marvin Santos | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Maryam Grafton | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Mateo Jonah Limbo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Matt Reeves | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Matthew Leon | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Matthew McCullough | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Matthew Sherrill | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Matthew Yin | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Max Ferrara | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Maya Baburajendran | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Meagan Rivera | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Meaghan Callahan | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Melanie Calderon | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Melanie Kent | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Mia Barcelo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Mia Lang | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Michael Albanese | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Michael Cardozo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Michael Cooley | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Michael Fontanini | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Michael Headings | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Michael Pozzi | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Michael Triglia | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Michael Vo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Michelle Bowens | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Michelle McNeil | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Miguel Trevino | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Mikaella Bowens | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Mindy Lewis | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Mira Kwon | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Mirna Orellana | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Missy Stiner | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Misty Hill | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Mitchell Ferguson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Mitchell Gonzales | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Molly Dorrance | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Monica Parucho | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Morgan Kiser | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Morgan White | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Naomi Narcisse | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Natalia Mittelberg | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Natalie Haller | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Natalie Hata | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Nate Janzen | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Neha Parnandi | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Nevaeh Kellerman | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Nicholas Scardina | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Nicholas Weingarten | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Nicki Ingram | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Nickolas Anthony Martinez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Nico Paulo Tolentino | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Nina Chan | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Noah Juarez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Noah Zucker | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Norah Guillot | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- O'Neil Shand | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Oscar Miranda | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Oswaldo Chavez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Paige Stewart | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Paisley Sanders | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Patrick Kern | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Patti Walkover | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Pepper Williams | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Peter Bound | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Peter Merlin | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Peter Schied | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Pilar Bennett | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Pratima Satish | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Preston Tickner | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Rachael Ruiz | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Rachel Teran | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Raelynn Mergen | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Reba Burns | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Rebecca Anderson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Rebecca Gaden | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Rebecca Harper | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Rebecca Rouse | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Rebecca Ruiz | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Rebekah Gedick | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Reece Robinson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Reg Van | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Richard Hernandez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Richard Stewart | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Riley Sawdon | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Robert Rosenqvist | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Roberto Padron | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Roddy Chim | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Rodger Delany | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Rosanna Sansone | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Roy Maher | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Rusti Sparks | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ryan Hansen | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ryan Molina | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ryan Neece | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ryan Newton | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ryland Dutton | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- SHEAFFER SMITH | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sadie Hayhoe | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Samantha Neal | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Samantha Russo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Samuel Sissman | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Samuel Starkey | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sarah Grant | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sarah Johnson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sarah Uschmann | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sarah Whatley | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sasha McClain | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Savannah Bolden | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sawyer Willis | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sayvanna SFabian | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sean Hoover | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sean McClanahan | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sebastian Stodel | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Seth Chart | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Shamil Parbhoo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Shannon Sanchez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sherry Chen | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Shiven Bharol | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sid Florendo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sophia Rizzuto | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sophie Simon | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Starla Toto | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Stefano Cataldi | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Stella Goodlaxson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Stephanie Kuehne | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Stephanie Langdon | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Stephanie Moore | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Stephanie Sides | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Stephany Wilson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Steve Nicholls | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sumedh Seetharam | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Susan Gerhard | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sydney Boon | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Sydney Meyer | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Tasha Roach | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Taylyn Slater | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Tea Gluhak | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Ted Chao | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Telma Rodriguez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Teresa Garza | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Thomas Bell | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Thomas Hyland | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Thomas Lester | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Thomas Osborne | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Timberly Covert | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Timmy Huynh | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Timothy Clouatre | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Tina Ramirez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Tom Maher | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Trace Brown | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Tracy Solis | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Travis Cooper | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Treva Jones | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Tristan Wisner | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Tyler Birkla | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Tyler Lambert | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Urbana Sepulveda | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Valeria Arellano | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Valerie Cunningham | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Valerie Greenslade | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Valerie Thomas | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Victor Martin | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Vinh Hoang | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Violet Hayhoe | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Virginia Holloway | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Viviana Pacheco | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- WILLIE SKLAROFF | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Walker Stanley | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Wednesday Hackleman | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Wenyu Tseng | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Wesley Cross | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- William Conaton | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Wyatt Kight | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Wynter Montgomery | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Xaiden Shultz | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Yachinda Katili | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Yetunde Olayinka | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Yifen Jen | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Yifu Xiao | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Yukari Furuchi | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Yuliana Lopez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Yvonne Guajardo | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Zachary Brown | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Zhen (Jun) Yu | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- Zoe Macias | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- angela beechum | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- cameron williams | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- carlos gonzalez | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- gabe chhum | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- gaby morgerman | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- garrett robinson | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- gretchen messner | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- johnson trang | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- kaiden mcveigh | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- simon san | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- sofia kokorina | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+- wai yu | meet=2026 Virus Weightlifting Series 2, Powered by Rogue Fitness
+
+genders: 0
+
+weightClasses: 0
+
+checksToDo:
+Review empty session/platform slots from final schedule: 0 sessions, 0 combos
+Empty slots are expected when the preliminary schedule includes youth or other groups without athletes in this meet entry list.
