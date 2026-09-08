@@ -105,3 +105,12 @@ async fn fail_get_club_meet_stats() {
 
     assert_ne!(response.status(), 200);
 }
+
+#[tokio::test]
+async fn empty_club_query_is_rejected() {
+    let app = support::spawn_test_app().await;
+    let response = reqwest::get(format!("{}/clubs/athletes?club=%20", app.address))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+}

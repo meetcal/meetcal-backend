@@ -216,3 +216,24 @@ async fn fail_preferences_with_untrusted_authorized_party() {
 
     assert_eq!(response.status(), 401);
 }
+
+#[tokio::test]
+async fn fail_saved_session_with_empty_meet() {
+    let app = support::spawn_test_app().await;
+    let response = reqwest::Client::new()
+        .put(format!(
+            "{}/users/me/saved-sessions/empty-meet",
+            app.address
+        ))
+        .bearer_auth(support::test_token("test-user-saved-sessions-empty"))
+        .json(&json!({
+            "meet": "  ",
+            "session_number": 1.0,
+            "platform": "Red"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 400);
+}

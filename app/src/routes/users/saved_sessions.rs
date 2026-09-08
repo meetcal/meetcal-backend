@@ -145,10 +145,18 @@ pub async fn put_saved_session(
     if session_id.trim().is_empty() {
         return Err(AppError::Validation("session_id is required".to_string()));
     }
+    crate::common::query::require_non_empty("meet", &body.meet)?;
+    crate::common::query::require_non_empty("platform", &body.platform)?;
 
     let user_id = user_id_from_headers(&headers, state.auth.as_deref()).await?;
     let updated_at = now_millis()?;
     let athlete_names = body.athlete_names.unwrap_or_default();
+    if athlete_names.len() > crate::common::query::MAX_SAVED_SESSION_ATHLETE_NAMES {
+        return Err(AppError::Validation(format!(
+            "athlete_names exceeds the {}-name limit",
+            crate::common::query::MAX_SAVED_SESSION_ATHLETE_NAMES
+        )));
+    }
     let row_id = format!("saved_session:{user_id}:{session_id}");
 
     let mut tx = state.db.begin().await?;

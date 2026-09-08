@@ -710,6 +710,8 @@ def replace_records(conn, record_type: str, rows: Iterable[dict[str, Any]]) -> d
 
 
 def replace_wso_records(conn, wso: str, rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    if not isinstance(wso, str) or not wso.strip():
+        raise ValueError("wso is required")
     prepared_rows = [{**row, "wso": wso} for row in rows]
     existing_rows = conn.execute(
         """
@@ -784,7 +786,15 @@ def replace_intl_rankings_group(conn, args: dict[str, Any]) -> dict[str, Any]:
     meet = first(args, "meet", default="")
     gender = normalize_gender(first(args, "gender", default=""))
     age_category = normalize_age_category(first(args, "ageCategory", "age_category", default=""))
+    if not isinstance(meet, str) or not meet.strip():
+        raise ValueError("meet is required")
+    if not isinstance(gender, str) or not str(gender).strip():
+        raise ValueError("gender is required")
+    if not isinstance(age_category, str) or not str(age_category).strip():
+        raise ValueError("ageCategory is required")
     rankings = args.get("rankings", [])
+    if not isinstance(rankings, list):
+        raise ValueError("rankings must be a list")
     existing_rows = conn.execute(
         """
         SELECT convex_id, legacy_id, meet, ranking, name, weight_class,
@@ -802,9 +812,15 @@ def replace_intl_rankings_group(conn, args: dict[str, Any]) -> dict[str, Any]:
     inserted = 0
     updated = 0
     unchanged = 0
+    incoming_keys: set[tuple[Any, Any, Any, Any, Any]] = set()
+    rows_to_write: list[dict[str, Any]] = []
     for row in rankings:
         ranking = first(row, "ranking", default=0)
         name = first(row, "name", default="")
+        key = (meet, gender, age_category, ranking, name)
+        if key in incoming_keys:
+            raise ValueError(f"Duplicate intl ranking in payload: {key}")
+        incoming_keys.add(key)
         convex_id = first(row, "convexId", "convex_id") or stable_id(
             "intl_ranking", meet, gender, age_category, ranking, name
         )
@@ -819,24 +835,34 @@ def replace_intl_rankings_group(conn, args: dict[str, Any]) -> dict[str, Any]:
             "gender": gender,
             "age_category": age_category,
         }
-        existing = existing_by_id.get(convex_id) or existing_by_key.get(
-            (meet, gender, age_category, ranking, name)
-        )
+        existing = existing_by_id.get(convex_id) or existing_by_key.get(key)
         if existing is None:
             inserted += 1
+            rows_to_write.append(row)
         elif row_changed(existing, values):
             updated += 1
+            rows_to_write.append(row)
         else:
             unchanged += 1
 
-    conn.execute(
-        "DELETE FROM intl_rankings WHERE meet = %s AND gender = %s AND age_category = %s",
-        (meet, gender, age_category),
-    )
-    for row in rankings:
-        upsert_intl_ranking(conn, {**row, "meet": meet, "gender": gender, "ageCategory": age_category})
-    deleted = max(len(existing_rows) - len(rankings), 0)
-    return {"inserted": inserted, "updated": updated, "unchanged": unchanged, "deleted": deleted}
+    rows_to_delete = [
+        row for key, row in existing_by_key.items() if key not in incoming_keys
+    ]
+    for row in rows_to_delete:
+        conn.execute(
+            "DELETE FROM intl_rankings WHERE convex_id = %s",
+            (row["convex_id"],),
+        )
+    for row in rows_to_write:
+        upsert_intl_ranking(
+            conn, {**row, "meet": meet, "gender": gender, "ageCategory": age_category}
+        )
+    return {
+        "inserted": inserted,
+        "updated": updated,
+        "unchanged": unchanged,
+        "deleted": len(rows_to_delete),
+    }
 
 
 def delete_missing_intl_ranking_groups(conn, groups: Iterable[dict[str, Any]]) -> dict[str, Any]:

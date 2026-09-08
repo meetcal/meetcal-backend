@@ -84,6 +84,8 @@ pub async fn get_meet_stats(
     State(state): State<AppState>,
     Query(params): Query<ClubMeetStatsParams>,
 ) -> Result<Json<MeetStats>, AppError> {
+    crate::common::query::require_non_empty("club", &params.club)?;
+    crate::common::query::require_non_empty("meet", &params.meet)?;
     let total_athletes: (i64,) = sqlx::query_as(
         r#"
         SELECT COUNT(DISTINCT lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))))::BIGINT

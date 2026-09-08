@@ -373,5 +373,13 @@ class ReplyAllowlistTests(unittest.TestCase):
         self.assertEqual(self._poll([], reply_user="U_ANY"), "approved")
 
 
+class IngestGuardTests(unittest.TestCase):
+    def test_empty_meet_name_is_rejected(self):
+        from usaw.meet_automation import ingest
+
+        with self.assertRaisesRegex(ValueError, "meet_name is required"):
+            ingest.ingest_bundle([], [], None, "")
+
+
 if __name__ == "__main__":
     unittest.main()

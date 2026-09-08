@@ -32,6 +32,7 @@ pub async fn get_meet_details(
     State(state): State<AppState>,
     Query(params): Query<MeetsParams>,
 ) -> Result<Json<Meets>, AppError> {
+    crate::common::query::require_non_empty("meet", &params.meet)?;
     let rows = sqlx::query_as::<_, Meets>(
         r#"
         SELECT name, start_date::text as start_date, end_date::text as end_date, time_zone, venue_city, venue_state, venue_name, venue_street, venue_zip, federation, status, venue_map_pdf_url, venue_map_apple_url

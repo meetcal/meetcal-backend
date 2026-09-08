@@ -389,6 +389,7 @@ pub async fn get_meet_package(
     State(state): State<AppState>,
     Query(params): Query<MeetPackageParams>,
 ) -> Result<Response, AppError> {
+    crate::common::query::require_non_empty("meet", &params.meet)?;
     if let Some(cutoff) = params.history_cutoff_date.as_deref()
         && !is_valid_iso_date(cutoff)
     {

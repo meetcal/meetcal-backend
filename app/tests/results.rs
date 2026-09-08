@@ -193,3 +193,37 @@ async fn search_matches_name_case_insensitively() {
     let body: SearchResponse = response.json().await.unwrap();
     assert!(!body.results.is_empty());
 }
+
+#[tokio::test]
+async fn empty_names_are_rejected() {
+    let app = support::spawn_test_app().await;
+    let response = reqwest::get(format!("{}/lifting-results/by-names?names=", app.address))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+}
+
+#[tokio::test]
+async fn oversized_name_lists_are_rejected() {
+    let app = support::spawn_test_app().await;
+    let names = (0..101)
+        .map(|index| format!("name-{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let response = reqwest::get(format!(
+        "{}/lifting-results/by-names?names={names}",
+        app.address
+    ))
+    .await
+    .unwrap();
+    assert_eq!(response.status(), 400);
+}
+
+#[tokio::test]
+async fn empty_search_query_is_rejected() {
+    let app = support::spawn_test_app().await;
+    let response = reqwest::get(format!("{}/search?query=%20", app.address))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+}

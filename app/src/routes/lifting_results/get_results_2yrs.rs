@@ -46,6 +46,7 @@ pub async fn get_results_2yrs(
     State(state): State<AppState>,
     Query(params): Query<Results2YrsParams>,
 ) -> Result<Json<Vec<LiftingResults>>, AppError> {
+    crate::common::query::require_name_list(&params.names)?;
     let normalized_names: Vec<String> = params
         .names
         .iter()
