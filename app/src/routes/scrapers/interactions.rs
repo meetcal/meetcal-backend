@@ -41,7 +41,10 @@ pub async fn slack_interactions(
 ) -> Response {
     let cfg = &state.slack;
     if !cfg.enabled() {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Slack interactions are not configured")
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Slack interactions are not configured",
+        )
             .into_response();
     }
     if let Some(resp) = signature::require_valid(&cfg.signing_secret, &headers, &body) {
@@ -63,7 +66,9 @@ pub async fn slack_interactions(
         .get("actions")
         .and_then(Value::as_array)
         .and_then(|a| a.first());
-    let action_id = action.and_then(|a| a.get("action_id")).and_then(Value::as_str);
+    let action_id = action
+        .and_then(|a| a.get("action_id"))
+        .and_then(Value::as_str);
     let run_id = action
         .and_then(|a| a.get("value"))
         .and_then(Value::as_str)
@@ -84,7 +89,11 @@ pub async fn slack_interactions(
 
     // Optional user allowlist (same as slash commands).
     if !cfg.user_allowed(user_id) {
-        update_message(response_url, ":no_entry: You're not authorized to approve uploads.").await;
+        update_message(
+            response_url,
+            ":no_entry: You're not authorized to approve uploads.",
+        )
+        .await;
         return StatusCode::OK.into_response();
     }
 
@@ -96,7 +105,9 @@ pub async fn slack_interactions(
 
     let feedback = match write_decision(&state, run_id, decision, user_id, user_name) {
         Ok(()) => match decision {
-            "approved" => format!(":white_check_mark: Approved by <@{user_id}> — publishing shortly…"),
+            "approved" => {
+                format!(":white_check_mark: Approved by <@{user_id}> — publishing shortly…")
+            }
             _ => format!(":wastebasket: Rejected by <@{user_id}> — discarded."),
         },
         Err(msg) => format!(":warning: Could not record decision: {msg}"),
@@ -127,8 +138,11 @@ fn write_decision(
     });
     let path = dir.join(format!("{run_id}.json"));
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&body).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("write: {e}"))?;
+    std::fs::write(
+        &tmp,
+        serde_json::to_vec_pretty(&body).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("write: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
     Ok(())
 }

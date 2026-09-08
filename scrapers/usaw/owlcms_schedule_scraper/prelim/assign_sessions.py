@@ -234,6 +234,12 @@ def athlete_weight_matches(
     if not athlete_weight or not session_weight_range:
         return False
 
+    # Bare "All" or labeled forms like "M U13 All" / "F 14-15yo All"
+    session_weight_normalized = str(session_weight_range).strip().lower()
+    if session_weight_normalized == "all" or session_weight_normalized.endswith(" all"):
+        return True
+
+
     def normalize_weight_token(weight_token: str) -> str:
         """
         Normalize weight tokens to a canonical form:
@@ -346,6 +352,12 @@ def find_matching_session(athlete: Dict, schedule: List[Dict]) -> Optional[Dict]
         int(athlete.get("entry_total", 0)) if athlete.get("entry_total") else None
     )
     athlete_event_category = athlete.get("event_category")
+    # Series / mixed-age meets: derive youth bucket from athlete age when meet
+    # name does not encode youth/junior/nat/wso.
+    if not athlete_event_category or athlete_event_category == "unknown":
+        age_bucket = youth_age_subgroup(athlete_age) if athlete_age else None
+        if age_bucket:
+            athlete_event_category = "youth"
 
     if not athlete_age:
         return None
@@ -361,6 +373,9 @@ def find_matching_session(athlete: Dict, schedule: List[Dict]) -> Optional[Dict]
 
     # Convert gender to M/F
     gender_code = "M" if athlete_gender == "Male" else "F"
+    athlete_youth_bucket = (
+        youth_age_subgroup(athlete_age) if athlete_event_category == "youth" else None
+    )
 
     # Filter sessions by meet type
     candidate_sessions = []
@@ -387,19 +402,36 @@ def find_matching_session(athlete: Dict, schedule: List[Dict]) -> Optional[Dict]
             continue
 
         session_age_group = session.get("age_group", "")
+        session_category = (
+            parse_session_age_group_category(session_age_group)
+            if session_age_group
+            else None
+        )
         if session_age_group:
-            session_category = parse_session_age_group_category(session_age_group)
             if session_category == "wso":
                 if athlete_event_category != "wso":
                     continue
             elif athlete_event_category == "wso":
                 continue
+            elif session_category and str(session_category).startswith("youth_"):
+                # Youth sessions are age-banded. Adults must never land here,
+                # even when weight category is a labeled "All".
+                if athlete_event_category != "youth":
+                    continue
+                if session_category != athlete_youth_bucket:
+                    continue
+            elif athlete_event_category == "youth":
+                # Youth athletes only match their age-band youth sessions.
+                # Do not allow them to fall into OPEN/adult groups.
+                if session_category != athlete_youth_bucket:
+                    continue
             elif athlete_event_category and not athlete_matches_session_age_group(
                 athlete_event_category,
                 athlete_age,
                 session_age_group,
             ):
                 continue
+
 
         # For UMWF, check age group
         if is_umwf:
@@ -440,19 +472,30 @@ def find_matching_session(athlete: Dict, schedule: List[Dict]) -> Optional[Dict]
         # This session is a candidate
         candidate_sessions.append(session)
 
-    # If we have candidates, return the best match
-    # Prioritize by how well the entry total fits
-    if candidate_sessions:
+    def pick_best(sessions: List[Dict]) -> Optional[Dict]:
+        if not sessions:
+            return None
+
+        # Prefer true youth age-band sessions over OPEN when both match.
+        if athlete_youth_bucket:
+            youth_sessions = [
+                session
+                for session in sessions
+                if parse_session_age_group_category(session.get("age_group", "") or "")
+                == athlete_youth_bucket
+            ]
+            if youth_sessions:
+                sessions = youth_sessions
+
         if athlete_total > 0:
-            # Score each session by how close the total is to the middle of the range
             best_session = None
             best_score = float("inf")
 
-            for session in candidate_sessions:
+            for session in sessions:
                 total_range_str = session.get("estimated_entry_totals_(min___max)", "")
                 min_total, max_total = parse_entry_total_range(total_range_str)
 
-                if min_total and max_total:
+                if min_total is not None and max_total is not None:
                     mid_range = (min_total + max_total) / 2
                     score = abs(athlete_total - mid_range)
                     if score < best_score:
@@ -462,16 +505,31 @@ def find_matching_session(athlete: Dict, schedule: List[Dict]) -> Optional[Dict]
             if best_session:
                 return best_session
 
-        # Default to first match
-        return candidate_sessions[0]
+        return sessions[0]
+
+    # If we have candidates, return the best match
+    # Prioritize youth age-band, then how well the entry total fits
+    if candidate_sessions:
+        return pick_best(candidate_sessions)
 
     # Fallback: if total is out of range for all weight-matched sessions,
     # assign the session whose min/max band is closest to the athlete total.
     if weight_matched_sessions and athlete_total > 0:
+        ranked = weight_matched_sessions
+        if athlete_youth_bucket:
+            youth_sessions = [
+                session
+                for session in weight_matched_sessions
+                if parse_session_age_group_category(session.get("age_group", "") or "")
+                == athlete_youth_bucket
+            ]
+            if youth_sessions:
+                ranked = youth_sessions
+
         best_session = None
         best_distance = float("inf")
 
-        for session in weight_matched_sessions:
+        for session in ranked:
             total_range_str = session.get("estimated_entry_totals_(min___max)", "")
             min_total, max_total = parse_entry_total_range(total_range_str)
 
@@ -494,7 +552,7 @@ def find_matching_session(athlete: Dict, schedule: List[Dict]) -> Optional[Dict]
             return best_session
 
         # If ranges are missing on all candidates, keep deterministic fallback
-        return weight_matched_sessions[0]
+        return ranked[0]
 
     return None
 

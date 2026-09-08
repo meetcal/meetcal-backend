@@ -136,26 +136,24 @@ def fetch_meet_results_from_sport80(api_client: SportEighty, event_data_dict: di
 
 
 def send_slack_notification(inserted_meet_names: list[str], updated_meet_names: list[str]):
+    if not inserted_meet_names and not updated_meet_names:
+        return
+
     if not SLACK_WEBHOOK_URL:
         logging.info("Slack webhook URL not configured. Skipping notification.")
         return
 
-    total_changes = len(inserted_meet_names) + len(updated_meet_names)
-
-    if total_changes == 0:
-        message = "USAW Meet Results Postgres Update\nNo meet result changes detected"
-    else:
-        message = (
-            f"USAW Meet Results Postgres Update\n"
-            f"{len(inserted_meet_names)} new meet result set(s) inserted, "
-            f"{len(updated_meet_names)} meet result set(s) updated"
-        )
-        if inserted_meet_names:
-            inserted_meet_list = "\n".join([f"• {name}" for name in inserted_meet_names])
-            message += f"\n\nNew Meets\n{inserted_meet_list}"
-        if updated_meet_names:
-            updated_meet_list = "\n".join([f"• {name}" for name in updated_meet_names])
-            message += f"\n\nUpdated Meets\n{updated_meet_list}"
+    message = (
+        f"USAW Meet Results Postgres Update\n"
+        f"{len(inserted_meet_names)} new meet result set(s) inserted, "
+        f"{len(updated_meet_names)} meet result set(s) updated"
+    )
+    if inserted_meet_names:
+        inserted_meet_list = "\n".join([f"• {name}" for name in inserted_meet_names])
+        message += f"\n\nNew Meets\n{inserted_meet_list}"
+    if updated_meet_names:
+        updated_meet_list = "\n".join([f"• {name}" for name in updated_meet_names])
+        message += f"\n\nUpdated Meets\n{updated_meet_list}"
 
     payload = {"text": message}
     try:

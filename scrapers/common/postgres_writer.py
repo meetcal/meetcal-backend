@@ -728,10 +728,16 @@ def replace_wso_records(conn, wso: str, rows: Iterable[dict[str, Any]]) -> dict[
     inserted = 0
     updated = 0
     unchanged = 0
+    incoming_keys: set[tuple[Any, Any, Any, Any]] = set()
+    rows_to_write: list[dict[str, Any]] = []
     for row in prepared_rows:
         age_category = normalize_age_category(first(row, "ageCategory", "age_category", default=""))
         gender = normalize_gender(first(row, "gender", default=""))
         weight_class = first(row, "weightClass", "weight_class", default="")
+        key = (wso, age_category, gender, weight_class)
+        if key in incoming_keys:
+            raise ValueError(f"Duplicate WSO record in payload: {key}")
+        incoming_keys.add(key)
         convex_id = first(row, "convexId", "convex_id") or stable_id(
             "wso_record", wso, age_category, gender, weight_class
         )
@@ -744,18 +750,34 @@ def replace_wso_records(conn, wso: str, rows: Iterable[dict[str, Any]]) -> dict[
             "cj_record": first(row, "cjRecord", "cj_record"),
             "total_record": first(row, "totalRecord", "total_record"),
         }
-        existing = existing_by_id.get(convex_id) or existing_by_key.get((wso, age_category, gender, weight_class))
+        existing = existing_by_id.get(convex_id) or existing_by_key.get(key)
         if existing is None:
             inserted += 1
+            rows_to_write.append(row)
         elif row_changed(existing, values):
             updated += 1
+            rows_to_write.append(row)
         else:
             unchanged += 1
 
-    conn.execute("DELETE FROM wso_records WHERE wso = %s", (wso,))
-    for row in prepared_rows:
+    rows_to_delete = [
+        row
+        for key, row in existing_by_key.items()
+        if key not in incoming_keys
+    ]
+    for row in rows_to_delete:
+        conn.execute(
+            "DELETE FROM wso_records WHERE convex_id = %s",
+            (row["convex_id"],),
+        )
+    for row in rows_to_write:
         upsert_wso_record(conn, row)
-    return {"inserted": inserted, "updated": updated, "unchanged": unchanged, "deleted": True}
+    return {
+        "inserted": inserted,
+        "updated": updated,
+        "unchanged": unchanged,
+        "deleted": len(rows_to_delete),
+    }
 
 
 def replace_intl_rankings_group(conn, args: dict[str, Any]) -> dict[str, Any]:

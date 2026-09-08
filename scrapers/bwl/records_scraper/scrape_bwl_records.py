@@ -613,6 +613,9 @@ def send_slack_notification(upsert_results: Dict):
     inserted = upsert_results.get('inserted', 0)
     updated = upsert_results.get('updated', 0)
     updated_details = upsert_results.get('updated_details', [])
+
+    if inserted == 0 and updated == 0:
+        return
     
     message = f"🇬🇧 BWL Records Scraper Completed\n"
     message += f"• New records inserted: {inserted}\n"
@@ -747,4 +750,3 @@ if __name__ == "__main__":
         dry_run()
     else:
         main()
-

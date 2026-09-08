@@ -41,7 +41,7 @@ REQUEST_TIMEOUT_SECONDS = 45
 
 PLATFORMS = ["RED", "WHITE", "BLUE", "STARS", "STRIPES", "ROGUE"]
 PLATFORM_PATTERN = "|".join(PLATFORMS)
-SUPPORTED_SOURCE_FORMATS = {"auto", "masters", "owlcms", "registration"}
+SUPPORTED_SOURCE_FORMATS = {"auto", "masters", "owlcms", "registration", "wso_table"}
 PLATFORM_SORT_ORDER = {
     platform.title(): index for index, platform in enumerate(PLATFORMS)
 }
@@ -739,6 +739,17 @@ def detect_source_format(pdf_bytes: bytes, requested_format: str = "auto") -> st
     if requested_format != "auto":
         return requested_format
 
+    from importlib.util import module_from_spec, spec_from_file_location
+
+    module_path = Path(__file__).with_name("wso_table_scraper.py")
+    spec = spec_from_file_location("wso_table_scraper", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load wso_table_scraper from {module_path}")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if module.is_wso_table_pdf(pdf_bytes):
+        return "wso_table"
+
     with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
         first_page = pdf.pages[0]
         text = first_page.extract_text() or ""
@@ -1238,6 +1249,8 @@ def assign_member_ids(
 ) -> List[Dict[str, object]]:
     member_id = start_member_id
     for entry in entries:
+        if entry.get("memberId"):
+            continue
         entry["memberId"] = str(member_id)
         member_id += 1
     return entries
@@ -1306,7 +1319,17 @@ def extract_entries(
 ) -> List[Dict[str, object]]:
     pdf_bytes = pdf_file.getvalue()
     detected_format = detect_source_format(pdf_bytes, source_format)
-    if detected_format == "owlcms":
+    if detected_format == "wso_table":
+        from importlib.util import module_from_spec, spec_from_file_location
+
+        module_path = Path(__file__).with_name("wso_table_scraper.py")
+        spec = spec_from_file_location("wso_table_scraper", module_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load wso_table_scraper from {module_path}")
+        module = module_from_spec(spec)
+        spec.loader.exec_module(module)
+        entries = module.extract_wso_table_entries(pdf_bytes, meet_name)
+    elif detected_format == "owlcms":
         entries = extract_owlcms_entries(pdf_bytes, meet_name)
     elif detected_format == "registration":
         entries = extract_registration_entries(pdf_bytes, meet_name)

@@ -137,7 +137,10 @@ async fn recent_results_match_name_case_insensitively() {
 #[tokio::test]
 async fn by_names_match_name_case_insensitively() {
     let app = support::spawn_test_app().await;
-    let url = format!("{}/lifting-results/by-names?names=ALEXANDER%20NORDSTROM", app.address);
+    let url = format!(
+        "{}/lifting-results/by-names?names=ALEXANDER%20NORDSTROM",
+        app.address
+    );
     let response = reqwest::get(&url).await.unwrap();
     assert_eq!(response.status(), 200);
 

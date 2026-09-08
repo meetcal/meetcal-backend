@@ -4,6 +4,13 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rust:
     runs-on: ubuntu-latest
@@ -38,7 +45,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -50,11 +57,21 @@ jobs:
       - name: Prepare test database
         run: scripts/setup_test_db.sh
 
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Unit tests
-        run: cargo test
+        run: cargo test --locked
+
+      - name: Validate operational scripts
+        working-directory: ${{ github.workspace }}
+        run: shellcheck -x -P app/scripts app/deploy/*.sh app/scripts/*.sh
+
+      - name: Build production container
+        run: docker build .
 
   python:
     runs-on: ubuntu-latest
@@ -68,5 +85,32 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Compile scraper sources
+        run: python -m compileall -q usaw usamw bwl
+
       - name: Meet automation unit tests
-        run: PYTHONPATH=. python -m unittest usaw.meet_automation.tests.test_meet_automation
+        run: PYTHONPATH=. python -m unittest discover -s usaw/meet_automation/tests -p 'test_*.py'
+
+  dependency-audit:
+    name: Rust dependency audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit dependencies
+        # rsa is used only to generate ephemeral keys in JWT tests and has no
+        # patched release. Production JWT verification uses jsonwebtoken's
+        # rust_crypto backend and Clerk's public keys.
+        run: cargo audit --ignore RUSTSEC-2023-0071

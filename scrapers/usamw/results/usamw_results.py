@@ -573,6 +573,13 @@ def format_stats(stats: dict[str, dict[str, int]]) -> str:
     )
 
 
+def has_database_changes(stats: dict[str, dict[str, int]]) -> bool:
+    return any(
+        value["inserted"] + value["updated"] > 0
+        for value in stats.values()
+    )
+
+
 def process_request(request: dict[str, Any]) -> dict[str, Any]:
     rows = scrape_request(request)
     if not rows:
@@ -580,7 +587,8 @@ def process_request(request: dict[str, Any]) -> dict[str, Any]:
     stats = ingest_rows(rows)
     message = f"USAMW results import complete for {request['meet']}\n{len(rows)} parsed row(s)\n{format_stats(stats)}"
     print(message)
-    post_slack(message)
+    if has_database_changes(stats):
+        post_slack(message)
     return {"rows": len(rows), "stats": stats}
 
 

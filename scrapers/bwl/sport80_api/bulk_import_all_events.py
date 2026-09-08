@@ -281,11 +281,6 @@ def main():
         logging.critical("SUPABASE_URL and SUPABASE_KEY must be set. Exiting.")
         return
 
-    # Send start notification
-    send_slack_notification(
-        f"🚀 Started bulk import of Sport80 events ({START_YEAR}-{END_YEAR})"
-    )
-
     sport80_api = SportEighty(subdomain=BWL_DOMAIN, return_dict=True, debug=logging.WARNING)
     
     # Fetch ALL events across all years
@@ -449,9 +444,9 @@ def main():
         f"• Skipped: {skipped_count}\n"
         f"• Errors: {error_count}"
     )
-    send_slack_notification(summary_message)
+    if total_results_added > 0 or error_count > 0:
+        send_slack_notification(summary_message)
 
 
 if __name__ == "__main__":
     main()
-

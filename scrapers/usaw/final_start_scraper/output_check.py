@@ -177,7 +177,7 @@ def build_verification_settings(argv: Optional[Sequence[str]] = None) -> Verific
     parser.add_argument("--report-path")
     parser.add_argument(
         "--source-format",
-        choices=["auto", "masters", "owlcms", "registration"],
+        choices=["auto", "masters", "owlcms", "registration", "wso_table"],
         default="auto",
     )
     parser.add_argument("--schedule-path")
@@ -297,6 +297,18 @@ def count_raw_owlcms_rows(pdf_bytes: bytes) -> int:
                         ):
                             total += 1
     return total
+
+
+def count_raw_wso_table_rows(pdf_bytes: bytes) -> int:
+    from importlib.util import module_from_spec, spec_from_file_location
+
+    module_path = Path(__file__).with_name("wso_table_scraper.py")
+    spec = spec_from_file_location("wso_table_scraper", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load wso_table_scraper from {module_path}")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.count_wso_table_rows(pdf_bytes)
 
 
 def count_raw_registration_rows(pdf_bytes: bytes) -> int:
@@ -595,6 +607,19 @@ def collect_checks_to_do(entries: list[dict], source_format: str) -> list[str]:
         checks.append(
             "OWLCMS note: WSO checks skipped unless the source explicitly exposes WSO."
         )
+    elif source_format == "wso_table":
+        noncanonical_wsos = sorted(
+            {
+                f'{entry["name"]} | {entry.get("wso", "")}'
+                for entry in entries
+                if entry.get("wso", "") not in EXPECTED_WSOS
+            }
+        )
+        checks.append(f"Review WSO values outside canonical list: {len(noncanonical_wsos)}")
+        for value in noncanonical_wsos[:20]:
+            checks.append(f"- {value}")
+        if len(noncanonical_wsos) > 20:
+            checks.append(f"- ... and {len(noncanonical_wsos) - 20} more")
     else:
         checks.append(
             "Registration note: session, platform, and WSO checks skipped because "
@@ -639,6 +664,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         raw_source_rows = count_raw_master_rows(pdf_bytes)
     elif actual_format == "registration":
         raw_source_rows = count_raw_registration_rows(pdf_bytes)
+    elif actual_format == "wso_table":
+        raw_source_rows = count_raw_wso_table_rows(pdf_bytes)
     else:
         raw_source_rows = count_raw_owlcms_rows(pdf_bytes)
     issues = collect_all_issues(output_entries, actual_format, meet_name)
@@ -660,7 +687,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             f"Parser matches raw source rows: {len(parsed_entries) == raw_source_rows}"
         )
 
-    if actual_format == "masters" and settings.schedule_path and settings.schedule_path.exists():
+    if actual_format in {"masters", "wso_table"} and settings.schedule_path and settings.schedule_path.exists():
         expected_session_platforms = load_expected_session_platforms(settings.schedule_path)
         missing_sessions, missing_session_platforms, coverage_counts = collect_session_coverage(
             output_entries, expected_session_platforms

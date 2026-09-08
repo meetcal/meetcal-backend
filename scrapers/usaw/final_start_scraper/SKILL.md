@@ -11,6 +11,8 @@ Use this workflow when a USAW final start list PDF changes shape and the scraper
 Primary files:
 
 - `scrapers/usaw/final_start_scraper/scraper.py`
+- `scrapers/usaw/final_start_scraper/wso_table_scraper.py` (WSO-column table PDFs)
+- `scrapers/usaw/VWS2_START_LIST_WORKFLOW.md` (VWS2 scrape → verify → publish runbook)
 - `scrapers/usaw/final_start_scraper/mnats_26.ts`
 - `scrapers/usaw/final_start_scraper/verify_ao1_26.py`
 - `scrapers/usaw/final_start_scraper/verify_ao1_26_report.txt`

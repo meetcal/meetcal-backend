@@ -89,6 +89,23 @@
 - Spot-check boundary cases where a page starts or ends mid-session.
 - Treat missing `wso` as acceptable when the source format does not expose it.
 
+## WSO Table Start List Shape (VWS2 / American Open 2)
+
+- Header: `WSO | Lot | First Name | Last Name | Nationality | Year | Age | Club Name | COMPETITIONS | Entry | Group | Sess. | Plat | Day | Time`.
+- Parsed with `pdfplumber.extract_tables()` in `wso_table_scraper.py`; auto-detected as source format `wso_table`.
+- `Lot` maps directly to output `memberId` (do not overwrite with sequential IDs).
+- `Sess.` and `Plat` are the session/platform anchors; withdrawn rows use `WWW` for both and entry `0`.
+- `COMPETITIONS` often repeats the weight class across WSO / OPEN / masters buckets, e.g. `OPEN W 69 / W45 69 / / /`. Prefer OPEN / JR / youth / ADAP / UNI patterns before masters-age tokens.
+- Superheavy classes must output as `86+` / `110+` (trailing plus), not `+86`.
+- Club cells can bleed trailing competition tokens (`OP`, `OPEN`, `OPE`, `N`).
+- Entry cells are frequently OCR-mangled:
+  - plain integers (including youth totals as low as 15)
+  - weight-class bleed such as `861+3 /0` (86+ class) or fused `111xx` / `112xx`
+  - slash forms `1101 4/5` and `1102 3/5`
+  - MIL marker cells like `MIL 1M4 07`, `MIL 1W02 6`, `MIL 2M0 29`
+  - scrambled tokens `M1IL4 W8`, `MI2L0 M0`, `M26IL1`
+- Full scrape → verify → DB publish steps: `scrapers/usaw/VWS2_START_LIST_WORKFLOW.md`.
+
 ## Pan Am Masters Registration Table Shape
 
 - Source documents can be registration lists rather than final session start lists, with a header like `First Name | Last Names | Gender | Country | Master Age | Weight Class | Announced Total | Adaptive Athlete`.

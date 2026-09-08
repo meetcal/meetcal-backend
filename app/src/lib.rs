@@ -9,7 +9,9 @@ use crate::routes::scrapers::{
 use crate::routes::{
     clubs::{get_athletes_by_club::get_athletes_by_club, get_meet_stats::get_meet_stats},
     comp_data::{
-        get_adaptive_records::get_adaptive_records, get_national_rankings::get_national_rankings,
+        get_adaptive_records::get_adaptive_records,
+        get_national_ranking_by_year::get_national_rankings_by_year,
+        get_national_rankings::get_national_rankings,
     },
     lifting_results::{
         get_lifting_results::get_lifting_results,
@@ -45,14 +47,16 @@ use routes::{
     },
     health::health,
     meets::{
-        get_all_meets::list_meets_next_3months, get_athletes_by_meet::get_athletes_by_meet,
-        get_meet_details::get_meet_details, get_meet_package::get_meet_package,
+        get_all_meets::{list_completed_meets, list_meets_next_3months},
+        get_athletes_by_meet::get_athletes_by_meet,
+        get_meet_details::get_meet_details,
+        get_meet_package::get_meet_package,
         get_meet_schedule::get_meet_schedule,
     },
 };
 use sqlx::PgPool;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
@@ -62,6 +66,7 @@ use tower_http::timeout::TimeoutLayer;
 pub struct AppState {
     pub db: PgPool,
     pub slack: SlackConfig,
+    pub auth: Option<Arc<routes::users::auth::AuthVerifier>>,
 }
 
 pub fn load_env() {
@@ -72,6 +77,21 @@ pub fn load_env() {
 }
 
 pub async fn run(listener: TcpListener, db: PgPool) {
+    let auth = routes::users::auth::AuthVerifier::from_env()
+        .unwrap_or_else(|error| panic!("invalid Clerk authentication configuration: {error}"));
+    if auth.is_none() {
+        eprintln!(
+            "warning: Clerk authentication is not configured; protected user routes will reject all requests"
+        );
+    }
+    run_with_auth(listener, db, auth).await;
+}
+
+pub async fn run_with_auth(
+    listener: TcpListener,
+    db: PgPool,
+    auth: Option<Arc<routes::users::auth::AuthVerifier>>,
+) {
     let cors = CorsLayer::new()
         .allow_origin([
             "https://meetcal.app".parse::<HeaderValue>().unwrap(),
@@ -96,8 +116,13 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .route("/data/qualifying-totals", get(get_qualifying_totals))
         .route("/data/intl-rankings", get(get_intl_rankings))
         .route("/data/nat-rankings", get(get_national_rankings))
+        .route(
+            "/data/nat-rankings-year",
+            get(get_national_rankings_by_year),
+        )
         .route("/data/adaptive", get(get_adaptive_records))
         .route("/meets", get(list_meets_next_3months))
+        .route("/meets/completed", get(list_completed_meets))
         .route("/meets/details", get(get_meet_details))
         .route("/meets/package", get(get_meet_package))
         .route("/meets/schedule", get(get_meet_schedule))
@@ -133,6 +158,7 @@ pub async fn run(listener: TcpListener, db: PgPool) {
         .with_state(AppState {
             db,
             slack: SlackConfig::from_env(),
+            auth,
         });
 
     axum::serve(listener, app).await.unwrap();

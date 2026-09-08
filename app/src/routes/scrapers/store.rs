@@ -34,7 +34,9 @@ impl JsonListStore {
         if text.trim().is_empty() {
             return Ok(Vec::new());
         }
-        match serde_json::from_str(&text).map_err(|e| format!("list file is not valid JSON: {e}"))? {
+        match serde_json::from_str(&text)
+            .map_err(|e| format!("list file is not valid JSON: {e}"))?
+        {
             Value::Array(items) => Ok(items),
             _ => Err("list file must contain a JSON array".to_string()),
         }
@@ -73,8 +75,14 @@ impl JsonListStore {
             return Err(format!("missing `{}`", self.key_field));
         }
         let mut items = self.items()?;
-        if items.iter().any(|i| self.key_of(i).eq_ignore_ascii_case(&key)) {
-            return Err(format!("an entry with {} `{key}` already exists", self.key_field));
+        if items
+            .iter()
+            .any(|i| self.key_of(i).eq_ignore_ascii_case(&key))
+        {
+            return Err(format!(
+                "an entry with {} `{key}` already exists",
+                self.key_field
+            ));
         }
         items.push(object);
         self.save(&items)

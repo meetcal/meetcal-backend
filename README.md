@@ -43,6 +43,9 @@ Required variables:
 | `APP_DATABASE__PASSWORD` | Postgres password for the API                    |
 | `POSTGRES_PASSWORD`      | Same password, used by `init_db.sh`              |
 | `DATABASE_URL`           | Full connection string (URL-encode the password) |
+| `CLERK_JWKS_URL`         | Clerk JWKS endpoint used to verify session JWTs  |
+| `CLERK_ISSUER`           | Expected Clerk token issuer                      |
+| `CLERK_AUTHORIZED_PARTIES` | Comma-separated trusted web origins (`azp`)    |
 
 Optional:
 

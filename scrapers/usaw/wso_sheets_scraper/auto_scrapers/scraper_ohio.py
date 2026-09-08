@@ -416,8 +416,7 @@ class WSORecordsScraper:
         total_updated = len(self.changes["updated"])
 
         if total_inserted == 0 and total_updated == 0:
-            message = f"*{self.wso_name} WSO Records Postgres - No Changes*\n\nScraper ran successfully. No new records or updates."
-            payload = {"text": message}
+            return
         else:
             message = f"*{self.wso_name} WSO Records Postgres Update*\n\n*Summary:*\n• {total_inserted} new record(s) inserted\n• {total_updated} record(s) updated"
 

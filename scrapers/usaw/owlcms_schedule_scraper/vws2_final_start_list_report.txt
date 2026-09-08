@@ -1,0 +1,97 @@
+Source format: wso_table
+Output rows: 677
+Parser rows: 677
+Raw source rows: 677
+Output matches parser: True
+Parser matches raw source rows: True
+Missing sessions from schedule: 0
+Missing session/platform combos from schedule: 1
+
+sessionCoverage:
+- session 1 | platform Red | athletes 8
+- session 1 | platform White | athletes 11
+- session 1 | platform Blue | athletes 11
+- session 2 | platform Red | athletes 11
+- session 2 | platform White | athletes 11
+- session 2 | platform Blue | athletes 10
+- session 3 | platform Red | athletes 13
+- session 3 | platform White | athletes 8
+- session 3 | platform Blue | athletes 11
+- session 4 | platform Red | athletes 11
+- session 4 | platform White | athletes 12
+- session 4 | platform Blue | athletes 13
+- session 5 | platform Red | athletes 11
+- session 5 | platform White | athletes 12
+- session 5 | platform Blue | athletes 12
+- session 6 | platform Red | athletes 9
+- session 6 | platform White | athletes 12
+- session 6 | platform Blue | athletes 12
+- session 7 | platform Red | athletes 12
+- session 7 | platform White | athletes 9
+- session 7 | platform Blue | athletes 12
+- session 8 | platform Red | athletes 9
+- session 8 | platform White | athletes 7
+- session 8 | platform Blue | athletes 13
+- session 9 | platform Red | athletes 10
+- session 9 | platform White | athletes 12
+- session 9 | platform Blue | athletes 9
+- session 10 | platform Red | athletes 14
+- session 10 | platform White | athletes 12
+- session 10 | platform Blue | athletes 7
+- session 11 | platform Red | athletes 9
+- session 11 | platform White | athletes 12
+- session 11 | platform Blue | athletes 14
+- session 12 | platform Red | athletes 13
+- session 12 | platform White | athletes 12
+- session 12 | platform Blue | athletes 9
+- session 13 | platform Red | athletes 13
+- session 13 | platform White | athletes 12
+- session 13 | platform Blue | athletes 14
+- session 14 | platform Red | athletes 11
+- session 14 | platform White | athletes 12
+- session 14 | platform Blue | athletes 13
+- session 15 | platform Red | athletes 14
+- session 15 | platform White | athletes 12
+- session 15 | platform Blue | athletes 12
+- session 16 | platform Red | athletes 14
+- session 16 | platform White | athletes 12
+- session 16 | platform Blue | athletes 12
+- session 17 | platform Red | athletes 14
+- session 17 | platform White | athletes 12
+- session 17 | platform Blue | athletes 12
+- session 18 | platform Red | athletes 0
+- session 18 | platform White | athletes 12
+- session 18 | platform Blue | athletes 12
+- session 19 | platform Red | athletes 14
+- session 19 | platform White | athletes 11
+- session 19 | platform Blue | athletes 11
+- session 20 | platform Red | athletes 13
+- session 20 | platform White | athletes 11
+
+missingSessionCoverage:
+- session 18 | platform Red
+
+names: 0
+
+clubs: 0
+
+semanticClubs: 0
+
+similarClubVariants: 0
+
+wsos: 0
+
+weightClasses: 0
+
+genders: 0
+
+sessions: 0
+
+memberIds: 0
+
+meets: 0
+
+prefixes: 0
+
+checksToDo:
+Review WSO values outside canonical list: 0

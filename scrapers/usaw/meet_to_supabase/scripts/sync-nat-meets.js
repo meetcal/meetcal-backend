@@ -222,10 +222,8 @@ async function retry(fn, maxRetries = 3) {
 }
 
 async function sendSlackNotification(insertCount, addedMeetNames) {
-  if (!SLACK_WEBHOOK_URL) return;
-  const message = insertCount === 0
-    ? 'No new Nationals meets inserted into Postgres'
-    : `${insertCount} Nationals meets inserted into Postgres\n\nMeets inserted:\n${addedMeetNames.map(n => `- ${n}`).join('\n')}`;
+  if (!SLACK_WEBHOOK_URL || insertCount === 0) return;
+  const message = `${insertCount} Nationals meets inserted into Postgres\n\nMeets inserted:\n${addedMeetNames.map(n => `- ${n}`).join('\n')}`;
   try {
     await axios.post(SLACK_WEBHOOK_URL, { text: message }, { timeout: 30000 });
   } catch (error) {

@@ -149,7 +149,11 @@ pub async fn get_results_bests(
 
     // Match results to the originally requested names case- and whitespace-insensitively,
     // while keeping the response keyed by the requested names the caller looks up by.
-    let normalized_names: Vec<String> = params.names.iter().map(|name| normalize_name(name)).collect();
+    let normalized_names: Vec<String> = params
+        .names
+        .iter()
+        .map(|name| normalize_name(name))
+        .collect();
     let mut requested_by_normalized: HashMap<String, Vec<String>> = HashMap::new();
     for name in &params.names {
         requested_by_normalized

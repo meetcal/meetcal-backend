@@ -4,9 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow = "1.0.103"
 axum = { version = "0.8.9", features = ["macros"] }
 base64 = "0.22.1"
+jsonwebtoken = { version = "10.2.0", default-features = false, features = [
+  "rust_crypto",
+  "use_pem",
+] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.52.3", features = ["full"] }
@@ -42,3 +46,5 @@ features = [
 
 [dev-dependencies]
 reqwest = { version = "0.13.4", features = ["json"] }
+rand = "0.8.5"
+rsa = { version = "0.9.10", features = ["pem"] }

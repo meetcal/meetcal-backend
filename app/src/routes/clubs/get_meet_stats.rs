@@ -86,7 +86,7 @@ pub async fn get_meet_stats(
 ) -> Result<Json<MeetStats>, AppError> {
     let total_athletes: (i64,) = sqlx::query_as(
         r#"
-        SELECT COUNT(*)::BIGINT
+        SELECT COUNT(DISTINCT lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))))::BIGINT
         FROM athletes
         WHERE club = $1
             AND meet = $2
@@ -99,11 +99,39 @@ pub async fn get_meet_stats(
 
     let rows: Vec<ClubResultRow> = sqlx::query_as(
         r#"
-        WITH club_athletes AS (
-            SELECT DISTINCT name, weight_class
+        WITH roster AS (
+            SELECT DISTINCT ON (
+                lower(btrim(regexp_replace(name, '\s+', ' ', 'g')))
+            )
+                lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) AS normalized_name,
+                name,
+                weight_class,
+                club
             FROM athletes
+            WHERE meet = $2
+            ORDER BY
+                lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))),
+                name,
+                weight_class,
+                club
+        ),
+        club_athletes AS (
+            SELECT normalized_name
+            FROM roster
             WHERE club = $1
-                AND meet = $2
+        ),
+        result_rows AS (
+            SELECT DISTINCT ON (
+                lower(btrim(regexp_replace(name, '\s+', ' ', 'g')))
+            )
+                *
+            FROM lifting_results
+            WHERE meet = $2
+            ORDER BY
+                lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))),
+                COALESCE(total, 0) DESC,
+                date DESC,
+                id DESC
         ),
         meet_results AS (
             SELECT
@@ -121,12 +149,10 @@ pub async fn get_meet_stats(
                     PARTITION BY a.weight_class
                     ORDER BY COALESCE(lr.total, 0) DESC
                 ) AS total_placing
-            FROM lifting_results lr
-            INNER JOIN athletes a
-                ON a.meet = lr.meet
-                AND lower(btrim(regexp_replace(a.name, '\s+', ' ', 'g')))
+            FROM result_rows lr
+            INNER JOIN roster a
+                ON a.normalized_name
                     = lower(btrim(regexp_replace(lr.name, '\s+', ' ', 'g')))
-            WHERE lr.meet = $2
         )
         SELECT
             mr.name,
@@ -154,9 +180,8 @@ pub async fn get_meet_stats(
             ) AS previous_best_total
         FROM meet_results mr
         INNER JOIN club_athletes ca
-            ON lower(btrim(regexp_replace(ca.name, '\s+', ' ', 'g')))
+            ON ca.normalized_name
                 = lower(btrim(regexp_replace(mr.name, '\s+', ' ', 'g')))
-            AND ca.weight_class = mr.weight_class
         ORDER BY mr.name
         "#,
     )

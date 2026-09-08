@@ -1,0 +1,9 @@
+[tools]
+rust = "latest"
+node = "24"
+python = "3.13"
+uv = "latest"
+"cargo:cargo-audit" = "latest"
+"cargo:sqlx-cli" = "latest"
+"npm:typescript" = "latest"
+"npm:typescript-language-server" = "latest"

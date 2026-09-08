@@ -1,6 +1,7 @@
 use crate::configuration::get_configuration;
+use crate::routes::users::auth::AuthVerifier;
 use sqlx::postgres::PgPoolOptions;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 
 #[derive(Debug)]
@@ -9,6 +10,11 @@ pub struct TestApp {
 }
 
 pub async fn spawn_app() -> TestApp {
+    let auth = AuthVerifier::from_env().expect("Invalid Clerk authentication configuration");
+    spawn_app_with_auth(auth).await
+}
+
+pub async fn spawn_app_with_auth(auth: Option<Arc<AuthVerifier>>) -> TestApp {
     crate::load_env();
 
     let database_url = match std::env::var("DATABASE_URL") {
@@ -33,7 +39,7 @@ pub async fn spawn_app() -> TestApp {
     let listener = TcpListener::bind(&address).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let address = format!("http://127.0.0.1:{port}");
-    let server = crate::run(listener, db);
+    let server = crate::run_with_auth(listener, db, auth);
 
     tokio::spawn(server);
 
