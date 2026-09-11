@@ -179,6 +179,28 @@ function ingestMeetToPostgres(meet) {
   return Boolean(parsed.wasInsert);
 }
 
+
+function getExistingMeetStatus(name) {
+  if (!process.env.DATABASE_URL) return null;
+  const lookupScript = path.resolve(__dirname, '../../../common/lookup_meet_status.py');
+  const python = process.env.POSTGRES_INGEST_PYTHON || 'python3';
+  const result = spawnSync(python, [lookupScript], {
+    input: JSON.stringify({ name }),
+    encoding: 'utf8',
+    env: process.env,
+  });
+  if (result.status !== 0) {
+    console.error(`Status lookup failed for "${name}":`, result.stderr || result.stdout);
+    return null;
+  }
+  try {
+    return JSON.parse(result.stdout).status || null;
+  } catch (e) {
+    console.error(`Bad status lookup output for "${name}":`, result.stdout);
+    return null;
+  }
+}
+
 async function retry(fn, maxRetries = 3) {
   let retries = 0;
   while (retries < maxRetries) {
@@ -215,6 +237,11 @@ async function syncMeets() {
     const addedMeetNames = [];
     for (const meet of transformedMeets) {
       try {
+        const existingStatus = getExistingMeetStatus(meet.name);
+        if (existingStatus === 'completed') {
+          console.log(`Skipping completed meet: ${meet.name}`);
+          continue;
+        }
         const wasInsert = await ingestMeet(meet);
         if (wasInsert) {
           insertCount++;

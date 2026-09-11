@@ -452,6 +452,9 @@ def upsert_meet(conn, row: dict[str, Any]) -> dict[str, Any]:
     ).fetchone()
     if existing:
         convex_id = existing["convex_id"]
+        # Preserve manually/ops-marked completed; WSO meet-sync always sends upcoming.
+        if existing.get("status") == "completed":
+            values["status"] = "completed"
     was_changed = row_changed(existing, values)
     result = conn.execute(
         """
