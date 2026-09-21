@@ -40,6 +40,25 @@ pub fn require_non_empty(field: &str, value: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Builds a `LIKE`/`ILIKE` "contains" pattern from caller input.
+///
+/// `%` and `_` are wildcards and `\` is Postgres' default escape character, so
+/// a raw `format!("%{value}%")` lets a query of `%` or `_` match every row
+/// instead of the rows containing that character. Escaping them keeps the
+/// pattern a literal substring search.
+pub fn like_contains_pattern(value: &str) -> String {
+    let mut pattern = String::with_capacity(value.len() + 2);
+    pattern.push('%');
+    for character in value.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(character);
+    }
+    pattern.push('%');
+    pattern
+}
+
 pub fn require_name_list(names: &[String]) -> Result<(), AppError> {
     require_non_empty("names", names.first().map(String::as_str).unwrap_or(""))?;
     if names.len() > MAX_NAME_LIST_LEN {
@@ -62,6 +81,15 @@ mod tests {
             .map(|index| format!("name-{index}"))
             .collect();
         assert!(require_name_list(&oversized).is_err());
+    }
+
+    #[test]
+    fn like_patterns_escape_wildcards() {
+        assert_eq!(like_contains_pattern("Ada"), "%Ada%");
+        // A bare wildcard matched every row before it was escaped.
+        assert_eq!(like_contains_pattern("%"), "%\\%%");
+        assert_eq!(like_contains_pattern("_"), "%\\_%");
+        assert_eq!(like_contains_pattern("a%b_c\\d"), "%a\\%b\\_c\\\\d%");
     }
 
     #[test]

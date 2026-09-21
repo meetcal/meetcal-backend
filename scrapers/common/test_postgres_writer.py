@@ -286,6 +286,38 @@ class DestructiveWriteGuardTests(unittest.TestCase):
             [("2026 Nationals",), ("2026 Nationals",)],
         )
 
+    def test_replace_records_refuses_empty_payload(self):
+        # `replaceIWFRecords` with `records: []` used to DELETE every IWF record
+        # and insert nothing, wiping the set on a failed scrape.
+        connection = self._RecordingConnection()
+        with self.assertRaisesRegex(ValueError, "empty payload"):
+            postgres_writer.replace_records(connection, "IWF", [])
+        self.assertEqual(connection.statements, [])
+
+    def test_replace_records_requires_a_record_type(self):
+        connection = self._RecordingConnection()
+        for empty in ("", "   ", None):
+            with self.assertRaisesRegex(ValueError, "recordType is required"):
+                postgres_writer.replace_records(connection, empty, [{"weightClass": "61kg"}])
+        self.assertEqual(connection.statements, [])
+
+    def test_replace_records_scopes_the_delete_to_the_record_type(self):
+        connection = self._RecordingConnection()
+        with patch.object(postgres_writer, "upsert_record") as upsert:
+            result = postgres_writer.replace_records(
+                connection, "IWF", [{"weightClass": "61kg"}, {"weightClass": "73kg"}]
+            )
+
+        self.assertEqual(result, {"deleted": True, "inserted": 2})
+        self.assertEqual(
+            connection.statements,
+            [("DELETE FROM records WHERE record_type = %s", ("IWF",))],
+        )
+        self.assertEqual(
+            [call.args[1]["recordType"] for call in upsert.call_args_list],
+            ["IWF", "IWF"],
+        )
+
     def test_replace_all_intl_rankings_refuses_empty_payload(self):
         connection = self._RecordingConnection()
         with self.assertRaisesRegex(ValueError, "empty payload"):

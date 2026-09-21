@@ -777,6 +777,18 @@ def upsert_intl_ranking(conn, row: dict[str, Any]) -> dict[str, Any]:
 
 
 def replace_records(conn, record_type: str, rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Wholesale replace of one record type (e.g. IWF world records).
+
+    Refuses an empty ``record_type`` so the DELETE always has a key, and an
+    empty payload so a failed scrape cannot wipe the set -- the same rule
+    ``replace_all_intl_rankings`` enforces.
+    """
+    record_type = require_text(record_type, "recordType")
+    rows = list(rows)
+    if not rows:
+        raise ValueError(
+            f"refusing to replace {record_type} records with an empty payload"
+        )
     conn.execute("DELETE FROM records WHERE record_type = %s", (record_type,))
     inserted = 0
     for row in rows:

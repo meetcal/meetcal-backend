@@ -243,3 +243,22 @@ async fn fail_get_adaptive_records() {
 
     assert_ne!(response.status(), 200);
 }
+
+#[tokio::test]
+async fn empty_wso_on_records_is_rejected() {
+    let app = support::spawn_test_app().await;
+    // `/wsos/athletes` already rejects a blank `wso`; these two answered `200 []`.
+    let response = reqwest::get(format!("{}/data/wso/records?wso=%20", app.address))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+}
+
+#[tokio::test]
+async fn empty_wso_on_age_groups_is_rejected() {
+    let app = support::spawn_test_app().await;
+    let response = reqwest::get(format!("{}/data/wso/age-groups?wso=", app.address))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+}

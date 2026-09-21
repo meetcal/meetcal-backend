@@ -167,6 +167,12 @@ fn is_valid_iso_date(value: &str) -> bool {
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// `PACKAGE_CACHE` is process-wide, so the tests that clear and fill it
+    /// cannot run concurrently: one clearing the cache mid-fill makes the
+    /// other's count assertion fail. Serialize them.
+    static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn validates_real_iso_dates() {
@@ -179,6 +185,7 @@ mod cache_tests {
 
     #[test]
     fn package_cache_never_exceeds_entry_limit() {
+        let _serialized = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         PACKAGE_CACHE.write().unwrap().clear();
         for index in 0..(MAX_PACKAGE_CACHE_ENTRIES + 5) {
             store_package(&format!("meet-{index}"), Bytes::from_static(b"{}"));
@@ -192,6 +199,7 @@ mod cache_tests {
 
     #[test]
     fn oversized_packages_are_not_cached() {
+        let _serialized = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         PACKAGE_CACHE.write().unwrap().clear();
         store_package(
             "oversized",

@@ -1,6 +1,7 @@
 use crate::{
     AppError, AppState,
     common::names::{normalize_name, normalized_name_sql},
+    common::query::{like_contains_pattern, require_non_empty},
     routes::results::types::{LiftingResults, lifting_result_columns},
 };
 use axum::{
@@ -92,7 +93,7 @@ pub async fn search_wrapped(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, AppError> {
-    crate::common::query::require_non_empty("query", &params.query)?;
+    require_non_empty("query", &params.query)?;
     let suggestions = search_suggestions(&state, &params.query).await?;
 
     let (Some(start_date), Some(end_date)) = (params.start_date.as_ref(), params.end_date.as_ref())
@@ -119,7 +120,7 @@ pub async fn search_wrapped(
         }));
     }
 
-    let pattern = format!("%{}%", params.query);
+    let pattern = like_contains_pattern(&params.query);
 
     let fallback = sqlx::query_as::<_, LiftingResults>(NAME_LIKE_IN_RANGE_SQL)
         .bind(&pattern)
@@ -136,7 +137,7 @@ pub async fn search_wrapped(
 }
 
 async fn search_suggestions(state: &AppState, query: &str) -> Result<Vec<String>, AppError> {
-    let pattern = format!("%{}%", query);
+    let pattern = like_contains_pattern(query);
 
     let rows: Vec<(String,)> = sqlx::query_as(
         r#"

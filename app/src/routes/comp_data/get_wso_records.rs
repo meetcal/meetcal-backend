@@ -71,6 +71,9 @@ pub async fn get_wso_records(
     State(state): State<AppState>,
     Query(params): Query<WsoRecordParams>,
 ) -> Result<Json<Vec<WsoRecord>>, AppError> {
+    // Same rule as `/wsos/athletes`: an empty `wso` is a caller bug, not a WSO
+    // with no records, so it fails closed rather than answering `200 []`.
+    crate::common::query::require_non_empty("wso", &params.wso)?;
     let rows = sqlx::query_as::<_, WsoRecord>(
         r#"
         SELECT age_category, cj_record, snatch_record, total_record, weight_class, gender, wso
@@ -106,6 +109,7 @@ pub async fn get_wso_age_groups(
     State(state): State<AppState>,
     Query(params): Query<WsoAgeGroupsParams>,
 ) -> Result<Json<Vec<String>>, AppError> {
+    crate::common::query::require_non_empty("wso", &params.wso)?;
     let rows: Vec<(String,)> = sqlx::query_as(
         r#"
         SELECT DISTINCT age_category
