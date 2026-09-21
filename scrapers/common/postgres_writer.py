@@ -798,8 +798,17 @@ def replace_records(conn, record_type: str, rows: Iterable[dict[str, Any]]) -> d
 
 
 def replace_wso_records(conn, wso: str, rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Exact-set sync of one WSO's record set.
+
+    Refuses an empty ``wso`` so the scan always has a key, and an empty payload
+    because an exact-set sync treats "no incoming rows" as "every existing row
+    disappeared" -- a failed PDF parse would silently delete the WSO's whole
+    record set. Same rule ``replace_records`` enforces.
+    """
     require_text(wso, "wso")
     prepared_rows = [{**row, "wso": wso} for row in rows]
+    if not prepared_rows:
+        raise ValueError(f"refusing to replace {wso} WSO records with an empty payload")
     existing_rows = conn.execute(
         """
         SELECT convex_id, wso, age_category, gender, weight_class,
@@ -860,6 +869,14 @@ def replace_intl_rankings_group(conn, args: dict[str, Any]) -> dict[str, Any]:
     rankings = args.get("rankings", [])
     if not isinstance(rankings, list):
         raise ValueError("rankings must be a list")
+    # An exact-set sync with no incoming rows deletes the whole group. Removing
+    # a group that genuinely disappeared is `deleteMissingIntlRankingGroups`'
+    # job, so an empty payload here is a failed scrape, not an empty group.
+    if not rankings:
+        raise ValueError(
+            f"refusing to replace intl rankings for {meet}/{gender}/{age_category} "
+            "with an empty payload"
+        )
     existing_rows = conn.execute(
         """
         SELECT convex_id, legacy_id, meet, ranking, name, weight_class,

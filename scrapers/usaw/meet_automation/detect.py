@@ -21,6 +21,11 @@ from . import config
 from .config import MeetWatch
 
 REQUEST_TIMEOUT_SECONDS = 45
+# Ceiling on PDF links kept from one meet page. The page is third-party HTML we
+# do not control, and the regex fallbacks below scan the whole body, so the
+# candidate list declares a bound. Real USAW meet pages carry well under a
+# dozen PDFs; this is generous headroom before we stop collecting.
+MAX_PDF_CANDIDATES = 200
 _PDF_HREF_RE = re.compile(r'href\s*=\s*["\']([^"\']+\.pdf[^"\']*)["\']', re.IGNORECASE)
 _PDF_BARE_RE = re.compile(r'https?://[^\s"\'<>]+\.pdf[^\s"\'<>]*', re.IGNORECASE)
 # Capture a little link text around an anchor so we can classify by label too.
@@ -85,11 +90,20 @@ def discover_pdfs(
     def absolute(url: str) -> str:
         return urljoin(base_url, url) if base_url else url
 
+    def remember(url: str) -> bool:
+        """Record a candidate. Returns False once the ceiling is reached."""
+        if url in candidates:
+            return True
+        if len(candidates) >= MAX_PDF_CANDIDATES:
+            return False
+        candidates.append(url)
+        return True
+
     for url, inner in _ANCHOR_RE.findall(page_html):
         label = re.sub(r"<[^>]+>", " ", inner)
         url = absolute(url)
-        if url not in candidates:
-            candidates.append(url)
+        if not remember(url):
+            break
         kind = _classify(url, label)
         if kind == "start_list" and not start_list:
             start_list = url
@@ -99,8 +113,8 @@ def discover_pdfs(
     # Fall back to any pdf hrefs / bare links for classification.
     for raw in _PDF_HREF_RE.findall(page_html) + _PDF_BARE_RE.findall(page_html):
         match = absolute(raw)
-        if match not in candidates:
-            candidates.append(match)
+        if not remember(match):
+            break
         kind = _classify(match, "")
         if kind == "start_list" and not start_list:
             start_list = match

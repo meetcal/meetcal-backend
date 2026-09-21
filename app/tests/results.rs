@@ -220,6 +220,39 @@ async fn oversized_name_lists_are_rejected() {
 }
 
 #[tokio::test]
+async fn malformed_cutoff_dates_are_rejected() {
+    // `date` is a text column, so a malformed cutoff is not a SQL error -- it
+    // compares as a string and silently returns a nonsense window. Every
+    // date-taking endpoint uses the same validator.
+    let app = support::spawn_test_app().await;
+    for url in [
+        format!(
+            "{}/lifting-results/recent?names=Ada&cutoff_date=yesterday",
+            app.address
+        ),
+        format!(
+            "{}/lifting-results/year?name=Ada&cutoff_date=2025-6-13",
+            app.address
+        ),
+        format!(
+            "{}/lifting-results/bests?names=Ada&cutoff_date=2025-02-30",
+            app.address
+        ),
+        format!(
+            "{}/search?query=Ada&start_date=nope&end_date=2025-12-31",
+            app.address
+        ),
+        format!(
+            "{}/search?query=Ada&start_date=2025-01-01&end_date=nope",
+            app.address
+        ),
+    ] {
+        let response = reqwest::get(&url).await.unwrap();
+        assert_eq!(response.status(), 400, "{url}");
+    }
+}
+
+#[tokio::test]
 async fn empty_search_query_is_rejected() {
     let app = support::spawn_test_app().await;
     let response = reqwest::get(format!("{}/search?query=%20", app.address))

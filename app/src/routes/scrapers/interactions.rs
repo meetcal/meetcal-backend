@@ -28,6 +28,14 @@ use crate::AppState;
 const ACTION_APPROVE: &str = "meet_approve";
 const ACTION_REJECT: &str = "meet_reject";
 
+/// Longest run id accepted from a button click. Real ids are
+/// `<watch-key>-<YYYYMMDD>-<HHMMSS>` (well under 100 chars); the cap keeps a
+/// hostile `value` from becoming an absurd filename in the decisions dir.
+const MAX_RUN_ID_LEN: usize = 200;
+/// Ceiling on the best-effort `response_url` message update. Slack's own
+/// slash-command budget is 3s, so a slow edit must not outlive the request.
+const SLACK_RESPONSE_URL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[derive(Deserialize, Default)]
 struct InteractionForm {
     #[serde(default)]
@@ -148,14 +156,14 @@ async fn update_message(response_url: Option<String>, text: &str) {
     let _ = client
         .post(url)
         .json(&json!({ "replace_original": true, "text": text }))
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(SLACK_RESPONSE_URL_TIMEOUT)
         .send()
         .await;
 }
 
 fn is_safe_run_id(run_id: &str) -> bool {
     !run_id.is_empty()
-        && run_id.len() <= 200
+        && run_id.len() <= MAX_RUN_ID_LEN
         // Reject `.`/`..` outright: with the `.json` suffix they can't escape the
         // decisions dir, but they're never valid run ids and shouldn't write a file.
         && run_id != "."
@@ -177,5 +185,8 @@ mod tests {
         assert!(!is_safe_run_id(".."));
         assert!(!is_safe_run_id("../../etc/passwd"));
         assert!(!is_safe_run_id("a/b"));
+        // Max: one character past the declared ceiling is rejected.
+        assert!(is_safe_run_id(&"a".repeat(MAX_RUN_ID_LEN)));
+        assert!(!is_safe_run_id(&"a".repeat(MAX_RUN_ID_LEN + 1)));
     }
 }

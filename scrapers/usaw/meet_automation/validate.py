@@ -23,6 +23,11 @@ NAME_FRAGMENT_RE = re.compile(r"\d")
 # whereas a title-cased color word (e.g. "White Rose Barbell") is a real name.
 CLUB_LEAK_TOKENS = {"WSO", "UNI", "MIL", "ADAP", "OPEN"}
 
+# How many example rows one finding carries into the report. The report is
+# rendered into a Slack message and an HTML preview, so a meet-wide parse
+# failure must not inline every affected athlete.
+MAX_EXAMPLES_PER_FINDING = 5
+
 ERROR = "error"
 WARNING = "warning"
 INFO = "info"
@@ -40,7 +45,7 @@ class _Findings:
             {"severity": severity, "code": code, "message": message, "count": 0, "examples": []},
         )
         bucket["count"] += 1
-        if example and len(bucket["examples"]) < 5:
+        if example and len(bucket["examples"]) < MAX_EXAMPLES_PER_FINDING:
             bucket["examples"].append(example)
 
     def as_list(self) -> List[Dict[str, Any]]:

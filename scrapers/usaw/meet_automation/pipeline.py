@@ -250,15 +250,20 @@ def _format_target_confirmation(run_id: str, target: str, stats: dict) -> str:
     return f":white_check_mark: *{target}* updated for `{run_id}`"
 
 
+def _notify(slack_cfg: SlackConfig, bundle: StagedBundle, text: str) -> None:
+    """Post a thread reply. A notification failure never aborts a publish, but
+    it is reported: swallowing it silently leaves the operator watching a
+    thread that never says whether the write landed."""
+    try:
+        slack.post_thread_reply(slack_cfg, bundle, text)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{bundle.run_id}] slack notify failed: {exc}", file=sys.stderr)
+
+
 def _slack_target_reporter(slack_cfg: SlackConfig, bundle: StagedBundle):
     """Post one Slack confirmation per DB as each upload completes."""
     def report(target: str, stats: dict) -> None:
-        try:
-            slack.post_thread_reply(
-                slack_cfg, bundle, _format_target_confirmation(bundle.run_id, target, stats)
-            )
-        except Exception:  # noqa: BLE001
-            pass
+        _notify(slack_cfg, bundle, _format_target_confirmation(bundle.run_id, target, stats))
     return report
 
 
@@ -311,7 +316,10 @@ def _read_decision(run_id: str):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data.get("decision"), path
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        # An unreadable decision file leaves the run pending forever. Say so,
+        # rather than making it look like nobody has clicked a button yet.
+        print(f"[{run_id}] unreadable decision file {path}: {exc}", file=sys.stderr)
         return None, path
 
 
@@ -329,7 +337,13 @@ def cmd_approve(args) -> int:
     run_ids = [args.run_id] if args.run_id else stage.list_runs()
     acted = False
     for run_id in run_ids:
-        bundle = stage.load_run(run_id)
+        try:
+            bundle = stage.load_run(run_id)
+        except Exception as exc:  # noqa: BLE001
+            # One unreadable run directory must not wedge every other pending
+            # approval on this tick; report it and move on.
+            print(f"[{run_id}] unreadable staged run: {exc}", file=sys.stderr)
+            continue
         if bundle.status != STATUS_PENDING_APPROVAL:
             continue
         decision, decision_path = _read_decision(run_id)
@@ -338,25 +352,16 @@ def cmd_approve(args) -> int:
         if decision == "approved":
             print(f"[{run_id}] approved in Slack -> ingesting")
             bundle.status = STATUS_APPROVED
-            try:
-                slack.post_thread_reply(slack_cfg, bundle, f":rocket: Approved — publishing `{run_id}`…")
-            except Exception:  # noqa: BLE001
-                pass
+            _notify(slack_cfg, bundle, f":rocket: Approved — publishing `{run_id}`…")
             bundle = _do_ingest(bundle, replace=not args.no_replace, slack_cfg=slack_cfg)
-            try:
-                slack.post_thread_reply(slack_cfg, bundle, f":checkered_flag: `{run_id}` published to Postgres.")
-            except Exception:  # noqa: BLE001
-                pass
+            _notify(slack_cfg, bundle, f":checkered_flag: `{run_id}` published to Postgres.")
             _consume_decision(decision_path)
             acted = True
         elif decision == "rejected":
             print(f"[{run_id}] rejected in Slack")
             bundle.status = STATUS_REJECTED
             stage.write_run(bundle)
-            try:
-                slack.post_thread_reply(slack_cfg, bundle, f":wastebasket: Discarded `{run_id}`.")
-            except Exception:  # noqa: BLE001
-                pass
+            _notify(slack_cfg, bundle, f":wastebasket: Discarded `{run_id}`.")
             _consume_decision(decision_path)
             acted = True
         else:
@@ -370,7 +375,8 @@ def cmd_list(args) -> int:
     for run_id in stage.list_runs():
         try:
             bundle = stage.load_run(run_id)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            print(f"{run_id}\tUNREADABLE\t{exc}", file=sys.stderr)
             continue
         v = bundle.validation or {}
         print(

@@ -1,7 +1,7 @@
 use crate::{
     AppError, AppState,
     common::names::{normalize_name, normalized_name_sql},
-    common::query::{like_contains_pattern, require_non_empty},
+    common::query::{like_contains_pattern, require_iso_date, require_non_empty},
     routes::results::types::{LiftingResults, lifting_result_columns},
 };
 use axum::{
@@ -9,6 +9,14 @@ use axum::{
     extract::{Query, State},
 };
 use serde::{Deserialize, Serialize};
+
+/// Ceiling on rows returned by one wrapped search. A name can appear in
+/// hundreds of meets, and the mobile client renders a list, so the row budget
+/// is declared here once and bound into both range queries rather than typed
+/// into each `LIMIT`.
+const MAX_SEARCH_RESULT_ROWS: i64 = 600;
+/// Ceiling on name suggestions offered for a partial query.
+const MAX_SEARCH_SUGGESTIONS: i64 = 8;
 
 const EXACT_NAME_IN_RANGE_SQL: &str = concat!(
     r#"
@@ -21,7 +29,7 @@ const EXACT_NAME_IN_RANGE_SQL: &str = concat!(
     normalized_name_sql!(),
     r#" = $1 AND date >= $2 AND date < $3
         ORDER BY date ASC
-        LIMIT 600
+        LIMIT $4
         "#
 );
 
@@ -34,7 +42,7 @@ const NAME_LIKE_IN_RANGE_SQL: &str = concat!(
         FROM lifting_results
         WHERE name ILIKE $1 AND date >= $2 AND date < $3
         ORDER BY date ASC
-        LIMIT 600
+        LIMIT $4
         "#
 );
 
@@ -94,6 +102,8 @@ pub async fn search_wrapped(
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, AppError> {
     require_non_empty("query", &params.query)?;
+    require_iso_date("start_date", params.start_date.as_deref())?;
+    require_iso_date("end_date", params.end_date.as_deref())?;
     let suggestions = search_suggestions(&state, &params.query).await?;
 
     let (Some(start_date), Some(end_date)) = (params.start_date.as_ref(), params.end_date.as_ref())
@@ -109,6 +119,7 @@ pub async fn search_wrapped(
         .bind(normalize_name(&params.query))
         .bind(start_date)
         .bind(end_date)
+        .bind(MAX_SEARCH_RESULT_ROWS)
         .fetch_all(&state.db)
         .await?;
 
@@ -126,6 +137,7 @@ pub async fn search_wrapped(
         .bind(&pattern)
         .bind(start_date)
         .bind(end_date)
+        .bind(MAX_SEARCH_RESULT_ROWS)
         .fetch_all(&state.db)
         .await?;
 
@@ -145,10 +157,11 @@ async fn search_suggestions(state: &AppState, query: &str) -> Result<Vec<String>
         FROM lifting_results
         WHERE name ILIKE $1
         ORDER BY name
-        LIMIT 8
+        LIMIT $2
         "#,
     )
     .bind(pattern)
+    .bind(MAX_SEARCH_SUGGESTIONS)
     .fetch_all(&state.db)
     .await?;
 

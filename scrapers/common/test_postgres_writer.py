@@ -33,6 +33,30 @@ class FakeConnection:
         raise AssertionError(f"Unexpected query: {query}")
 
 
+class PayloadCleaningTests(unittest.TestCase):
+    """`scraperSecret` is a transport credential, never a column. Every
+    `upsert_*` runs its row through `clean` before building values."""
+
+    def test_clean_strips_the_scraper_secret_and_keeps_everything_else(self):
+        cleaned = postgres_writer.clean(
+            {"scraperSecret": "hunter2", "name": "Ada", "total": 200}
+        )
+        self.assertEqual(cleaned, {"name": "Ada", "total": 200})
+
+    def test_every_upsert_cleans_its_row(self):
+        import inspect
+
+        upserts = [
+            name
+            for name in dir(postgres_writer)
+            if name.startswith("upsert_") and callable(getattr(postgres_writer, name))
+        ]
+        self.assertTrue(upserts)
+        for name in upserts:
+            source = inspect.getsource(getattr(postgres_writer, name))
+            self.assertIn("clean(row)", source, f"{name} does not clean its payload")
+
+
 class ReplaceWsoRecordsTests(unittest.TestCase):
     def test_exact_set_sync_counts_and_writes_only_changes(self):
         existing_rows = [
@@ -133,6 +157,27 @@ class ReplaceWsoRecordsGuardTests(unittest.TestCase):
             postgres_writer.replace_wso_records(connection, "", [])
         self.assertEqual(connection.deleted_ids, [])
 
+    def test_rejects_empty_payload(self):
+        # An exact-set sync with zero incoming rows deletes every existing row
+        # for the WSO, so a failed PDF parse used to wipe the record set.
+        connection = FakeConnection(
+            [
+                {
+                    "convex_id": "existing-id",
+                    "wso": "Illinois",
+                    "age_category": "Senior",
+                    "gender": "Women",
+                    "weight_class": "71",
+                    "snatch_record": 80,
+                    "cj_record": 100,
+                    "total_record": 180,
+                }
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "empty payload"):
+            postgres_writer.replace_wso_records(connection, "Illinois", [])
+        self.assertEqual(connection.deleted_ids, [])
+
 
 class ReplaceIntlRankingsTests(unittest.TestCase):
     def test_exact_set_sync_counts_and_writes_only_changes(self):
@@ -223,6 +268,33 @@ class ReplaceIntlRankingsTests(unittest.TestCase):
             postgres_writer.replace_intl_rankings_group(
                 connection, {"meet": "", "gender": "Women", "ageCategory": "Senior", "rankings": []}
             )
+
+    def test_rejects_empty_rankings_payload(self):
+        # Removing a group that genuinely disappeared is
+        # `deleteMissingIntlRankingGroups`' job; an empty replace is a failed
+        # scrape and must not delete the group.
+        connection = FakeConnection(
+            [
+                {
+                    "convex_id": "existing-id",
+                    "legacy_id": None,
+                    "meet": "Worlds",
+                    "ranking": 1,
+                    "name": "Keep",
+                    "weight_class": "71",
+                    "total": 200,
+                    "percent_a": 90,
+                    "gender": "Women",
+                    "age_category": "Senior",
+                }
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "empty payload"):
+            postgres_writer.replace_intl_rankings_group(
+                connection,
+                {"meet": "Worlds", "gender": "Women", "ageCategory": "Senior", "rankings": []},
+            )
+        self.assertEqual(connection.deleted_ids, [])
 
     def test_rejects_duplicate_incoming_keys(self):
         connection = FakeConnection([])

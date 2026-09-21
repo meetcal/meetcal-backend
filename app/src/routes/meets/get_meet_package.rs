@@ -27,11 +27,12 @@ pub struct MeetPackageParams {
 /// The package is effectively static during a meet weekend: schedule, roster,
 /// attempt estimates, and history are all fixed beforehand, and this meet's own
 /// results (`meet_results`) aren't scraped in until ~1 week after the meet ends.
+const DEFAULT_PACKAGE_CACHE_TTL_SECS: u64 = 60 * 60;
 static PACKAGE_CACHE_TTL: LazyLock<Duration> = LazyLock::new(|| {
     let secs = std::env::var("APP_PACKAGE_CACHE_TTL_SECS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(3600);
+        .unwrap_or(DEFAULT_PACKAGE_CACHE_TTL_SECS);
     Duration::from_secs(secs)
 });
 
@@ -136,34 +137,6 @@ fn store_package(key: &str, body: Bytes) {
     }
 }
 
-fn is_valid_iso_date(value: &str) -> bool {
-    let mut parts = value.split('-');
-    let (Some(year), Some(month), Some(day), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
-        return false;
-    };
-    if year.len() != 4 || month.len() != 2 || day.len() != 2 {
-        return false;
-    }
-    let (Ok(year), Ok(month), Ok(day)) = (
-        year.parse::<u32>(),
-        month.parse::<u32>(),
-        day.parse::<u32>(),
-    ) else {
-        return false;
-    };
-    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
-    let days = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if leap => 29,
-        2 => 28,
-        _ => return false,
-    };
-    (1..=days).contains(&day)
-}
-
 #[cfg(test)]
 mod cache_tests {
     use super::*;
@@ -173,15 +146,6 @@ mod cache_tests {
     /// cannot run concurrently: one clearing the cache mid-fill makes the
     /// other's count assertion fail. Serialize them.
     static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    #[test]
-    fn validates_real_iso_dates() {
-        assert!(is_valid_iso_date("2024-02-29"));
-        assert!(is_valid_iso_date("2026-08-23"));
-        assert!(!is_valid_iso_date("2025-02-29"));
-        assert!(!is_valid_iso_date("2026-13-01"));
-        assert!(!is_valid_iso_date("not-a-date"));
-    }
 
     #[test]
     fn package_cache_never_exceeds_entry_limit() {
@@ -455,13 +419,10 @@ pub async fn get_meet_package(
     Query(params): Query<MeetPackageParams>,
 ) -> Result<Response, AppError> {
     crate::common::query::require_non_empty("meet", &params.meet)?;
-    if let Some(cutoff) = params.history_cutoff_date.as_deref()
-        && !is_valid_iso_date(cutoff)
-    {
-        return Err(AppError::Validation(
-            "history_cutoff_date must be a valid YYYY-MM-DD date".to_string(),
-        ));
-    }
+    crate::common::query::require_iso_date(
+        "history_cutoff_date",
+        params.history_cutoff_date.as_deref(),
+    )?;
 
     let cache_key = format!(
         "{}|{}",
@@ -690,6 +651,20 @@ fn build_attempt_estimates(
     sessions
 }
 
+/// Attempt-estimator coefficients. Each one appeared as a bare literal at two
+/// or three call sites, so a tuning change had to be applied in every copy;
+/// they are declared once here with their unit.
+///
+/// An opener is planned at 93% of the reference lift (historical best, or the
+/// declared entry total when there is no history). An entry total is split
+/// 43% snatch / 57% clean & jerk. With no history to average, attempts step by
+/// the default jump for the lift.
+const OPENER_SHARE_OF_BEST: f64 = 0.93;
+const SNATCH_SHARE_OF_TOTAL: f64 = 0.43;
+const CJ_SHARE_OF_TOTAL: f64 = 0.57;
+const DEFAULT_SNATCH_JUMP_KG: f64 = 3.0;
+const DEFAULT_CJ_JUMP_KG: f64 = 4.0;
+
 fn build_session_attempt_estimates(
     athletes: &[PackageAthlete],
     history_rows: &[PackageLiftingResult],
@@ -727,14 +702,14 @@ fn build_session_attempt_estimates(
             .iter()
             .filter(|estimate| estimate.best_snatch.is_some())
             .map(|estimate| estimate.avg_snatch_increase),
-        3.0,
+        DEFAULT_SNATCH_JUMP_KG,
     );
     let session_avg_cj = session_average_increase(
         temp_estimates
             .iter()
             .filter(|estimate| estimate.best_cj.is_some())
             .map(|estimate| estimate.avg_cj_increase),
-        4.0,
+        DEFAULT_CJ_JUMP_KG,
     );
 
     let mut estimates: Vec<PackageAttemptEstimate> = temp_estimates
@@ -745,8 +720,8 @@ fn build_session_attempt_estimates(
                 estimate.avg_snatch_increase,
                 session_avg_snatch,
                 estimate.athlete.entry_total,
-                0.43,
-                3.0,
+                SNATCH_SHARE_OF_TOTAL,
+                DEFAULT_SNATCH_JUMP_KG,
                 estimate.snatch_make_rate,
             );
             let clean_and_jerk = estimate_lift(
@@ -754,8 +729,8 @@ fn build_session_attempt_estimates(
                 estimate.avg_cj_increase,
                 session_avg_cj,
                 estimate.athlete.entry_total,
-                0.57,
-                4.0,
+                CJ_SHARE_OF_TOTAL,
+                DEFAULT_CJ_JUMP_KG,
                 estimate.cj_make_rate,
             );
 
@@ -796,7 +771,7 @@ fn estimate_lift(
     make_rate: f64,
 ) -> PackageLiftAttemptEstimate {
     if let Some(best) = historical_best {
-        let first_attempt = (best * 0.93).round();
+        let first_attempt = (best * OPENER_SHARE_OF_BEST).round();
         let second_attempt = first_attempt + athlete_average_increase.first_to_second;
         let third_attempt = second_attempt + athlete_average_increase.second_to_third;
         return PackageLiftAttemptEstimate {
@@ -810,7 +785,7 @@ fn estimate_lift(
     }
 
     if entry_total > 0.0 {
-        let estimated_total = (entry_total * 0.93).round();
+        let estimated_total = (entry_total * OPENER_SHARE_OF_BEST).round();
         let first_attempt = (estimated_total * total_ratio).round();
         let second_attempt = first_attempt + session_average_increase.first_to_second;
         let third_attempt = second_attempt + session_average_increase.second_to_third;
@@ -920,8 +895,8 @@ fn calculate_average_increase(
     }
 
     let default_jump = match lift_type {
-        LiftType::Snatch => 3.0,
-        LiftType::CleanAndJerk => 4.0,
+        LiftType::Snatch => DEFAULT_SNATCH_JUMP_KG,
+        LiftType::CleanAndJerk => DEFAULT_CJ_JUMP_KG,
     };
 
     AttemptIncrease {
