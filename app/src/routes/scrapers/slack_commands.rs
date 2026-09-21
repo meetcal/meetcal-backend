@@ -16,8 +16,8 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::store::{JsonListStore, require_http_url, validate_slug};
-use super::{ListKind, now_unix_secs, signature};
+use super::store::{JsonListStore, is_http_url, require_http_url, validate_slug};
+use super::{ListKind, now_unix_secs, signature, write_json_request};
 use crate::AppState;
 
 const WATCHES_USAGE: &str = "*Meet watches*\n\
@@ -269,18 +269,11 @@ fn parse_run_target(args: &str) -> Result<Option<String>, String> {
 /// off the `__all__` sentinel; a specific key keys off itself, so re-running the
 /// same watch before the cron drains it just refreshes one file.
 fn queue_run(cfg: &super::SlackConfig, key: Option<&str>, user_id: &str) -> Result<(), String> {
-    let dir = cfg.run_requests_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
-    let body = run_request_body(key, user_id);
-    let path = dir.join(run_request_filename(key));
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(
-        &tmp,
-        serde_json::to_vec_pretty(&body).map_err(|e| e.to_string())?,
+    write_json_request(
+        &cfg.run_requests_dir(),
+        &run_request_filename(key),
+        &run_request_body(key, user_id),
     )
-    .map_err(|e| format!("write: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
-    Ok(())
 }
 
 fn run_request_filename(key: Option<&str>) -> String {
@@ -485,7 +478,7 @@ fn build_usamw_results_request(text: &str, user_id: &str) -> Result<Value, Strin
             if token.eq_ignore_ascii_case("adaptive") || token.eq_ignore_ascii_case("true") {
                 continue;
             }
-            if token.starts_with("http://") || token.starts_with("https://") {
+            if is_http_url(token) {
                 require_http_url("PDF URL", Some(token))?;
                 urls.push(token.to_string());
             }
@@ -523,8 +516,6 @@ fn validate_date(date: &str) -> Result<(), String> {
 }
 
 fn queue_usamw_results(cfg: &super::SlackConfig, body: &Value) -> Result<(), String> {
-    let dir = cfg.usamw_results_requests_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
     let file_name = format!(
         "{}-{}.json",
         slugify(&field(body, "meet")),
@@ -532,15 +523,7 @@ fn queue_usamw_results(cfg: &super::SlackConfig, body: &Value) -> Result<(), Str
             .as_u64()
             .unwrap_or_else(now_unix_secs)
     );
-    let path = dir.join(file_name);
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(
-        &tmp,
-        serde_json::to_vec_pretty(body).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("write: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
-    Ok(())
+    write_json_request(&cfg.usamw_results_requests_dir(), &file_name, body)
 }
 
 fn slugify(value: &str) -> String {

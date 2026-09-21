@@ -1,6 +1,10 @@
 use crate::{
     AppError, AppState,
-    common::{names::normalize_name, query::deserialize_csv_or_repeated},
+    common::{
+        names::{normalize_name, normalized_name_sql},
+        query::deserialize_csv_or_repeated,
+    },
+    routes::results::types::best_lifts_columns,
 };
 use axum::Json;
 use axum::extract::{Query, State};
@@ -36,6 +40,74 @@ struct YearBestsByName {
     best_total: f64,
 }
 
+const BESTS_SINCE_CUTOFF_SQL: &str = concat!(
+    r#"
+            SELECT
+                "#,
+    best_lifts_columns!(),
+    r#"
+            FROM lifting_results
+            WHERE "#,
+    normalized_name_sql!(),
+    r#" = $1
+                AND date >= $2
+            "#
+);
+
+const BESTS_LAST_YEAR_SQL: &str = concat!(
+    r#"
+            SELECT
+                "#,
+    best_lifts_columns!(),
+    r#"
+            FROM lifting_results
+            WHERE "#,
+    normalized_name_sql!(),
+    r#" = $1
+                AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
+            "#
+);
+
+const BATCH_BESTS_SINCE_CUTOFF_SQL: &str = concat!(
+    r#"
+            SELECT
+                "#,
+    normalized_name_sql!(),
+    r#" AS name,
+                "#,
+    best_lifts_columns!(),
+    r#"
+            FROM lifting_results
+            WHERE "#,
+    normalized_name_sql!(),
+    r#" = ANY($1::text[])
+                AND date >= $2
+            GROUP BY "#,
+    normalized_name_sql!(),
+    r#"
+            "#
+);
+
+const BATCH_BESTS_LAST_YEAR_SQL: &str = concat!(
+    r#"
+            SELECT
+                "#,
+    normalized_name_sql!(),
+    r#" AS name,
+                "#,
+    best_lifts_columns!(),
+    r#"
+            FROM lifting_results
+            WHERE "#,
+    normalized_name_sql!(),
+    r#" = ANY($1::text[])
+                AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
+            GROUP BY "#,
+    normalized_name_sql!(),
+    r#"
+            "#
+);
+
 /// /lifting-results/year endpoint
 ///
 /// curl 'https://api.meetcal.app/lifting-results/year?name=Adaptive%20Test%20Athlete&cutoff_date=2025-06-13' | jq .
@@ -55,56 +127,16 @@ pub async fn get_results_current_year(
 ) -> Result<Json<YearBests>, AppError> {
     crate::common::query::require_non_empty("name", &params.name)?;
     let rows = if let Some(cutoff_date) = params.cutoff_date {
-        sqlx::query_as::<_, YearBests>(
-            r#"
-            SELECT
-                COALESCE(MAX(GREATEST(
-                    COALESCE(snatch_best, 0),
-                    COALESCE(snatch1, 0),
-                    COALESCE(snatch2, 0),
-                    COALESCE(snatch3, 0)
-                )), 0) AS best_snatch,
-                COALESCE(MAX(GREATEST(
-                    COALESCE(cj_best, 0),
-                    COALESCE(cj1, 0),
-                    COALESCE(cj2, 0),
-                    COALESCE(cj3, 0)
-                )), 0) AS best_cj,
-                COALESCE(MAX(COALESCE(total, 0)), 0) AS best_total
-            FROM lifting_results
-            WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = $1
-                AND date >= $2
-            "#,
-        )
-        .bind(normalize_name(&params.name))
-        .bind(cutoff_date)
-        .fetch_one(&state.db)
-        .await?
+        sqlx::query_as::<_, YearBests>(BESTS_SINCE_CUTOFF_SQL)
+            .bind(normalize_name(&params.name))
+            .bind(cutoff_date)
+            .fetch_one(&state.db)
+            .await?
     } else {
-        sqlx::query_as::<_, YearBests>(
-            r#"
-            SELECT
-                COALESCE(MAX(GREATEST(
-                    COALESCE(snatch_best, 0),
-                    COALESCE(snatch1, 0),
-                    COALESCE(snatch2, 0),
-                    COALESCE(snatch3, 0)
-                )), 0) AS best_snatch,
-                COALESCE(MAX(GREATEST(
-                    COALESCE(cj_best, 0),
-                    COALESCE(cj1, 0),
-                    COALESCE(cj2, 0),
-                    COALESCE(cj3, 0)
-                )), 0) AS best_cj,
-                COALESCE(MAX(COALESCE(total, 0)), 0) AS best_total
-            FROM lifting_results
-            WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = $1
-                AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
-            "#,
-        )
-        .bind(normalize_name(&params.name))
-        .fetch_one(&state.db)
-        .await?
+        sqlx::query_as::<_, YearBests>(BESTS_LAST_YEAR_SQL)
+            .bind(normalize_name(&params.name))
+            .fetch_one(&state.db)
+            .await?
     };
 
     Ok(Json(rows))
@@ -161,60 +193,16 @@ pub async fn get_results_bests(
     }
 
     let rows = if let Some(cutoff_date) = params.cutoff_date {
-        sqlx::query_as::<_, YearBestsByName>(
-            r#"
-            SELECT
-                lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) AS name,
-                COALESCE(MAX(GREATEST(
-                    COALESCE(snatch_best, 0),
-                    COALESCE(snatch1, 0),
-                    COALESCE(snatch2, 0),
-                    COALESCE(snatch3, 0)
-                )), 0) AS best_snatch,
-                COALESCE(MAX(GREATEST(
-                    COALESCE(cj_best, 0),
-                    COALESCE(cj1, 0),
-                    COALESCE(cj2, 0),
-                    COALESCE(cj3, 0)
-                )), 0) AS best_cj,
-                COALESCE(MAX(COALESCE(total, 0)), 0) AS best_total
-            FROM lifting_results
-            WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
-                AND date >= $2
-            GROUP BY lower(btrim(regexp_replace(name, '\s+', ' ', 'g')))
-            "#,
-        )
-        .bind(&normalized_names)
-        .bind(cutoff_date)
-        .fetch_all(&state.db)
-        .await?
+        sqlx::query_as::<_, YearBestsByName>(BATCH_BESTS_SINCE_CUTOFF_SQL)
+            .bind(&normalized_names)
+            .bind(cutoff_date)
+            .fetch_all(&state.db)
+            .await?
     } else {
-        sqlx::query_as::<_, YearBestsByName>(
-            r#"
-            SELECT
-                lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) AS name,
-                COALESCE(MAX(GREATEST(
-                    COALESCE(snatch_best, 0),
-                    COALESCE(snatch1, 0),
-                    COALESCE(snatch2, 0),
-                    COALESCE(snatch3, 0)
-                )), 0) AS best_snatch,
-                COALESCE(MAX(GREATEST(
-                    COALESCE(cj_best, 0),
-                    COALESCE(cj1, 0),
-                    COALESCE(cj2, 0),
-                    COALESCE(cj3, 0)
-                )), 0) AS best_cj,
-                COALESCE(MAX(COALESCE(total, 0)), 0) AS best_total
-            FROM lifting_results
-            WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
-                AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
-            GROUP BY lower(btrim(regexp_replace(name, '\s+', ' ', 'g')))
-            "#,
-        )
-        .bind(&normalized_names)
-        .fetch_all(&state.db)
-        .await?
+        sqlx::query_as::<_, YearBestsByName>(BATCH_BESTS_LAST_YEAR_SQL)
+            .bind(&normalized_names)
+            .fetch_all(&state.db)
+            .await?
     };
 
     // `row.name` is the normalized form; fan it back out to every requested name

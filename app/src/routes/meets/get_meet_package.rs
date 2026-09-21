@@ -1,4 +1,8 @@
-use crate::{AppError, AppState, common::names::normalize_name};
+use crate::{
+    AppError, AppState,
+    common::names::{normalize_name, normalized_name_sql},
+    routes::results::types::{best_lifts_columns, lifting_result_columns},
+};
 use axum::{
     body::Bytes,
     extract::{Query, State},
@@ -30,6 +34,59 @@ static PACKAGE_CACHE_TTL: LazyLock<Duration> = LazyLock::new(|| {
         .unwrap_or(3600);
     Duration::from_secs(secs)
 });
+
+/// `lifting_results` rows carry their identity into the package so the mobile
+/// app can dedupe across screens; the rest of the projection is the shared one.
+const MEET_RESULTS_SQL: &str = concat!(
+    r#"
+        SELECT
+            id,
+            event_id,
+            "#,
+    lifting_result_columns!(),
+    r#"
+        FROM lifting_results
+        WHERE meet = $1
+        ORDER BY name, date DESC
+        "#
+);
+
+const ATHLETE_HISTORY_SQL: &str = concat!(
+    r#"
+        SELECT
+            id,
+            event_id,
+            "#,
+    lifting_result_columns!(),
+    r#"
+        FROM lifting_results
+        WHERE "#,
+    normalized_name_sql!(),
+    r#" = ANY($1::text[])
+            AND date >= $2
+        ORDER BY name, date DESC
+        "#
+);
+
+const YEAR_BESTS_BY_NAME_SQL: &str = concat!(
+    r#"
+        SELECT
+            "#,
+    normalized_name_sql!(),
+    r#" AS name,
+            "#,
+    best_lifts_columns!(),
+    r#"
+        FROM lifting_results
+        WHERE "#,
+    normalized_name_sql!(),
+    r#" = ANY($1::text[])
+            AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
+        GROUP BY "#,
+    normalized_name_sql!(),
+    r#"
+        "#
+);
 
 struct CachedPackage {
     body: Bytes,
@@ -474,35 +531,10 @@ pub async fn get_meet_package(
     .fetch_all(&state.db)
     .await?;
 
-    let meet_results = sqlx::query_as::<_, PackageLiftingResult>(
-        r#"
-        SELECT
-            id,
-            event_id,
-            COALESCE(federation, '') AS federation,
-            meet,
-            date,
-            name,
-            COALESCE(age, '') AS age,
-            COALESCE(body_weight, 0) AS body_weight,
-            COALESCE(snatch1, 0) AS snatch1,
-            COALESCE(snatch2, 0) AS snatch2,
-            COALESCE(snatch3, 0) AS snatch3,
-            COALESCE(snatch_best, 0) AS snatch_best,
-            COALESCE(cj1, 0) AS cj1,
-            COALESCE(cj2, 0) AS cj2,
-            COALESCE(cj3, 0) AS cj3,
-            COALESCE(cj_best, 0) AS cj_best,
-            COALESCE(total, 0) AS total,
-            adaptive
-        FROM lifting_results
-        WHERE meet = $1
-        ORDER BY name, date DESC
-        "#,
-    )
-    .bind(&params.meet)
-    .fetch_all(&state.db)
-    .await?;
+    let meet_results = sqlx::query_as::<_, PackageLiftingResult>(MEET_RESULTS_SQL)
+        .bind(&params.meet)
+        .fetch_all(&state.db)
+        .await?;
 
     let athlete_names: Vec<String> = athletes
         .iter()
@@ -519,40 +551,14 @@ pub async fn get_meet_package(
         let history_rows = if athlete_names.is_empty() {
             Vec::new()
         } else {
-            sqlx::query_as::<_, PackageLiftingResult>(
-                r#"
-                    SELECT
-                        id,
-                        event_id,
-                        COALESCE(federation, '') AS federation,
-                        meet,
-                        date,
-                        name,
-                        COALESCE(age, '') AS age,
-                        COALESCE(body_weight, 0) AS body_weight,
-                        COALESCE(snatch1, 0) AS snatch1,
-                        COALESCE(snatch2, 0) AS snatch2,
-                        COALESCE(snatch3, 0) AS snatch3,
-                        COALESCE(snatch_best, 0) AS snatch_best,
-                        COALESCE(cj1, 0) AS cj1,
-                        COALESCE(cj2, 0) AS cj2,
-                        COALESCE(cj3, 0) AS cj3,
-                        COALESCE(cj_best, 0) AS cj_best,
-                        COALESCE(total, 0) AS total,
-                        adaptive
-                    FROM lifting_results
-                    WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
-                        AND date >= $2
-                    ORDER BY name, date DESC
-                    "#,
-            )
-            .bind(&normalized_athlete_names)
-            .bind(cutoff_date)
-            .fetch_all(&state.db)
-            .await?
+            sqlx::query_as::<_, PackageLiftingResult>(ATHLETE_HISTORY_SQL)
+                .bind(&normalized_athlete_names)
+                .bind(cutoff_date)
+                .fetch_all(&state.db)
+                .await?
         };
 
-        let (recent_results_by_name, _) = build_history_maps(&athlete_names, history_rows.clone());
+        let recent_results_by_name = build_recent_results_by_name(&athlete_names, &history_rows);
         (recent_results_by_name, history_rows)
     } else {
         (BTreeMap::new(), Vec::new())
@@ -1001,31 +1007,18 @@ fn max_successful(values: [f64; 4]) -> Option<f64> {
     if best > 0.0 { Some(best) } else { None }
 }
 
-fn build_history_maps(
+/// Groups history rows under each requested athlete name. Year bests come from
+/// [`fetch_year_bests_by_name`], which uses its own one-year window rather than
+/// the caller's history cutoff.
+fn build_recent_results_by_name(
     athlete_names: &[String],
-    rows: Vec<PackageLiftingResult>,
-) -> (
-    BTreeMap<String, Vec<PackageLiftingResult>>,
-    BTreeMap<String, YearBests>,
-) {
+    rows: &[PackageLiftingResult],
+) -> BTreeMap<String, Vec<PackageLiftingResult>> {
     let requested_by_normalized = requested_names_by_normalized(athlete_names);
 
     let mut recent_results_by_name: BTreeMap<String, Vec<PackageLiftingResult>> = athlete_names
         .iter()
         .map(|name| (name.clone(), Vec::new()))
-        .collect();
-    let mut bests_by_name: HashMap<String, YearBests> = athlete_names
-        .iter()
-        .map(|name| {
-            (
-                name.clone(),
-                YearBests {
-                    best_snatch: 0.0,
-                    best_cj: 0.0,
-                    best_total: 0.0,
-                },
-            )
-        })
         .collect();
 
     for row in rows {
@@ -1037,26 +1030,6 @@ fn build_history_maps(
         };
 
         for requested in requested_names {
-            let bests = bests_by_name
-                .entry(requested.clone())
-                .or_insert_with(|| YearBests {
-                    best_snatch: 0.0,
-                    best_cj: 0.0,
-                    best_total: 0.0,
-                });
-
-            bests.best_snatch = bests.best_snatch.max(max_positive([
-                row.snatch_best,
-                row.snatch1,
-                row.snatch2,
-                row.snatch3,
-            ]));
-            bests.best_cj =
-                bests
-                    .best_cj
-                    .max(max_positive([row.cj_best, row.cj1, row.cj2, row.cj3]));
-            bests.best_total = bests.best_total.max(row.total.max(0.0));
-
             recent_results_by_name
                 .entry(requested.clone())
                 .or_default()
@@ -1064,9 +1037,7 @@ fn build_history_maps(
         }
     }
 
-    let year_bests_by_name = bests_by_name.into_iter().collect();
-
-    (recent_results_by_name, year_bests_by_name)
+    recent_results_by_name
 }
 
 /// Builds a lookup from normalized name to the requested display name(s) that
@@ -1103,32 +1074,10 @@ async fn fetch_year_bests_by_name(
 
     let requested_by_normalized = requested_names_by_normalized(athlete_names);
 
-    let rows = sqlx::query_as::<_, YearBestsByNameRow>(
-        r#"
-        SELECT
-            lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) AS name,
-            COALESCE(MAX(GREATEST(
-                COALESCE(snatch_best, 0),
-                COALESCE(snatch1, 0),
-                COALESCE(snatch2, 0),
-                COALESCE(snatch3, 0)
-            )), 0) AS best_snatch,
-            COALESCE(MAX(GREATEST(
-                COALESCE(cj_best, 0),
-                COALESCE(cj1, 0),
-                COALESCE(cj2, 0),
-                COALESCE(cj3, 0)
-            )), 0) AS best_cj,
-            COALESCE(MAX(COALESCE(total, 0)), 0) AS best_total
-        FROM lifting_results
-        WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
-            AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
-        GROUP BY lower(btrim(regexp_replace(name, '\s+', ' ', 'g')))
-        "#,
-    )
-    .bind(normalized_athlete_names)
-    .fetch_all(&state.db)
-    .await?;
+    let rows = sqlx::query_as::<_, YearBestsByNameRow>(YEAR_BESTS_BY_NAME_SQL)
+        .bind(normalized_athlete_names)
+        .fetch_all(&state.db)
+        .await?;
 
     for row in rows {
         let Some(requested_names) = requested_by_normalized.get(&row.name) else {

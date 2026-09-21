@@ -21,8 +21,8 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::now_unix_secs;
 use super::signature;
+use super::{now_unix_secs, write_json_request};
 use crate::AppState;
 
 const ACTION_APPROVE: &str = "meet_approve";
@@ -128,23 +128,17 @@ fn write_decision(
     if !is_safe_run_id(run_id) {
         return Err("invalid run id".to_string());
     }
-    let dir = state.slack.decisions_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
     let body = json!({
         "decision": decision,
         "user_id": user_id,
         "user_name": user_name,
         "decided_at_unix": now_unix_secs(),
     });
-    let path = dir.join(format!("{run_id}.json"));
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(
-        &tmp,
-        serde_json::to_vec_pretty(&body).map_err(|e| e.to_string())?,
+    write_json_request(
+        &state.slack.decisions_dir(),
+        &format!("{run_id}.json"),
+        &body,
     )
-    .map_err(|e| format!("write: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
-    Ok(())
 }
 
 /// Replace the original Slack message (instant feedback). Best-effort.

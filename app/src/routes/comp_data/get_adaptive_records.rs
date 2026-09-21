@@ -1,5 +1,5 @@
 use crate::common::sort::sort_by_class;
-use crate::routes::results::types::LiftingResults;
+use crate::routes::results::types::{LiftingResults, lifting_result_columns};
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::{Query, State};
@@ -27,6 +27,18 @@ static WOMEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bwomen\b").un
 static YEAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\d{4}\b").unwrap());
 static WEIGHT_CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(\d+\+?)kg").unwrap());
 
+const ADAPTIVE_RESULTS_SQL: &str = concat!(
+    r#"
+        SELECT
+            "#,
+    lifting_result_columns!(),
+    r#"
+        FROM lifting_results
+        WHERE adaptive = true
+            AND (federation IS NULL OR federation <> $1)
+        "#
+);
+
 /// /data/adaptive endpoint
 ///
 /// curl 'https://api.meetcal.app/data/adaptive?exclude_federation=BWL&gender=Men' | jq .
@@ -49,33 +61,10 @@ pub async fn get_adaptive_records(
     State(state): State<AppState>,
     Query(params): Query<AdaptiveRecordsParams>,
 ) -> Result<Json<Vec<AdaptiveRecords>>, AppError> {
-    let rows = sqlx::query_as::<_, LiftingResults>(
-        r#"
-        SELECT
-            COALESCE(federation, '') AS federation,
-            meet,
-            date,
-            name,
-            COALESCE(age, '') AS age,
-            COALESCE(body_weight, 0) AS body_weight,
-            COALESCE(snatch1, 0) AS snatch1,
-            COALESCE(snatch2, 0) AS snatch2,
-            COALESCE(snatch3, 0) AS snatch3,
-            COALESCE(snatch_best, 0) AS snatch_best,
-            COALESCE(cj1, 0) AS cj1,
-            COALESCE(cj2, 0) AS cj2,
-            COALESCE(cj3, 0) AS cj3,
-            COALESCE(cj_best, 0) AS cj_best,
-            COALESCE(total, 0) AS total,
-            adaptive
-        FROM lifting_results
-        WHERE adaptive = true
-            AND (federation IS NULL OR federation <> $1)
-        "#,
-    )
-    .bind(&params.exclude_federation)
-    .fetch_all(&state.db)
-    .await?;
+    let rows = sqlx::query_as::<_, LiftingResults>(ADAPTIVE_RESULTS_SQL)
+        .bind(&params.exclude_federation)
+        .fetch_all(&state.db)
+        .await?;
 
     let gender = params.gender;
     let mut records: HashMap<String, AdaptiveRecords> = HashMap::new();

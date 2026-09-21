@@ -22,28 +22,17 @@ def dispatch(conn, path: str, args: dict[str, Any]) -> dict[str, Any]:
     if path == "scraperIngestion:ingestAthlete":
         return pg.upsert_athlete(conn, args)
     if path == "scraperIngestion:deleteAthletesByMeet":
-        meet = _require_meet(args)
-        deleted = conn.execute(
-            "DELETE FROM athletes WHERE meet = %s RETURNING 1",
-            (meet,),
-        ).rowcount
-        return {"deleted": deleted}
+        return {"deleted": pg.delete_athletes_by_meet(conn, args.get("meet", ""))}
     if path == "scraperIngestion:ingestSessionSchedule":
         return pg.upsert_session_schedule(conn, args)
     if path == "scraperIngestion:deleteSessionScheduleByMeet":
-        meet = _require_meet(args)
-        deleted = conn.execute(
-            "DELETE FROM session_schedule WHERE meet = %s RETURNING 1",
-            (meet,),
-        ).rowcount
-        return {"deleted": deleted}
+        return {
+            "deleted": pg.delete_session_schedule_by_meet(conn, args.get("meet", ""))
+        }
     if path == "scraperIngestion:ingestWSORecord":
         return pg.upsert_wso_record(conn, args)
     if path == "scraperIngestion:replaceWSORecordSet":
-        wso = args.get("wso", "")
-        if not isinstance(wso, str) or not wso.strip():
-            raise ValueError("wso is required")
-        return pg.replace_wso_records(conn, wso, args.get("records", []))
+        return pg.replace_wso_records(conn, args.get("wso", ""), args.get("records", []))
     if path == "scraperIngestion:ingestMeet":
         return pg.upsert_meet(conn, args)
     if path == "scraperIngestion:ingestIntlRanking":
@@ -51,26 +40,11 @@ def dispatch(conn, path: str, args: dict[str, Any]) -> dict[str, Any]:
     if path == "scraperIngestion:replaceIntlRankingsForGroup":
         return pg.replace_intl_rankings_group(conn, args)
     if path == "scraperIngestion:replaceAllIntlRankings":
-        rankings = args.get("rankings", [])
-        if not rankings:
-            raise ValueError("refusing to replace all intl rankings with an empty payload")
-        conn.execute("DELETE FROM intl_rankings")
-        inserted = 0
-        for row in rankings:
-            pg.upsert_intl_ranking(conn, row)
-            inserted += 1
-        return {"inserted": inserted}
+        return pg.replace_all_intl_rankings(conn, args.get("rankings", []))
     if path == "scraperIngestion:deleteMissingIntlRankingGroups":
         return pg.delete_missing_intl_ranking_groups(conn, args.get("groups", []))
 
     raise NotImplementedError(f"Unsupported scraper action: {path}")
-
-
-def _require_meet(args: dict[str, Any]) -> str:
-    meet = args.get("meet", "")
-    if not isinstance(meet, str) or not meet.strip():
-        raise ValueError("meet is required")
-    return meet
 
 
 class IngestClient:

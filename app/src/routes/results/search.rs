@@ -1,11 +1,41 @@
 use crate::{
-    AppError, AppState, common::names::normalize_name, routes::results::types::LiftingResults,
+    AppError, AppState,
+    common::names::{normalize_name, normalized_name_sql},
+    routes::results::types::{LiftingResults, lifting_result_columns},
 };
 use axum::{
     Json,
     extract::{Query, State},
 };
 use serde::{Deserialize, Serialize};
+
+const EXACT_NAME_IN_RANGE_SQL: &str = concat!(
+    r#"
+        SELECT
+            "#,
+    lifting_result_columns!(),
+    r#"
+        FROM lifting_results
+        WHERE "#,
+    normalized_name_sql!(),
+    r#" = $1 AND date >= $2 AND date < $3
+        ORDER BY date ASC
+        LIMIT 600
+        "#
+);
+
+const NAME_LIKE_IN_RANGE_SQL: &str = concat!(
+    r#"
+        SELECT
+            "#,
+    lifting_result_columns!(),
+    r#"
+        FROM lifting_results
+        WHERE name ILIKE $1 AND date >= $2 AND date < $3
+        ORDER BY date ASC
+        LIMIT 600
+        "#
+);
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SearchParams {
@@ -74,36 +104,12 @@ pub async fn search_wrapped(
         }));
     };
 
-    let exact = sqlx::query_as::<_, LiftingResults>(
-        r#"
-        SELECT
-            COALESCE(federation, '') AS federation,
-            meet,
-            date,
-            name,
-            COALESCE(age, '') AS age,
-            COALESCE(body_weight, 0) AS body_weight,
-            COALESCE(snatch1, 0) AS snatch1,
-            COALESCE(snatch2, 0) AS snatch2,
-            COALESCE(snatch3, 0) AS snatch3,
-            COALESCE(snatch_best, 0) AS snatch_best,
-            COALESCE(cj1, 0) AS cj1,
-            COALESCE(cj2, 0) AS cj2,
-            COALESCE(cj3, 0) AS cj3,
-            COALESCE(cj_best, 0) AS cj_best,
-            COALESCE(total, 0) AS total,
-            adaptive
-        FROM lifting_results
-        WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = $1 AND date >= $2 AND date < $3
-        ORDER BY date ASC
-        LIMIT 600
-        "#,
-    )
-    .bind(normalize_name(&params.query))
-    .bind(start_date)
-    .bind(end_date)
-    .fetch_all(&state.db)
-    .await?;
+    let exact = sqlx::query_as::<_, LiftingResults>(EXACT_NAME_IN_RANGE_SQL)
+        .bind(normalize_name(&params.query))
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_all(&state.db)
+        .await?;
 
     if !exact.is_empty() {
         return Ok(Json(SearchResponse {
@@ -115,36 +121,12 @@ pub async fn search_wrapped(
 
     let pattern = format!("%{}%", params.query);
 
-    let fallback = sqlx::query_as::<_, LiftingResults>(
-        r#"
-        SELECT
-            COALESCE(federation, '') AS federation,
-            meet,
-            date,
-            name,
-            COALESCE(age, '') AS age,
-            COALESCE(body_weight, 0) AS body_weight,
-            COALESCE(snatch1, 0) AS snatch1,
-            COALESCE(snatch2, 0) AS snatch2,
-            COALESCE(snatch3, 0) AS snatch3,
-            COALESCE(snatch_best, 0) AS snatch_best,
-            COALESCE(cj1, 0) AS cj1,
-            COALESCE(cj2, 0) AS cj2,
-            COALESCE(cj3, 0) AS cj3,
-            COALESCE(cj_best, 0) AS cj_best,
-            COALESCE(total, 0) AS total,
-            adaptive
-        FROM lifting_results
-        WHERE name ILIKE $1 AND date >= $2 AND date < $3
-        ORDER BY date ASC
-        LIMIT 600
-        "#,
-    )
-    .bind(&pattern)
-    .bind(start_date)
-    .bind(end_date)
-    .fetch_all(&state.db)
-    .await?;
+    let fallback = sqlx::query_as::<_, LiftingResults>(NAME_LIKE_IN_RANGE_SQL)
+        .bind(&pattern)
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_all(&state.db)
+        .await?;
 
     Ok(Json(SearchResponse {
         matched_name: None,

@@ -1,9 +1,11 @@
 """Ingest a staged bundle to Postgres.
 
 The pipeline writes athletes, schedule, and optional meet metadata through
-the shared ``common.postgres_writer`` helpers. Replace semantics: by default
-existing athletes + schedule rows for the meet are deleted before insert, so
-a re-run is a clean replacement rather than an accumulation.
+the shared ``common.postgres_writer`` helpers -- including the destructive
+delete-by-meet statements, so the replace policy has exactly one owner. Replace
+semantics: by default existing athletes + schedule rows for the meet are
+deleted before insert, so a re-run is a clean replacement rather than an
+accumulation. Delete + insert + commit happen in one transaction.
 """
 
 from __future__ import annotations
@@ -37,12 +39,10 @@ def _ingest_postgres(
 
     with pg.connect() as conn:
         if replace:
-            stats["deleted_athletes"] = conn.execute(
-                "DELETE FROM athletes WHERE meet = %s", (meet_name,)
-            ).rowcount
-            stats["deleted_schedule"] = conn.execute(
-                "DELETE FROM session_schedule WHERE meet = %s", (meet_name,)
-            ).rowcount
+            # Destructive delete + guard live in the writer, so this pipeline
+            # keeps no second copy of the replace policy.
+            stats["deleted_athletes"] = pg.delete_athletes_by_meet(conn, meet_name)
+            stats["deleted_schedule"] = pg.delete_session_schedule_by_meet(conn, meet_name)
 
         if meet:
             res = pg.upsert_meet(conn, {**meet, "name": meet.get("name", meet_name)})

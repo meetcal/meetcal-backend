@@ -8,11 +8,12 @@ use tokio::sync::{Mutex, RwLock};
 
 const MIN_JWKS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Only the claims this code inspects. `exp` / `nbf` are enforced by
+/// `jsonwebtoken`'s own validation (see [`AuthVerifier::verify`]), which
+/// deserializes them separately, so they are deliberately absent here.
 #[derive(Debug, Deserialize)]
 struct JwtClaims {
     sub: String,
-    #[allow(dead_code)]
-    exp: u64,
     iss: String,
     azp: Option<String>,
 }

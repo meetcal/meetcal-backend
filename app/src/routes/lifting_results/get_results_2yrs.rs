@@ -1,7 +1,10 @@
 use crate::{
     AppError, AppState,
-    common::{names::normalize_name, query::deserialize_csv_or_repeated},
-    routes::results::types::LiftingResults,
+    common::{
+        names::{normalize_name, normalized_name_sql},
+        query::deserialize_csv_or_repeated,
+    },
+    routes::results::types::{LiftingResults, lifting_result_columns},
 };
 use axum::Json;
 use axum::extract::{Query, State};
@@ -13,6 +16,36 @@ pub struct Results2YrsParams {
     pub names: Vec<String>,
     pub cutoff_date: Option<String>,
 }
+
+const RESULTS_SINCE_CUTOFF_SQL: &str = concat!(
+    r#"
+            SELECT
+                "#,
+    lifting_result_columns!(),
+    r#"
+            FROM lifting_results
+            WHERE "#,
+    normalized_name_sql!(),
+    r#" = ANY($1::text[])
+                AND date >= $2
+            ORDER BY date DESC
+            "#
+);
+
+const RESULTS_LAST_2YRS_SQL: &str = concat!(
+    r#"
+            SELECT
+                "#,
+    lifting_result_columns!(),
+    r#"
+            FROM lifting_results
+            WHERE "#,
+    normalized_name_sql!(),
+    r#" = ANY($1::text[])
+                AND date >= (CURRENT_DATE - INTERVAL '2 years')::date::text
+            ORDER BY date DESC
+            "#
+);
 
 /// /lifting-results/recent endpoint
 ///
@@ -54,64 +87,16 @@ pub async fn get_results_2yrs(
         .collect();
 
     let rows = if let Some(cutoff_date) = params.cutoff_date {
-        sqlx::query_as::<_, LiftingResults>(
-            r#"
-            SELECT
-                COALESCE(federation, '') AS federation,
-                meet,
-                date,
-                name,
-                COALESCE(age, '') AS age,
-                COALESCE(body_weight, 0) AS body_weight,
-                COALESCE(snatch1, 0) AS snatch1,
-                COALESCE(snatch2, 0) AS snatch2,
-                COALESCE(snatch3, 0) AS snatch3,
-                COALESCE(snatch_best, 0) AS snatch_best,
-                COALESCE(cj1, 0) AS cj1,
-                COALESCE(cj2, 0) AS cj2,
-                COALESCE(cj3, 0) AS cj3,
-                COALESCE(cj_best, 0) AS cj_best,
-                COALESCE(total, 0) AS total,
-                adaptive
-            FROM lifting_results
-            WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
-                AND date >= $2
-            ORDER BY date DESC
-            "#,
-        )
-        .bind(&normalized_names)
-        .bind(cutoff_date)
-        .fetch_all(&state.db)
-        .await?
+        sqlx::query_as::<_, LiftingResults>(RESULTS_SINCE_CUTOFF_SQL)
+            .bind(&normalized_names)
+            .bind(cutoff_date)
+            .fetch_all(&state.db)
+            .await?
     } else {
-        sqlx::query_as::<_, LiftingResults>(
-            r#"
-            SELECT
-                COALESCE(federation, '') AS federation,
-                meet,
-                date,
-                name,
-                COALESCE(age, '') AS age,
-                COALESCE(body_weight, 0) AS body_weight,
-                COALESCE(snatch1, 0) AS snatch1,
-                COALESCE(snatch2, 0) AS snatch2,
-                COALESCE(snatch3, 0) AS snatch3,
-                COALESCE(snatch_best, 0) AS snatch_best,
-                COALESCE(cj1, 0) AS cj1,
-                COALESCE(cj2, 0) AS cj2,
-                COALESCE(cj3, 0) AS cj3,
-                COALESCE(cj_best, 0) AS cj_best,
-                COALESCE(total, 0) AS total,
-                adaptive
-            FROM lifting_results
-            WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
-                AND date >= (CURRENT_DATE - INTERVAL '2 years')::date::text
-            ORDER BY date DESC
-            "#,
-        )
-        .bind(&normalized_names)
-        .fetch_all(&state.db)
-        .await?
+        sqlx::query_as::<_, LiftingResults>(RESULTS_LAST_2YRS_SQL)
+            .bind(&normalized_names)
+            .fetch_all(&state.db)
+            .await?
     };
 
     Ok(Json(rows))

@@ -7,8 +7,9 @@ from common import postgres_writer
 
 
 class QueryResult:
-    def __init__(self, rows=None):
+    def __init__(self, rows=None, rowcount=0):
         self.rows = rows or []
+        self.rowcount = rowcount
 
     def fetchall(self):
         return self.rows
@@ -237,6 +238,59 @@ class ReplaceIntlRankingsTests(unittest.TestCase):
                 },
             )
         self.assertEqual(connection.deleted_ids, [])
+
+
+class DestructiveWriteGuardTests(unittest.TestCase):
+    """Delete-by-meet and wholesale replace live in the writer and must refuse
+    an empty key / empty payload, whoever calls them."""
+
+    class _RecordingConnection:
+        def __init__(self):
+            self.statements = []
+
+        def execute(self, query, params=None):
+            self.statements.append((" ".join(query.split()), params))
+            return QueryResult(rowcount=1)
+
+    def test_delete_athletes_by_meet_requires_meet(self):
+        connection = self._RecordingConnection()
+        for empty in ("", "   ", None, 5):
+            with self.assertRaisesRegex(ValueError, "meet is required"):
+                postgres_writer.delete_athletes_by_meet(connection, empty)
+        self.assertEqual(connection.statements, [])
+
+    def test_delete_session_schedule_by_meet_requires_meet(self):
+        connection = self._RecordingConnection()
+        for empty in ("", "   ", None):
+            with self.assertRaisesRegex(ValueError, "meet is required"):
+                postgres_writer.delete_session_schedule_by_meet(connection, empty)
+        self.assertEqual(connection.statements, [])
+
+    def test_delete_by_meet_scopes_the_statement_to_the_meet(self):
+        connection = self._RecordingConnection()
+        self.assertEqual(
+            postgres_writer.delete_athletes_by_meet(connection, "2026 Nationals"), 1
+        )
+        self.assertEqual(
+            postgres_writer.delete_session_schedule_by_meet(connection, "2026 Nationals"), 1
+        )
+        self.assertEqual(
+            [statement for statement, _ in connection.statements],
+            [
+                "DELETE FROM athletes WHERE meet = %s RETURNING 1",
+                "DELETE FROM session_schedule WHERE meet = %s RETURNING 1",
+            ],
+        )
+        self.assertEqual(
+            [params for _, params in connection.statements],
+            [("2026 Nationals",), ("2026 Nationals",)],
+        )
+
+    def test_replace_all_intl_rankings_refuses_empty_payload(self):
+        connection = self._RecordingConnection()
+        with self.assertRaisesRegex(ValueError, "empty payload"):
+            postgres_writer.replace_all_intl_rankings(connection, [])
+        self.assertEqual(connection.statements, [])
 
 
 if __name__ == "__main__":

@@ -1,10 +1,10 @@
 use crate::{
     AppError, AppState,
+    common::time::now_millis,
     routes::users::auth::{set_request_user, user_id_from_headers},
 };
 use axum::{Json, extract::State, http::HeaderMap};
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserPreferencesResponse {
@@ -105,12 +105,4 @@ pub async fn patch_auto_unsave(
     Ok(Json(UserPreferencesResponse {
         auto_unsave_started_sessions,
     }))
-}
-
-fn now_millis() -> Result<i64, AppError> {
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| AppError::Validation("system clock is before UNIX epoch".to_string()))?;
-
-    Ok(duration.as_millis() as i64)
 }
