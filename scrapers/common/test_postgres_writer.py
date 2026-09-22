@@ -342,8 +342,13 @@ class AthleteSessionGateTests(unittest.TestCase):
         )
         self.assertEqual(len(connection.statements), 1)
         self.assertIn("FOR UPDATE", connection.statements[0].upper())
-        self.assertTrue(any("session already set" in line for line in logs.output))
-        self.assertTrue(any("Florida WSO 2026" in line for line in logs.output))
+        logged = "\n".join(logs.output)
+        self.assertIn("session already set", logged)
+        self.assertIn("meet=Florida WSO 2026", logged)
+        self.assertIn("id=7", logged)
+        self.assertIn("convex_id=athlete_existing", logged)
+        self.assertNotIn("Ada Lifter", logged)
+        self.assertNotIn("member_id", logged)
 
     def test_entry_upsert_skips_platform_only_assignment(self):
         connection = RecordingConnection(
@@ -364,7 +369,9 @@ class AthleteSessionGateTests(unittest.TestCase):
         )
         self.assertTrue(inserted["wasInsert"])
         self.assertFalse(inserted.get("skipped", False))
-        self.assertTrue(any(stmt.upper().startswith("INSERT") for stmt in missing.statements))
+        insert_sql = next(stmt for stmt in missing.statements if stmt.upper().startswith("INSERT"))
+        self.assertIn("THEN athletes.session_number", insert_sql)
+        self.assertIn("THEN athletes.session_platform", insert_sql)
 
         open_row = RecordingConnection(
             _stored_athlete(session_number=None, session_platform=None)
@@ -383,7 +390,9 @@ class AthleteSessionGateTests(unittest.TestCase):
         self.assertFalse(result.get("skipped", False))
         self.assertTrue(result["wasChanged"])
         self.assertNotIn("FOR UPDATE", connection.statements[0].upper())
-        self.assertTrue(any(stmt.upper().startswith("INSERT") for stmt in connection.statements))
+        insert_sql = next(stmt for stmt in connection.statements if stmt.upper().startswith("INSERT"))
+        self.assertIn("session_number = EXCLUDED.session_number", insert_sql)
+        self.assertNotIn("THEN athletes.session_number", insert_sql)
 
     def test_ingest_paths_keep_the_gate_on_the_entry_scraper(self):
         from common.postgres_ingest import dispatch

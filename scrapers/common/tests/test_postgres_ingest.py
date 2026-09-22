@@ -369,7 +369,11 @@ class PostgresIngestTests(unittest.TestCase):
         self.assertEqual(rows["Session Platform"]["club"], "Original")
         self.assertIsNone(rows["Session Platform"]["session_number"])
         self.assertEqual(rows["Session Platform"]["session_platform"], "Blue")
-        self.assertTrue(any("session already set" in line for line in logs.output))
+        logged = "\n".join(logs.output)
+        self.assertIn("session already set", logged)
+        self.assertIn("convex_id=", logged)
+        self.assertNotIn("Session Both", logged)
+        self.assertNotIn("member_id", logged)
 
         self.assertFalse(opened.get("skipped", False))
         self.assertTrue(opened["wasChanged"])
@@ -391,6 +395,75 @@ class PostgresIngestTests(unittest.TestCase):
         self.assertEqual(rows["Start List"]["club"], "Replaced")
         self.assertEqual(float(rows["Start List"]["session_number"]), 9.0)
         self.assertEqual(rows["Start List"]["session_platform"], "Silver")
+
+    def test_entry_conflict_keeps_session_when_lookup_misses(self) -> None:
+        meet = f"__test_entry_conflict_{self.token}__"
+
+        def athlete(**extra: object) -> dict:
+            row = {
+                "memberId": "42",
+                "name": "Race Lifter",
+                "age": 21,
+                "club": "Original",
+                "gender": "Female",
+                "weightClass": "59",
+                "entryTotal": 180,
+                "meet": meet,
+                "sessionNumber": 4,
+                "sessionPlatform": "Red",
+            }
+            row.update(extra)
+            return row
+
+        pg.upsert_athlete(self.conn, athlete())
+        original_execute = self.conn.execute
+
+        def execute(query, params=None):
+            statement = " ".join(query.split()).upper()
+            if (
+                statement.startswith("SELECT")
+                and "FROM ATHLETES" in statement
+                and "FOR UPDATE" in statement
+            ):
+                original_execute(query, params)
+
+                class Empty:
+                    def fetchone(self):
+                        return None
+
+                return Empty()
+            return original_execute(query, params)
+
+        self.conn.execute = execute
+        try:
+            with self.assertLogs("common.postgres_writer", level="WARNING") as logs:
+                pg.upsert_athlete(
+                    self.conn,
+                    athlete(club="Changed", entryTotal=999, sessionNumber=None, sessionPlatform=None),
+                    preserve_assigned_session=True,
+                )
+        finally:
+            self.conn.execute = original_execute
+
+        row = self.conn.execute(
+            """
+            SELECT id, convex_id, club, entry_total, session_number, session_platform, name, member_id
+            FROM athletes
+            WHERE meet = %s
+            """,
+            (meet,),
+        ).fetchone()
+        self.assertEqual(row["club"], "Changed")
+        self.assertEqual(float(row["entry_total"]), 999.0)
+        self.assertEqual(float(row["session_number"]), 4.0)
+        self.assertEqual(row["session_platform"], "Red")
+        logged = "\n".join(logs.output)
+        self.assertIn("kept existing session", logged)
+        self.assertIn(f"id={row['id']}", logged)
+        self.assertIn(f"convex_id={row['convex_id']}", logged)
+        self.assertIn(f"meet={meet}", logged)
+        self.assertNotIn(row["name"], logged)
+        self.assertNotIn("member_id", logged)
 
     def test_ingest_bundle_refuses_empty_meet_name(self) -> None:
         from usaw.meet_automation import ingest
