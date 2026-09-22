@@ -267,6 +267,131 @@ class PostgresIngestTests(unittest.TestCase):
         }
         self.assertEqual(names, {"Keep", "New"})
 
+    def test_entry_athlete_ingest_keeps_assigned_sessions(self) -> None:
+        meet = f"__test_entry_gate_{self.token}__"
+
+        def athlete(name: str, member_id: str, **extra: object) -> dict:
+            row = {
+                "memberId": member_id,
+                "name": name,
+                "age": 21,
+                "club": "Original",
+                "gender": "Female",
+                "weightClass": "59",
+                "entryTotal": 180,
+                "meet": meet,
+            }
+            row.update(extra)
+            return row
+
+        pg.upsert_athlete(
+            self.conn,
+            athlete("Session Both", "1", sessionNumber=4, sessionPlatform="Red"),
+        )
+        pg.upsert_athlete(self.conn, athlete("Session Number", "2", sessionNumber=0))
+        pg.upsert_athlete(self.conn, athlete("Session Platform", "3", sessionPlatform="Blue"))
+        pg.upsert_athlete(self.conn, athlete("Open", "4"))
+        pg.upsert_athlete(self.conn, athlete("Blank Platform", "6", sessionPlatform="   "))
+        pg.upsert_athlete(
+            self.conn,
+            athlete("Start List", "7", sessionNumber=8, sessionPlatform="Gold"),
+        )
+
+        with self.assertLogs("common.postgres_writer", level="WARNING") as logs:
+            both = dispatch(
+                self.conn,
+                "scraperIngestion:ingestEntryAthlete",
+                athlete("Session Both", "1", club="Changed", entryTotal=999),
+            )
+            number = dispatch(
+                self.conn,
+                "scraperIngestion:ingestEntryAthlete",
+                athlete("Session Number", "2", club="Changed", entryTotal=999),
+            )
+            platform = dispatch(
+                self.conn,
+                "scraperIngestion:ingestEntryAthlete",
+                athlete("Session Platform", "3", club="Changed", entryTotal=999),
+            )
+
+        opened = dispatch(
+            self.conn,
+            "scraperIngestion:ingestEntryAthlete",
+            athlete("Open", "4", club="Updated", entryTotal=210),
+        )
+        blank = dispatch(
+            self.conn,
+            "scraperIngestion:ingestEntryAthlete",
+            athlete("Blank Platform", "6", club="Updated", entryTotal=205),
+        )
+        inserted = dispatch(
+            self.conn,
+            "scraperIngestion:ingestEntryAthlete",
+            athlete("New Lifter", "5", club="Fresh", entryTotal=100),
+        )
+        overwritten = dispatch(
+            self.conn,
+            "scraperIngestion:ingestAthlete",
+            athlete(
+                "Start List",
+                "7",
+                club="Replaced",
+                entryTotal=111,
+                sessionNumber=9,
+                sessionPlatform="Silver",
+            ),
+        )
+
+        rows = {
+            row["name"]: row
+            for row in self.conn.execute(
+                """
+                SELECT name, club, entry_total, session_number, session_platform
+                FROM athletes
+                WHERE meet = %s
+                """,
+                (meet,),
+            ).fetchall()
+        }
+
+        self.assertTrue(both["skipped"])
+        self.assertEqual(both["skipReason"], "session already set")
+        self.assertFalse(both["wasChanged"])
+        self.assertTrue(number["skipped"])
+        self.assertTrue(platform["skipped"])
+        self.assertEqual(rows["Session Both"]["club"], "Original")
+        self.assertEqual(float(rows["Session Both"]["entry_total"]), 180.0)
+        self.assertEqual(float(rows["Session Both"]["session_number"]), 4.0)
+        self.assertEqual(rows["Session Both"]["session_platform"], "Red")
+        self.assertEqual(rows["Session Number"]["club"], "Original")
+        self.assertEqual(float(rows["Session Number"]["session_number"]), 0.0)
+        self.assertIsNone(rows["Session Number"]["session_platform"])
+        self.assertEqual(rows["Session Platform"]["club"], "Original")
+        self.assertIsNone(rows["Session Platform"]["session_number"])
+        self.assertEqual(rows["Session Platform"]["session_platform"], "Blue")
+        self.assertTrue(any("session already set" in line for line in logs.output))
+
+        self.assertFalse(opened.get("skipped", False))
+        self.assertTrue(opened["wasChanged"])
+        self.assertEqual(rows["Open"]["club"], "Updated")
+        self.assertEqual(float(rows["Open"]["entry_total"]), 210.0)
+        self.assertIsNone(rows["Open"]["session_number"])
+        self.assertIsNone(rows["Open"]["session_platform"])
+
+        self.assertTrue(blank["wasChanged"])
+        self.assertEqual(rows["Blank Platform"]["club"], "Updated")
+        self.assertEqual(float(rows["Blank Platform"]["entry_total"]), 205.0)
+
+        self.assertTrue(inserted["wasInsert"])
+        self.assertEqual(rows["New Lifter"]["club"], "Fresh")
+        self.assertIsNone(rows["New Lifter"]["session_number"])
+
+        self.assertTrue(overwritten["wasChanged"])
+        self.assertFalse(overwritten.get("skipped", False))
+        self.assertEqual(rows["Start List"]["club"], "Replaced")
+        self.assertEqual(float(rows["Start List"]["session_number"]), 9.0)
+        self.assertEqual(rows["Start List"]["session_platform"], "Silver")
+
     def test_ingest_bundle_refuses_empty_meet_name(self) -> None:
         from usaw.meet_automation import ingest
 

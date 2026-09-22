@@ -258,7 +258,7 @@ function updatePostgres(entries) {
 
     const ingestScript = path.resolve(__dirname, '../../common/postgres_ingest.py');
     const python = process.env.POSTGRES_INGEST_PYTHON || 'python3';
-    const result = spawnSync(python, [ingestScript, 'scraperIngestion:ingestAthlete'], {
+    const result = spawnSync(python, [ingestScript, 'scraperIngestion:ingestEntryAthlete'], {
         input: JSON.stringify(rows),
         encoding: 'utf8',
         env: process.env,
@@ -272,14 +272,21 @@ function updatePostgres(entries) {
     const results = JSON.parse(result.stdout);
     const inserted = results.filter(row => row.wasInsert).length;
     const updated = results.filter(row => !row.wasInsert && row.wasChanged).length;
-    const unchanged = results.filter(row => !row.wasInsert && !row.wasChanged).length;
+    const sessionSkipped = results.filter(row => row.skipped).length;
+    const unchanged = results.filter(row => !row.wasInsert && !row.wasChanged && !row.skipped).length;
 
     console.log(`Successfully processed ${rows.length} Postgres entries for meet: ${meetName}`);
+    if (sessionSkipped > 0) {
+        console.log(
+            `Skipped ${sessionSkipped} Postgres entries because session already set for meet: ${meetName}`
+        );
+    }
     return {
         inserted,
         updated,
         unchanged,
         skipped: 0,
+        sessionSkipped,
         total: rows.length,
     };
 }
@@ -306,7 +313,8 @@ async function sendSlackNotification(upsertStats, meetName) {
     // Calculate total upserted (inserted + updated)
     const upsertedCount = upsertStats.inserted + upsertStats.updated;
 
-    if (upsertedCount === 0 && (upsertStats.skipped || 0) === 0) {
+    const sessionSkipped = upsertStats.sessionSkipped || 0;
+    if (upsertedCount === 0 && (upsertStats.skipped || 0) === 0 && sessionSkipped === 0) {
         return;
     }
     
@@ -316,6 +324,7 @@ async function sendSlackNotification(upsertStats, meetName) {
     message += `• ${upsertStats.inserted} inserted\n`;
     message += `• ${upsertStats.updated} updated\n`;
     message += `• ${upsertStats.unchanged || 0} unchanged\n`;
+    message += `• ${sessionSkipped} skipped (session already set)\n`;
     message += `• ${upsertStats.skipped} errors\n\n`;
     
     const payload = JSON.stringify({

@@ -21,6 +21,8 @@ def dispatch(conn, path: str, args: dict[str, Any]) -> dict[str, Any]:
         return pg.upsert_standard(conn, args)
     if path == "scraperIngestion:ingestAthlete":
         return pg.upsert_athlete(conn, args)
+    if path == "scraperIngestion:ingestEntryAthlete":
+        return pg.upsert_athlete(conn, args, preserve_assigned_session=True)
     if path == "scraperIngestion:deleteAthletesByMeet":
         meet = _require_meet(args)
         deleted = conn.execute(

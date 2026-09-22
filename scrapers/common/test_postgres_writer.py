@@ -239,5 +239,168 @@ class ReplaceIntlRankingsTests(unittest.TestCase):
         self.assertEqual(connection.deleted_ids, [])
 
 
+class FetchResult:
+    def __init__(self, row):
+        self.row = row
+
+    def fetchone(self):
+        return self.row
+
+
+class RecordingConnection:
+    def __init__(self, existing):
+        self.existing = existing
+        self.statements = []
+
+    def execute(self, query, params=None):
+        statement = " ".join(query.split())
+        self.statements.append(statement)
+        upper = statement.upper()
+        if upper.startswith("SELECT"):
+            return FetchResult(self.existing)
+        if upper.startswith("INSERT"):
+            return FetchResult({"id": 42})
+        raise AssertionError(statement)
+
+
+def _entry_payload(**overrides):
+    row = {
+        "memberId": "55",
+        "name": "Ada Lifter",
+        "age": 22,
+        "club": "New Club",
+        "gender": "Female",
+        "weightClass": "64",
+        "entryTotal": 190,
+        "meet": "Florida WSO 2026",
+    }
+    row.update(overrides)
+    return row
+
+
+def _stored_athlete(**overrides):
+    row = {
+        "id": 7,
+        "convex_id": "athlete_existing",
+        "member_id": "55",
+        "name": "Ada Lifter",
+        "age": 22,
+        "club": "Old Club",
+        "wso": None,
+        "gender": "Female",
+        "weight_class": "64",
+        "entry_total": 180,
+        "session_number": 3.0,
+        "session_platform": "Red",
+        "meet": "Florida WSO 2026",
+        "adaptive": False,
+    }
+    row.update(overrides)
+    return row
+
+
+class AthleteSessionGateTests(unittest.TestCase):
+    def test_session_assignment_is_non_null_number_or_platform(self):
+        self.assertFalse(postgres_writer.athlete_has_session_assignment(None))
+        self.assertFalse(
+            postgres_writer.athlete_has_session_assignment(
+                {"session_number": None, "session_platform": None}
+            )
+        )
+        self.assertFalse(
+            postgres_writer.athlete_has_session_assignment(
+                {"session_number": None, "session_platform": "  "}
+            )
+        )
+        self.assertTrue(
+            postgres_writer.athlete_has_session_assignment(
+                {"session_number": 0, "session_platform": None}
+            )
+        )
+        self.assertTrue(
+            postgres_writer.athlete_has_session_assignment(
+                {"session_number": None, "session_platform": "Blue"}
+            )
+        )
+
+    def test_entry_upsert_skips_row_when_session_already_set(self):
+        connection = RecordingConnection(_stored_athlete())
+        with self.assertLogs("common.postgres_writer", level="WARNING") as logs:
+            result = postgres_writer.upsert_athlete(
+                connection, _entry_payload(), preserve_assigned_session=True
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "id": "7",
+                "wasInsert": False,
+                "wasChanged": False,
+                "skipped": True,
+                "skipReason": "session already set",
+            },
+        )
+        self.assertEqual(len(connection.statements), 1)
+        self.assertIn("FOR UPDATE", connection.statements[0].upper())
+        self.assertTrue(any("session already set" in line for line in logs.output))
+        self.assertTrue(any("Florida WSO 2026" in line for line in logs.output))
+
+    def test_entry_upsert_skips_platform_only_assignment(self):
+        connection = RecordingConnection(
+            _stored_athlete(session_number=None, session_platform="Blue")
+        )
+        with self.assertLogs("common.postgres_writer", level="WARNING") as logs:
+            result = postgres_writer.upsert_athlete(
+                connection, _entry_payload(), preserve_assigned_session=True
+            )
+        self.assertTrue(result["skipped"])
+        self.assertEqual(len(connection.statements), 1)
+        self.assertTrue(any("session already set" in line for line in logs.output))
+
+    def test_entry_upsert_still_inserts_and_updates_unassigned_athletes(self):
+        missing = RecordingConnection(None)
+        inserted = postgres_writer.upsert_athlete(
+            missing, _entry_payload(), preserve_assigned_session=True
+        )
+        self.assertTrue(inserted["wasInsert"])
+        self.assertFalse(inserted.get("skipped", False))
+        self.assertTrue(any(stmt.upper().startswith("INSERT") for stmt in missing.statements))
+
+        open_row = RecordingConnection(
+            _stored_athlete(session_number=None, session_platform=None)
+        )
+        updated = postgres_writer.upsert_athlete(
+            open_row, _entry_payload(), preserve_assigned_session=True
+        )
+        self.assertFalse(updated["wasInsert"])
+        self.assertTrue(updated["wasChanged"])
+        self.assertFalse(updated.get("skipped", False))
+        self.assertTrue(any(stmt.upper().startswith("INSERT") for stmt in open_row.statements))
+
+    def test_start_list_upsert_still_overwrites_assigned_sessions(self):
+        connection = RecordingConnection(_stored_athlete())
+        result = postgres_writer.upsert_athlete(connection, _entry_payload())
+        self.assertFalse(result.get("skipped", False))
+        self.assertTrue(result["wasChanged"])
+        self.assertNotIn("FOR UPDATE", connection.statements[0].upper())
+        self.assertTrue(any(stmt.upper().startswith("INSERT") for stmt in connection.statements))
+
+    def test_ingest_paths_keep_the_gate_on_the_entry_scraper(self):
+        from common.postgres_ingest import dispatch
+
+        payload = _entry_payload()
+        with patch.object(
+            postgres_writer,
+            "upsert_athlete",
+            return_value={"id": "1", "wasInsert": False, "wasChanged": False},
+        ) as upsert:
+            dispatch(RecordingConnection(None), "scraperIngestion:ingestEntryAthlete", payload)
+            dispatch(RecordingConnection(None), "scraperIngestion:ingestAthlete", payload)
+
+        entry_call, start_list_call = upsert.call_args_list
+        self.assertTrue(entry_call.kwargs["preserve_assigned_session"])
+        self.assertFalse(start_list_call.kwargs.get("preserve_assigned_session", False))
+
+
 if __name__ == "__main__":
     unittest.main()

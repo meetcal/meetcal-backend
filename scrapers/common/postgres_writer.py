@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import time
 from contextlib import contextmanager
@@ -9,6 +10,8 @@ from typing import Any, Iterable
 
 import psycopg
 from psycopg.rows import dict_row
+
+logger = logging.getLogger(__name__)
 
 
 def database_url() -> str:
@@ -497,7 +500,22 @@ def upsert_meet(conn, row: dict[str, Any]) -> dict[str, Any]:
     return {"id": str(result["id"]), "wasInsert": existing is None, "wasChanged": was_changed}
 
 
-def upsert_athlete(conn, row: dict[str, Any]) -> dict[str, Any]:
+def athlete_has_session_assignment(row: dict[str, Any] | None) -> bool:
+    if not row:
+        return False
+    if row.get("session_number") is not None:
+        return True
+    platform = row.get("session_platform")
+    if platform is None:
+        return False
+    if isinstance(platform, str):
+        return bool(platform.strip())
+    return True
+
+
+def upsert_athlete(
+    conn, row: dict[str, Any], *, preserve_assigned_session: bool = False
+) -> dict[str, Any]:
     row = clean(row)
     member_id = first(row, "memberId", "member_id", default="")
     name = first(row, "name", default="")
@@ -517,19 +535,36 @@ def upsert_athlete(conn, row: dict[str, Any]) -> dict[str, Any]:
         "meet": meet,
         "adaptive": bool(first(row, "adaptive", default=False)),
     }
-    existing = conn.execute(
-        """
+    lookup_sql = """
         SELECT id, convex_id, member_id, name, age, club, wso, gender, weight_class,
             entry_total, session_number, session_platform, meet, adaptive
         FROM athletes
         WHERE convex_id = %s
             OR (meet = %s AND member_id = %s AND name = %s)
         LIMIT 1
-        """,
-        (convex_id, meet, member_id, name),
-    ).fetchone()
+    """
+    if preserve_assigned_session:
+        lookup_sql += " FOR UPDATE"
+    existing = conn.execute(lookup_sql, (convex_id, meet, member_id, name)).fetchone()
     if existing:
         convex_id = existing["convex_id"]
+        if preserve_assigned_session and athlete_has_session_assignment(existing):
+            logger.warning(
+                "skipped athlete upsert because session already set "
+                "meet=%s member_id=%s name=%s session_number=%s session_platform=%s",
+                existing.get("meet"),
+                existing.get("member_id"),
+                existing.get("name"),
+                existing.get("session_number"),
+                existing.get("session_platform"),
+            )
+            return {
+                "id": str(existing["id"]),
+                "wasInsert": False,
+                "wasChanged": False,
+                "skipped": True,
+                "skipReason": "session already set",
+            }
     was_changed = row_changed(existing, values)
     result = conn.execute(
         """
