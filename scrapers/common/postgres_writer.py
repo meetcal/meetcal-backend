@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import time
 from contextlib import contextmanager
@@ -9,6 +10,8 @@ from typing import Any, Iterable
 
 import psycopg
 from psycopg.rows import dict_row
+
+logger = logging.getLogger(__name__)
 
 
 def database_url() -> str:
@@ -497,7 +500,80 @@ def upsert_meet(conn, row: dict[str, Any]) -> dict[str, Any]:
     return {"id": str(result["id"]), "wasInsert": existing is None, "wasChanged": was_changed}
 
 
-def upsert_athlete(conn, row: dict[str, Any]) -> dict[str, Any]:
+def _conflict_kept_existing_session(values: dict[str, Any], result: dict[str, Any] | None) -> bool:
+    if not result:
+        return False
+    kept = {
+        "session_number": result.get("session_number"),
+        "session_platform": result.get("session_platform"),
+    }
+    incoming = {
+        "session_number": values.get("session_number"),
+        "session_platform": values.get("session_platform"),
+    }
+    return athlete_has_session_assignment(kept) and not athlete_has_session_assignment(incoming)
+
+
+def athlete_has_session_assignment(row: dict[str, Any] | None) -> bool:
+    if not row:
+        return False
+    if row.get("session_number") is not None:
+        return True
+    platform = row.get("session_platform")
+    if platform is None:
+        return False
+    if isinstance(platform, str):
+        return bool(platform.strip())
+    return True
+
+
+_ATHLETE_SESSION_ASSIGNED_SQL = (
+    "athletes.session_number IS NOT NULL"
+    " OR (athletes.session_platform IS NOT NULL AND BTRIM(athletes.session_platform) <> '')"
+)
+
+
+def _athlete_upsert_sql(*, preserve_assigned_session: bool) -> str:
+    if preserve_assigned_session:
+        session_number_set = (
+            "session_number = CASE WHEN "
+            f"{_ATHLETE_SESSION_ASSIGNED_SQL} "
+            "THEN athletes.session_number ELSE EXCLUDED.session_number END"
+        )
+        session_platform_set = (
+            "session_platform = CASE WHEN "
+            f"{_ATHLETE_SESSION_ASSIGNED_SQL} "
+            "THEN athletes.session_platform ELSE EXCLUDED.session_platform END"
+        )
+    else:
+        session_number_set = "session_number = EXCLUDED.session_number"
+        session_platform_set = "session_platform = EXCLUDED.session_platform"
+    return f"""
+        INSERT INTO athletes (
+            convex_id, member_id, name, age, club, wso, gender, weight_class,
+            entry_total, session_number, session_platform, meet, adaptive
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (convex_id) DO UPDATE SET
+            member_id = EXCLUDED.member_id,
+            name = EXCLUDED.name,
+            age = EXCLUDED.age,
+            club = EXCLUDED.club,
+            wso = EXCLUDED.wso,
+            gender = EXCLUDED.gender,
+            weight_class = EXCLUDED.weight_class,
+            entry_total = EXCLUDED.entry_total,
+            {session_number_set},
+            {session_platform_set},
+            meet = EXCLUDED.meet,
+            adaptive = EXCLUDED.adaptive
+        RETURNING id, session_number, session_platform
+        """
+
+
+def upsert_athlete(
+    conn, row: dict[str, Any], *, preserve_assigned_session: bool = False
+) -> dict[str, Any]:
     row = clean(row)
     member_id = first(row, "memberId", "member_id", default="")
     name = first(row, "name", default="")
@@ -517,42 +593,36 @@ def upsert_athlete(conn, row: dict[str, Any]) -> dict[str, Any]:
         "meet": meet,
         "adaptive": bool(first(row, "adaptive", default=False)),
     }
-    existing = conn.execute(
-        """
+    lookup_sql = """
         SELECT id, convex_id, member_id, name, age, club, wso, gender, weight_class,
             entry_total, session_number, session_platform, meet, adaptive
         FROM athletes
         WHERE convex_id = %s
             OR (meet = %s AND member_id = %s AND name = %s)
         LIMIT 1
-        """,
-        (convex_id, meet, member_id, name),
-    ).fetchone()
+    """
+    if preserve_assigned_session:
+        lookup_sql += " FOR UPDATE"
+    existing = conn.execute(lookup_sql, (convex_id, meet, member_id, name)).fetchone()
     if existing:
         convex_id = existing["convex_id"]
+        if preserve_assigned_session and athlete_has_session_assignment(existing):
+            logger.warning(
+                "skipped athlete upsert because session already set meet=%s id=%s convex_id=%s",
+                existing.get("meet"),
+                existing.get("id"),
+                existing.get("convex_id"),
+            )
+            return {
+                "id": str(existing["id"]),
+                "wasInsert": False,
+                "wasChanged": False,
+                "skipped": True,
+                "skipReason": "session already set",
+            }
     was_changed = row_changed(existing, values)
     result = conn.execute(
-        """
-        INSERT INTO athletes (
-            convex_id, member_id, name, age, club, wso, gender, weight_class,
-            entry_total, session_number, session_platform, meet, adaptive
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (convex_id) DO UPDATE SET
-            member_id = EXCLUDED.member_id,
-            name = EXCLUDED.name,
-            age = EXCLUDED.age,
-            club = EXCLUDED.club,
-            wso = EXCLUDED.wso,
-            gender = EXCLUDED.gender,
-            weight_class = EXCLUDED.weight_class,
-            entry_total = EXCLUDED.entry_total,
-            session_number = EXCLUDED.session_number,
-            session_platform = EXCLUDED.session_platform,
-            meet = EXCLUDED.meet,
-            adaptive = EXCLUDED.adaptive
-        RETURNING id
-        """,
+        _athlete_upsert_sql(preserve_assigned_session=preserve_assigned_session),
         (
             convex_id,
             values["member_id"],
@@ -569,6 +639,13 @@ def upsert_athlete(conn, row: dict[str, Any]) -> dict[str, Any]:
             values["adaptive"],
         ),
     ).fetchone()
+    if preserve_assigned_session and _conflict_kept_existing_session(values, result):
+        logger.warning(
+            "entry upsert kept existing session meet=%s id=%s convex_id=%s",
+            values["meet"],
+            result.get("id"),
+            convex_id,
+        )
     return {"id": str(result["id"]), "wasInsert": existing is None, "wasChanged": was_changed}
 
 

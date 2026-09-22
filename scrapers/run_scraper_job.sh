@@ -125,7 +125,6 @@ for item in (data if isinstance(data,list) else []):
       "https://usaweightlifting.sport80.com/public/events/14711/entries/21593?bl="
       "https://usaweightlifting.sport80.com/public/events/14508/entries/21398?bl="
       "https://usaweightlifting.sport80.com/public/events/14372/entries/21259?bl=locator"
-      "https://usaweightlifting.sport80.com/public/events/14712/entries/21595?bl="
       "https://usaweightlifting.sport80.com/public/events/14522/entries/21416?bl="
       "https://usaweightlifting.sport80.com/public/events/14725/entries/21608?bl="
       "https://usaweightlifting.sport80.com/public/events/14723/entries/21606?bl="
