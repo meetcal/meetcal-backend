@@ -694,6 +694,11 @@ def upsert_athlete(
         "adaptive": bool(first(row, "adaptive", default=False)),
     }
     if idless:
+        # Rows from before placeholder ids carry a random nine-digit id the
+        # entry scraper minted per run. One that never appears at another meet
+        # (a real membership number recurs; a random one does not, the same
+        # guard `dedupe_idless_athletes` uses) is this athlete too; matching it
+        # rewrites it to the placeholder instead of inserting a duplicate.
         lookup_sql = f"""
             SELECT id, convex_id, member_id, name, age, club, wso, gender, weight_class,
                 entry_total, session_number, session_platform, meet, adaptive
@@ -701,12 +706,29 @@ def upsert_athlete(
             WHERE convex_id = %s
                 OR (
                     meet = %s
-                    AND (member_id = '' OR member_id LIKE 'noid:%%')
                     AND {NORMALIZED_NAME_SQL} = %s
+                    AND (
+                        member_id = ''
+                        OR member_id LIKE 'noid:%%'
+                        OR (
+                            member_id ~ '^[1-9][0-9]{{8}}$'
+                            AND NOT EXISTS (
+                                SELECT 1 FROM athletes other
+                                WHERE other.member_id = athletes.member_id
+                                    AND other.meet <> athletes.meet
+                            )
+                        )
+                    )
                 )
+            ORDER BY
+                CASE
+                    WHEN convex_id = %s THEN 0
+                    WHEN member_id = '' OR member_id LIKE 'noid:%%' THEN 1
+                    ELSE 2
+                END
             LIMIT 1
         """
-        lookup_params = (convex_id, meet, normalize_name(name))
+        lookup_params = (convex_id, meet, normalize_name(name), convex_id)
     else:
         lookup_sql = """
             SELECT id, convex_id, member_id, name, age, club, wso, gender, weight_class,

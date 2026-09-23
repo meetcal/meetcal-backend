@@ -29,7 +29,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from io import StringIO
 
-from common.postgres_ingest import IngestClient
+from common.postgres_ingest import IngestClient, RowFailure
 
 # Load environment variables
 load_dotenv()
@@ -305,9 +305,9 @@ class UMWFRecordsScraper:
         inserted = []
         updated = []
 
-        # One connection, one transaction: a failing row rolls back the whole
-        # batch instead of leaving a partial record set behind.
-        results = self.ingest_client.actions(
+        # One connection. Each record is independent, so a bad one is
+        # reported and skipped (its own savepoint) rather than costing the rest.
+        results = self.ingest_client.actions_skipping_errors(
             "scraperIngestion:ingestRecord",
             [
                 {
@@ -323,7 +323,9 @@ class UMWFRecordsScraper:
             ],
         )
         for record, result in zip(records, results):
-            if result.get('wasInsert'):
+            if isinstance(result, RowFailure):
+                print(f"  x Error: {record['age_category']} {record['gender']} {record['weight_class']}: {result.error}")
+            elif result.get('wasInsert'):
                 inserted.append(record)
                 print(f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}")
             elif result.get('wasChanged'):

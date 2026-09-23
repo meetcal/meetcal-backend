@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
+from dataclasses import dataclass
 from typing import Any, Iterable
 
 from common import postgres_writer as pg
@@ -49,6 +51,14 @@ def dispatch(conn, path: str, args: dict[str, Any]) -> dict[str, Any]:
     raise NotImplementedError(f"Unsupported scraper action: {path}")
 
 
+@dataclass(frozen=True)
+class RowFailure:
+    """A row ``actions(..., skip_errors=True)`` could not write; the rest were."""
+
+    index: int
+    error: Exception
+
+
 class IngestClient:
     """Thin dispatch wrapper: one connection + one transaction per call.
 
@@ -65,8 +75,8 @@ class IngestClient:
 
         All-or-nothing: a failing row raises and rolls back every earlier row
         in the batch (``pg.connect`` rolls back when the block exits with an
-        exception), so a scraper never leaves half a record set behind.
-        Returns one result per input row, in order.
+        exception), so a scraper never leaves half a record set behind. Use
+        this for replace-style writes. Returns one result per row, in order.
         """
         rows = list(rows)
         if not rows:
@@ -75,6 +85,32 @@ class IngestClient:
             results = [dispatch(conn, path, row) for row in rows]
             conn.commit()
             return results
+
+    def actions_skipping_errors(
+        self, path: str, rows: Iterable[dict[str, Any]]
+    ) -> list[dict[str, Any] | RowFailure]:
+        """Dispatch every row on one connection, skipping rows that fail.
+
+        For independent upserts (one lifter's result, one record) where a bad
+        row should be logged and skipped rather than cost the rest of the set:
+        each row runs in its own savepoint inside one transaction, so a failure
+        undoes only that row. Returns, per row in order, the dispatch result or
+        a ``RowFailure``.
+        """
+        rows = list(rows)
+        if not rows:
+            return []
+        results: list[dict[str, Any] | RowFailure] = []
+        with pg.connect() as conn:
+            with conn.transaction():
+                for index, row in enumerate(rows):
+                    try:
+                        with conn.transaction():
+                            results.append(dispatch(conn, path, row))
+                    except Exception as error:  # noqa: BLE001 - reported per row
+                        logging.error("Ingest %s row %s failed; skipped: %s", path, index, error)
+                        results.append(RowFailure(index, error))
+        return results
 
 
 def main() -> int:

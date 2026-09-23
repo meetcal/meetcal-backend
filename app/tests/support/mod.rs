@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use app::{
-    common::spawn_server::{TestApp, spawn_app_with_auth},
+    common::spawn_server::{TestApp, spawn_app_as_api_role, spawn_app_with_auth},
     routes::users::auth::AuthVerifier,
 };
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
@@ -60,6 +60,20 @@ pub async fn spawn_test_app() -> TestApp {
     )
     .expect("valid test public key");
     spawn_app_with_auth(Some(auth)).await
+}
+
+/// The test app with every query running as `meetcal_api`, the role
+/// production connects as: its grants and row-level security apply.
+pub async fn spawn_test_app_as_api_role() -> TestApp {
+    let auth = AuthVerifier::from_rsa_pem(
+        TEST_KID,
+        TEST_KEYS.public_pem.as_bytes(),
+        TEST_ISSUER,
+        vec![TEST_AZP.to_string()],
+        None,
+    )
+    .expect("valid test public key");
+    spawn_app_as_api_role(Some(auth)).await
 }
 
 pub fn test_token(user_id: &str) -> String {

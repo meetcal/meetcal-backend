@@ -291,7 +291,7 @@ async fn reference_data_carries_cache_headers_and_revalidates() {
         assert_eq!(first.status(), 200, "{path}");
         assert_eq!(
             first.headers().get(reqwest::header::CACHE_CONTROL).unwrap(),
-            "public, max-age=300",
+            "no-cache",
             "{path}"
         );
         let etag = first

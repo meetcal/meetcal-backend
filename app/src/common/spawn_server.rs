@@ -10,6 +10,17 @@ pub struct TestApp {
 }
 
 pub async fn spawn_app_with_auth(auth: Option<Arc<AuthVerifier>>) -> TestApp {
+    spawn_app_as(auth, false).await
+}
+
+/// Like [`spawn_app_with_auth`], but every pool connection runs
+/// `SET ROLE meetcal_api` first, so the routes execute with that role's
+/// grants and row-level security, as production does.
+pub async fn spawn_app_as_api_role(auth: Option<Arc<AuthVerifier>>) -> TestApp {
+    spawn_app_as(auth, true).await
+}
+
+async fn spawn_app_as(auth: Option<Arc<AuthVerifier>>, as_api_role: bool) -> TestApp {
     crate::load_env();
 
     let database_url = match std::env::var("DATABASE_URL") {
@@ -23,9 +34,20 @@ pub async fn spawn_app_with_auth(auth: Option<Arc<AuthVerifier>>) -> TestApp {
         }
     };
 
-    let db = PgPoolOptions::new()
+    let mut options = PgPoolOptions::new()
         .max_connections(5)
-        .acquire_timeout(Duration::from_secs(5))
+        .acquire_timeout(Duration::from_secs(5));
+    if as_api_role {
+        options = options.after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE meetcal_api")
+                    .execute(conn)
+                    .await
+                    .map(|_| ())
+            })
+        });
+    }
+    let db = options
         .connect(&database_url)
         .await
         .expect("Failed to connect to postgres");

@@ -56,6 +56,10 @@ pub async fn get_lifting_results(
     Query(params): Query<MeetsParams>,
 ) -> Result<Json<Vec<LiftingResults>>, AppError> {
     client.require_non_empty("meet", &params.meet)?;
+    // Legacy clients keep their `200 []` for a blank meet without the query.
+    if params.meet.trim().is_empty() {
+        return Ok(Json(Vec::new()));
+    }
     let rows = sqlx::query_as::<_, LiftingResults>(RESULTS_BY_MEET_SQL)
         .bind(params.meet)
         .fetch_all(&state.db)

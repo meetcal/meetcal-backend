@@ -14,7 +14,7 @@ use axum::{
 /// curl 'https://api.meetcal.app/meets/schedule?meet=2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness' | jq .
 ///
 /// This endpoint takes the name of the meet exactly as it shows in BARS and returns the schedule of
-/// the meet. The body carries a strong `ETag` and `Cache-Control: public, max-age=300`; a
+/// the meet. The body carries a strong `ETag` and `Cache-Control: no-cache`; a
 /// matching `If-None-Match` is `304`.
 ///
 /// Get meet names as they are listed by copying exact case-sensitive names from BARS

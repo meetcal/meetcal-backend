@@ -19,7 +19,7 @@ pub struct QualifyingTotal {
 ///
 /// curl 'https://api.meetcal.app/data/qualifying-totals' | jq .
 ///
-/// The body carries a strong `ETag` and `Cache-Control: public, max-age=300`; a matching
+/// The body carries a strong `ETag` and `Cache-Control: no-cache`; a matching
 /// `If-None-Match` is `304`.
 ///
 /// This endpoint takes nothing and returns qualifying totals

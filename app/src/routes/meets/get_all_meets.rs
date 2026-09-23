@@ -46,7 +46,7 @@ const COMPLETED_MEETS_SQL: &str = concat!(
 ///
 /// This endpoint takes no input and returns a list of meets in the db in the next 3 months sorted
 /// by earlist to latest. The body carries a strong `ETag` and
-/// `Cache-Control: public, max-age=300`; a matching `If-None-Match` is `304`.
+/// `Cache-Control: no-cache`; a matching `If-None-Match` is `304`.
 ///
 /// [
 ///   {

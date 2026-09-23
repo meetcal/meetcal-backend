@@ -504,7 +504,9 @@ class ApproveFailurePathTests(unittest.TestCase):
             self.assertEqual(bundles["fine"].status, "ingested")
             failure_notes = [t for r, t in notified if r == "boom" and "failed to publish" in t]
             self.assertEqual(len(failure_notes), 1)
-            self.assertIn("db down", failure_notes[0])
+            # Driver text stays in the log, out of the channel.
+            self.assertNotIn("db down", failure_notes[0])
+            self.assertIn("RuntimeError", failure_notes[0])
 
     def test_failed_run_is_skipped_on_the_next_tick(self):
         with tempfile.TemporaryDirectory() as tmp:

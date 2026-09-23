@@ -26,7 +26,7 @@ const MEET_DETAILS_SQL: &str = concat!(
 /// curl 'https://api.meetcal.app/meets/details?meet=2026%20Ohio%20WSO%20Championships' | jq .
 ///
 /// This endpoint takes the name of the meet exactly as it shows in BARS and returns the details of
-/// the meet. The body carries a strong `ETag` and `Cache-Control: public, max-age=300`; a
+/// the meet. The body carries a strong `ETag` and `Cache-Control: no-cache`; a
 /// matching `If-None-Match` is `304`.
 ///
 /// Get meet names as they are listed by copying exact case-sensitive names from BARS

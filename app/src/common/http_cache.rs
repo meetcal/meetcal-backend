@@ -14,11 +14,12 @@ use axum::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-/// `Cache-Control` for data that changes by ingest, not by request: shared
-/// caches may keep it, and a client may reuse it for five minutes before
-/// revalidating. Five minutes bounds how stale a schedule can look after a
-/// scraper writes; ingest runs on the order of hours.
-pub const PUBLIC_MAX_AGE_5_MIN: &str = "public, max-age=300";
+/// `Cache-Control` for data that changes by ingest: any cache may store it but
+/// must revalidate before every reuse. A `max-age` would let a device's
+/// URL cache (iOS `NSURLSession` honours it) answer a pull-to-refresh on meet
+/// day with a pre-ingest schedule, and shipped apps cannot opt out. The strong
+/// `ETag` keeps a revalidation to a `304` with no body.
+pub const REVALIDATE_EVERY_TIME: &str = "no-cache";
 
 /// Strong validator over the exact serialized body.
 pub fn strong_etag(body: &[u8]) -> HeaderValue {
@@ -76,7 +77,7 @@ pub fn json_response(
     (headers, body).into_response()
 }
 
-/// Serializes `value`, tags it, and answers with [`PUBLIC_MAX_AGE_5_MIN`].
+/// Serializes `value`, tags it, and answers with [`REVALIDATE_EVERY_TIME`].
 ///
 /// For handlers whose body is cheap to build on every request; the validator
 /// still saves the transfer, which for a national start list is the expensive
@@ -87,7 +88,7 @@ pub fn cacheable_json<T: Serialize>(value: &T, request: &HeaderMap) -> Result<Re
     Ok(json_response(
         body,
         etag,
-        Some(PUBLIC_MAX_AGE_5_MIN),
+        Some(REVALIDATE_EVERY_TIME),
         request.get(header::IF_NONE_MATCH),
     ))
 }
@@ -134,12 +135,12 @@ mod tests {
         assert_eq!(response.headers().get(header::ETAG), Some(&tag));
         assert!(response.headers().get(header::CACHE_CONTROL).is_none());
 
-        let response = json_response(body, tag.clone(), Some(PUBLIC_MAX_AGE_5_MIN), None);
+        let response = json_response(body, tag.clone(), Some(REVALIDATE_EVERY_TIME), None);
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers().get(header::ETAG), Some(&tag));
         assert_eq!(
             response.headers().get(header::CACHE_CONTROL).unwrap(),
-            PUBLIC_MAX_AGE_5_MIN
+            REVALIDATE_EVERY_TIME
         );
     }
 
@@ -154,7 +155,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(
             response.headers().get(header::CACHE_CONTROL).unwrap(),
-            PUBLIC_MAX_AGE_5_MIN
+            REVALIDATE_EVERY_TIME
         );
         let response = cacheable_json(&value, &HeaderMap::new()).unwrap();
         assert_eq!(response.status(), StatusCode::OK);

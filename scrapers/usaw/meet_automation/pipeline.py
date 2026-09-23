@@ -369,8 +369,11 @@ def cmd_approve(args) -> int:
                 _notify(
                     slack_cfg,
                     bundle,
-                    f":x: `{run_id}` failed to publish; nothing was written. "
-                    f"Error: {exc}\nRe-run the pipeline with `--force` to stage it again.",
+                    # The exception text (constraint and table names from
+                    # psycopg) stays in the server log above, not the channel.
+                    f":x: `{run_id}` failed to publish; nothing was written "
+                    f"({type(exc).__name__}; details in the scraper log).\n"
+                    f"Re-run the pipeline with `--force` to stage it again.",
                 )
                 _consume_decision(decision_path)
                 acted = True

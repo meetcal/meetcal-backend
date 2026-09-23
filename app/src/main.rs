@@ -1,3 +1,4 @@
+use app::common::schema::ensure_migrations_applied;
 use app::configuration::get_configuration;
 use app::{load_env, run};
 use sqlx::postgres::PgPoolOptions;
@@ -41,6 +42,13 @@ async fn main() {
         )
         .await
         .expect("Failed to connect to postgres");
+
+    // Exit (non-zero) rather than serve 500s from a schema this build does
+    // not match; the deploy's health check then keeps the old container.
+    if let Err(reason) = ensure_migrations_applied(&connection).await {
+        tracing::error!("refusing to start: {reason}");
+        std::process::exit(1);
+    }
 
     let address = format!("{}:{}", config.application_host, config.application_port);
     let listener = TcpListener::bind(address).await.unwrap();

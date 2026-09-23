@@ -51,6 +51,11 @@ pub async fn get_athletes_by_club(
     Query(params): Query<ClubsAthletesParams>,
 ) -> Result<Json<Vec<ClubsAthletes>>, AppError> {
     client.require_non_empty("club", &params.club)?;
+    // Legacy clients keep their `200 []` for a blank club without the query:
+    // `club = ''` would return every registration that has no club.
+    if params.club.trim().is_empty() {
+        return Ok(Json(Vec::new()));
+    }
     let names: Vec<ClubsAthletes> = sqlx::query_as(
         r#"
         SELECT name, meet, club, gender, weight_class, entry_total, member_id

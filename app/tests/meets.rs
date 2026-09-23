@@ -528,7 +528,7 @@ async fn schedule_carries_cache_headers_and_revalidates() {
     assert_eq!(first.status(), 200);
     assert_eq!(
         first.headers().get(reqwest::header::CACHE_CONTROL).unwrap(),
-        "public, max-age=300"
+        "no-cache"
     );
     let etag = first
         .headers()
@@ -557,7 +557,7 @@ async fn schedule_carries_cache_headers_and_revalidates() {
             .headers()
             .get(reqwest::header::CACHE_CONTROL)
             .unwrap(),
-        "public, max-age=300"
+        "no-cache"
     );
     assert!(revalidate.bytes().await.unwrap().is_empty());
 
@@ -576,7 +576,7 @@ async fn schedule_carries_cache_headers_and_revalidates() {
                 .headers()
                 .get(reqwest::header::CACHE_CONTROL)
                 .unwrap(),
-            "public, max-age=300",
+            "no-cache",
             "{path}"
         );
         assert!(
@@ -813,4 +813,15 @@ async fn package_is_rebuilt_as_soon_as_an_ingest_changes_the_meet() {
         2,
         "one build before the ingest, one after"
     );
+}
+
+#[tokio::test]
+async fn test_database_has_every_migration_this_build_embeds() {
+    // The same check `main` runs before serving: a build must refuse a
+    // database that is behind it rather than 500 on the routes that need
+    // the missing schema.
+    let db = support::db_pool().await;
+    app::common::schema::ensure_migrations_applied(&db)
+        .await
+        .expect("seeded test database is migrated");
 }

@@ -33,6 +33,11 @@ pub async fn get_athletes_by_wso(
     Query(params): Query<WsoAthletesParams>,
 ) -> Result<Json<Vec<WsoAthlete>>, AppError> {
     client.require_non_empty("wso", &params.wso)?;
+    // Legacy clients keep their `200 []` for a blank WSO without the query:
+    // `wso = ''` would return every registration that has no WSO.
+    if params.wso.trim().is_empty() {
+        return Ok(Json(Vec::new()));
+    }
     let athletes = sqlx::query_as(
         r#"
         SELECT name, meet, club, wso, gender, weight_class, entry_total, member_id

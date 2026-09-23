@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MeetPackageParams {
     pub meet: String,
     pub history_cutoff_date: Option<String>,
@@ -214,25 +214,41 @@ const ATHLETES_SQL: &str = r#"
 ///
 /// None of `athletes`, `session_schedule`, or `lifting_results` carries an
 /// `updated_at`, so the stamp is, per table for this meet, the row count plus
-/// the newest `xmin` (the transaction id that last wrote each row). A replace
-/// ingest (delete + insert), an upsert that rewrites a row in place, and a
-/// deletion all change one of those; `meets.updated_at` covers the meet row
-/// itself. Each subquery is an index scan on `meet` over the meet's own rows,
-/// which is orders of magnitude cheaper than the rebuild it avoids. Missing
+/// the newest `xmin` (the transaction id that last wrote each row), each from
+/// one index scan on `meet`. A replace ingest (delete + insert), an upsert
+/// that rewrites a row in place, and a deletion all change one of those. The
+/// meet row's own `xmin` catches any write to it, including the Slack
+/// venue-map update, which does not touch `updated_at`.
+///
+/// Scope: the stamp covers this meet's rows only. `recent_results_by_name`,
+/// `year_bests_by_name` and `attempt_estimates` are built from the lifters'
+/// results at *other* meets, so a new result elsewhere reaches the package
+/// when the TTL expires, not immediately. `xmin` is also not monotonic across
+/// transaction-id wraparound; the TTL is the backstop for both. A missing
 /// meet is a `404` here, before anything is built.
 const FRESHNESS_SQL: &str = r#"
         SELECT
             m.updated_at AS meet_updated_at,
-            (SELECT COUNT(*) FROM athletes a WHERE a.meet = m.name) AS athlete_rows,
-            (SELECT COALESCE(MAX(a.xmin::text::bigint), 0) FROM athletes a WHERE a.meet = m.name)
-                AS athlete_tx,
-            (SELECT COUNT(*) FROM session_schedule s WHERE s.meet = m.name) AS schedule_rows,
-            (SELECT COALESCE(MAX(s.xmin::text::bigint), 0) FROM session_schedule s WHERE s.meet = m.name)
-                AS schedule_tx,
-            (SELECT COUNT(*) FROM lifting_results r WHERE r.meet = m.name) AS result_rows,
-            (SELECT COALESCE(MAX(r.xmin::text::bigint), 0) FROM lifting_results r WHERE r.meet = m.name)
-                AS result_tx
+            m.xmin::text::bigint AS meet_tx,
+            a.n AS athlete_rows,
+            a.tx AS athlete_tx,
+            s.n AS schedule_rows,
+            s.tx AS schedule_tx,
+            r.n AS result_rows,
+            r.tx AS result_tx
         FROM meets m
+        CROSS JOIN LATERAL (
+            SELECT COUNT(*) AS n, COALESCE(MAX(xmin::text::bigint), 0) AS tx
+            FROM athletes WHERE meet = m.name
+        ) a
+        CROSS JOIN LATERAL (
+            SELECT COUNT(*) AS n, COALESCE(MAX(xmin::text::bigint), 0) AS tx
+            FROM session_schedule WHERE meet = m.name
+        ) s
+        CROSS JOIN LATERAL (
+            SELECT COUNT(*) AS n, COALESCE(MAX(xmin::text::bigint), 0) AS tx
+            FROM lifting_results WHERE meet = m.name
+        ) r
         WHERE m.name = $1
         LIMIT 1
         "#;
@@ -240,6 +256,7 @@ const FRESHNESS_SQL: &str = r#"
 #[derive(Debug, FromRow)]
 struct FreshnessRow {
     meet_updated_at: i64,
+    meet_tx: i64,
     athlete_rows: i64,
     athlete_tx: i64,
     schedule_rows: i64,
@@ -254,8 +271,9 @@ async fn freshness_stamp(state: &AppState, meet: &str) -> Result<String, AppErro
         .fetch_one(&state.db)
         .await?;
     Ok(format!(
-        "{}:{}:{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}:{}:{}:{}",
         row.meet_updated_at,
+        row.meet_tx,
         row.athlete_rows,
         row.athlete_tx,
         row.schedule_rows,
@@ -701,8 +719,8 @@ struct AthletePackageRow {
 ///
 /// The body carries a strong `ETag` and answers a matching `If-None-Match` with `304`. Bodies are
 /// cached per meet + cutoff + include set, revalidated against a per-meet freshness stamp on every
-/// request (an ingest invalidates immediately) with a one-hour TTL as backstop, and built at most
-/// once at a time per key.
+/// request (a write to this meet's rows invalidates immediately; history from other meets waits
+/// for the one-hour TTL), and built at most once at a time per key.
 ///
 /// {
 ///   "meet": {
@@ -752,14 +770,33 @@ pub async fn get_meet_package(
     }
 
     let slot = build_slot(&cache_key);
-    let _building = slot.lock.lock().await;
+    let building = slot.lock.clone().lock_owned().await;
     // Another request may have built this key while we waited for the slot.
     if let Some((body, etag)) = cached_package(&cache_key, &stamp) {
         return Ok(json_response(body, etag, None, if_none_match));
     }
 
-    let (body, etag) = build_package(&state, &params, include).await?;
-    store_package(&cache_key, stamp, body.clone(), etag.clone());
+    // The build runs in its own task, which owns the slot. A requester that
+    // disconnects or hits the request timeout no longer cancels it: the build
+    // finishes and caches, and the requests queued on the slot read that
+    // entry instead of each starting from zero.
+    let task_state = state.clone();
+    let task_params = params.clone();
+    let task_key = cache_key.clone();
+    let build = tokio::spawn(async move {
+        // Dropped in reverse order: the lock is released before the slot
+        // checks whether it was the last holder of the map entry.
+        let _slot = slot;
+        let _building = building;
+        let built = build_package(&task_state, &task_params, include).await;
+        if let Ok((body, etag)) = &built {
+            store_package(&task_key, stamp, body.clone(), etag.clone());
+        }
+        built
+    });
+    let (body, etag) = build
+        .await
+        .map_err(|error| anyhow::anyhow!("package build task failed: {error}"))??;
     Ok(json_response(body, etag, None, if_none_match))
 }
 

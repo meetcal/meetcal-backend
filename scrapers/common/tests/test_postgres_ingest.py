@@ -22,7 +22,7 @@ try:
     from psycopg.rows import dict_row
 
     from common import postgres_writer as pg
-    from common.postgres_ingest import IngestClient, dispatch
+    from common.postgres_ingest import IngestClient, RowFailure, dispatch
 except ImportError:  # pragma: no cover - optional local dep
     psycopg = None
     dict_row = None
@@ -560,6 +560,58 @@ class PostgresIngestTests(unittest.TestCase):
         self.assertEqual(float(rows[0]["entry_total"]), 160.0)
         self.assertEqual(rows[1]["member_id"], "123456")
 
+    def test_placeholder_ingest_adopts_a_pre_placeholder_random_id(self) -> None:
+        meet = f"__test_random_id_{self.token}__"
+        other_meet = f"__test_random_id_other_{self.token}__"
+        row = {
+            "age": 30,
+            "club": "Club",
+            "gender": "Female",
+            "weightClass": "64",
+            "entryTotal": 150,
+        }
+        # Scraped once by the old scraper: a random nine-digit id.
+        old = dispatch(
+            self.conn,
+            "scraperIngestion:ingestEntryAthlete",
+            {**row, "memberId": "482913377", "name": "Jane Doe", "meet": meet},
+        )
+        # A real nine-digit membership number recurs at other meets and must
+        # not be taken for a random one.
+        dispatch(
+            self.conn,
+            "scraperIngestion:ingestEntryAthlete",
+            {**row, "memberId": "123456789", "name": "Sam Lifter", "meet": meet},
+        )
+        dispatch(
+            self.conn,
+            "scraperIngestion:ingestEntryAthlete",
+            {**row, "memberId": "123456789", "name": "Sam Lifter", "meet": other_meet},
+        )
+
+        jane = dispatch(
+            self.conn,
+            "scraperIngestion:ingestEntryAthlete",
+            {**row, "memberId": "noid:jane-doe", "name": "Jane Doe", "meet": meet},
+        )
+        sam = dispatch(
+            self.conn,
+            "scraperIngestion:ingestEntryAthlete",
+            {**row, "memberId": "noid:sam-lifter", "name": "Sam Lifter", "meet": meet},
+        )
+
+        self.assertFalse(jane["wasInsert"])
+        self.assertEqual(jane["id"], old["id"])
+        self.assertTrue(sam["wasInsert"])
+        rows = self.conn.execute(
+            "SELECT member_id FROM athletes WHERE meet = %s ORDER BY member_id",
+            (meet,),
+        ).fetchall()
+        self.assertEqual(
+            [r["member_id"] for r in rows],
+            ["123456789", "noid:jane-doe", "noid:sam-lifter"],
+        )
+
     def test_idless_entry_keeps_assigned_session(self) -> None:
         meet = f"__test_idless_session_{self.token}__"
         base = {
@@ -702,6 +754,22 @@ class IngestClientTests(unittest.TestCase):
                 [_schedule(self.meet, 1, "Red"), bad],
             )
         self.assertEqual(self._count(), 0)
+
+    def test_actions_skipping_errors_keeps_the_good_rows(self) -> None:
+        bad = _schedule(self.meet, 2, "White")
+        bad["sessionId"] = "not-a-number"  # DOUBLE PRECISION column: Postgres raises
+        with self.assertLogs(level="ERROR"):
+            results = self.client.actions_skipping_errors(
+                "scraperIngestion:ingestSessionSchedule",
+                [_schedule(self.meet, 1, "Red"), bad, _schedule(self.meet, 3, "Blue")],
+            )
+        self.assertTrue(results[0]["wasInsert"])
+        self.assertIsInstance(results[1], RowFailure)
+        self.assertEqual(results[1].index, 1)
+        self.assertTrue(results[2]["wasInsert"])
+        # The failing row's savepoint was rolled back; the rows either side
+        # of it were committed.
+        self.assertEqual(self._count(), 2)
 
     def test_actions_rejects_an_unknown_path_before_writing(self) -> None:
         with self.assertRaises(NotImplementedError):

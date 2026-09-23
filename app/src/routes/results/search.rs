@@ -18,9 +18,11 @@ const MAX_SEARCH_RESULT_ROWS: i64 = 600;
 /// Ceiling on name suggestions offered for a partial query.
 const MAX_SEARCH_SUGGESTIONS: i64 = 8;
 
-/// Both range queries are inclusive on both ends: `end_date` is the last day a
-/// result may fall on, the same rule `/data/nat-rankings-year` applies to its
-/// `YYYY-12-31`. `date` is ISO text, so string comparison is date order.
+/// Both range queries are half-open, `[start_date, end_date)`: every app
+/// version asks for a year as `YYYY-01-01` .. `YYYY+1-01-01`, so an inclusive
+/// end would pull New Year's Day meets of the next year into it.
+/// (`/data/nat-rankings-year` takes a `year`, not dates, so it is unaffected.)
+/// `date` is ISO text, so string comparison is date order.
 const EXACT_NAME_IN_RANGE_SQL: &str = concat!(
     r#"
         SELECT
@@ -30,7 +32,7 @@ const EXACT_NAME_IN_RANGE_SQL: &str = concat!(
         FROM lifting_results
         WHERE "#,
     normalized_name_sql!(),
-    r#" = $1 AND date >= $2 AND date <= $3
+    r#" = $1 AND date >= $2 AND date < $3
         ORDER BY date ASC
         LIMIT $4
         "#
@@ -43,7 +45,7 @@ const NAME_LIKE_IN_RANGE_SQL: &str = concat!(
     lifting_result_columns!(),
     r#"
         FROM lifting_results
-        WHERE name ILIKE $1 AND date >= $2 AND date <= $3
+        WHERE name ILIKE $1 AND date >= $2 AND date < $3
         ORDER BY date ASC
         LIMIT $4
         "#
@@ -66,13 +68,13 @@ pub struct SearchResponse {
 /// /search endpoint
 ///
 /// Exact wrapped search:
-/// curl 'https://api.meetcal.app/search?query=Alexander%20Nordstrom&start_date=2025-01-01&end_date=2025-12-31' | jq .
+/// curl 'https://api.meetcal.app/search?query=Alexander%20Nordstrom&start_date=2025-01-01&end_date=2026-01-01' | jq .
 ///
 /// Name suggestions:
 /// curl 'https://api.meetcal.app/search?query=Alexan' | jq .
 ///
 /// This endpoint takes an athlete search query and returns a completed search payload. With
-/// start_date and end_date (both inclusive) it returns exact name results for the range when
+/// start_date (inclusive) and end_date (exclusive) it returns exact name results for the range when
 /// available, otherwise fallback rows and suggestions. Without dates it returns name suggestions
 /// only. Suggestions are only computed when they will be returned: an exact match answers with
 /// one query, not two.

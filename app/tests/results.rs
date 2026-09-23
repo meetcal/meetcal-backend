@@ -499,11 +499,12 @@ async fn post_name_lists_fail_closed_on_empty_and_oversized() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn search_end_date_is_inclusive() {
+async fn search_end_date_is_exclusive() {
     let app = support::spawn_test_app().await;
-    // Seed row is dated exactly 2025-06-01.
+    // Seed row is dated exactly 2025-06-01. Ranges are half-open, as every
+    // app version sends a year: `YYYY-01-01` .. `YYYY+1-01-01`.
     let on_the_day: SearchResponse = reqwest::get(format!(
-        "{}/search?query=Alexander%20Nordstrom&start_date=2025-06-01&end_date=2025-06-01",
+        "{}/search?query=Alexander%20Nordstrom&start_date=2025-06-01&end_date=2025-06-02",
         app.address
     ))
     .await
@@ -524,8 +525,9 @@ async fn search_end_date_is_inclusive() {
         "an exact match does not carry suggestions"
     );
 
+    // An end date equal to the result's date excludes it.
     let day_before: SearchResponse = reqwest::get(format!(
-        "{}/search?query=Alexander%20Nordstrom&start_date=2025-01-01&end_date=2025-05-31",
+        "{}/search?query=Alexander%20Nordstrom&start_date=2025-01-01&end_date=2025-06-01",
         app.address
     ))
     .await
