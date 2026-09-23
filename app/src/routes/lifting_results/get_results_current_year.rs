@@ -1,8 +1,9 @@
 use crate::{
     AppError, AppState,
     common::{
+        client::ClientVersion,
         names::{normalize_name, normalized_name_sql},
-        query::deserialize_csv_or_repeated,
+        query::{NameListBody, clean_name_list, deserialize_csv_or_repeated},
     },
     routes::results::types::best_lifts_columns,
 };
@@ -40,6 +41,8 @@ struct YearBestsByName {
     best_total: f64,
 }
 
+/// `$2` is the caller's cutoff; `NULL` falls back to the legacy one-year window
+/// computed in Postgres so the default is unchanged for clients that omit it.
 const BESTS_SINCE_CUTOFF_SQL: &str = concat!(
     r#"
             SELECT
@@ -50,24 +53,11 @@ const BESTS_SINCE_CUTOFF_SQL: &str = concat!(
             WHERE "#,
     normalized_name_sql!(),
     r#" = $1
-                AND date >= $2
+                AND date >= COALESCE($2::text, (CURRENT_DATE - INTERVAL '1 year')::date::text)
             "#
 );
 
-const BESTS_LAST_YEAR_SQL: &str = concat!(
-    r#"
-            SELECT
-                "#,
-    best_lifts_columns!(),
-    r#"
-            FROM lifting_results
-            WHERE "#,
-    normalized_name_sql!(),
-    r#" = $1
-                AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
-            "#
-);
-
+/// Same fallback as [`BESTS_SINCE_CUTOFF_SQL`], for a list of names.
 const BATCH_BESTS_SINCE_CUTOFF_SQL: &str = concat!(
     r#"
             SELECT
@@ -81,27 +71,7 @@ const BATCH_BESTS_SINCE_CUTOFF_SQL: &str = concat!(
             WHERE "#,
     normalized_name_sql!(),
     r#" = ANY($1::text[])
-                AND date >= $2
-            GROUP BY "#,
-    normalized_name_sql!(),
-    r#"
-            "#
-);
-
-const BATCH_BESTS_LAST_YEAR_SQL: &str = concat!(
-    r#"
-            SELECT
-                "#,
-    normalized_name_sql!(),
-    r#" AS name,
-                "#,
-    best_lifts_columns!(),
-    r#"
-            FROM lifting_results
-            WHERE "#,
-    normalized_name_sql!(),
-    r#" = ANY($1::text[])
-                AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
+                AND date >= COALESCE($2::text, (CURRENT_DATE - INTERVAL '1 year')::date::text)
             GROUP BY "#,
     normalized_name_sql!(),
     r#"
@@ -123,21 +93,16 @@ const BATCH_BESTS_LAST_YEAR_SQL: &str = concat!(
 ///
 pub async fn get_results_current_year(
     State(state): State<AppState>,
+    client: ClientVersion,
     Query(params): Query<ResultsCurrentYearParams>,
 ) -> Result<Json<YearBests>, AppError> {
     crate::common::query::require_non_empty("name", &params.name)?;
-    let rows = if let Some(cutoff_date) = params.cutoff_date {
-        sqlx::query_as::<_, YearBests>(BESTS_SINCE_CUTOFF_SQL)
-            .bind(normalize_name(&params.name))
-            .bind(cutoff_date)
-            .fetch_one(&state.db)
-            .await?
-    } else {
-        sqlx::query_as::<_, YearBests>(BESTS_LAST_YEAR_SQL)
-            .bind(normalize_name(&params.name))
-            .fetch_one(&state.db)
-            .await?
-    };
+    client.require_present_iso_date("cutoff_date", params.cutoff_date.as_deref())?;
+    let rows = sqlx::query_as::<_, YearBests>(BESTS_SINCE_CUTOFF_SQL)
+        .bind(normalize_name(&params.name))
+        .bind(params.cutoff_date)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(rows))
 }
@@ -159,11 +124,39 @@ pub async fn get_results_current_year(
 ///
 pub async fn get_results_bests(
     State(state): State<AppState>,
+    client: ClientVersion,
     Query(params): Query<BatchYearBestsParams>,
 ) -> Result<Json<BTreeMap<String, YearBests>>, AppError> {
-    crate::common::query::require_name_list(&params.names)?;
-    let mut by_name: BTreeMap<String, YearBests> = params
-        .names
+    bests_by_name(&state, client, params.names, params.cutoff_date).await
+}
+
+/// `POST /lifting-results/bests` with `{"names": [...], "cutoff_date": "YYYY-MM-DD"}`.
+///
+/// Same response as the `GET` form, keyed by the requested names. The JSON
+/// array carries names verbatim, so a name containing a comma is one key.
+pub async fn post_results_bests(
+    State(state): State<AppState>,
+    client: ClientVersion,
+    Json(body): Json<NameListBody>,
+) -> Result<Json<BTreeMap<String, YearBests>>, AppError> {
+    bests_by_name(
+        &state,
+        client,
+        clean_name_list(body.names),
+        body.cutoff_date,
+    )
+    .await
+}
+
+async fn bests_by_name(
+    state: &AppState,
+    client: ClientVersion,
+    names: Vec<String>,
+    cutoff_date: Option<String>,
+) -> Result<Json<BTreeMap<String, YearBests>>, AppError> {
+    crate::common::query::require_name_list(&names)?;
+    client.require_present_iso_date("cutoff_date", cutoff_date.as_deref())?;
+    let mut by_name: BTreeMap<String, YearBests> = names
         .iter()
         .map(|name| {
             (
@@ -179,31 +172,20 @@ pub async fn get_results_bests(
 
     // Match results to the originally requested names case- and whitespace-insensitively,
     // while keeping the response keyed by the requested names the caller looks up by.
-    let normalized_names: Vec<String> = params
-        .names
-        .iter()
-        .map(|name| normalize_name(name))
-        .collect();
+    let normalized_names: Vec<String> = names.iter().map(|name| normalize_name(name)).collect();
     let mut requested_by_normalized: HashMap<String, Vec<String>> = HashMap::new();
-    for name in &params.names {
+    for name in &names {
         requested_by_normalized
             .entry(normalize_name(name))
             .or_default()
             .push(name.clone());
     }
 
-    let rows = if let Some(cutoff_date) = params.cutoff_date {
-        sqlx::query_as::<_, YearBestsByName>(BATCH_BESTS_SINCE_CUTOFF_SQL)
-            .bind(&normalized_names)
-            .bind(cutoff_date)
-            .fetch_all(&state.db)
-            .await?
-    } else {
-        sqlx::query_as::<_, YearBestsByName>(BATCH_BESTS_LAST_YEAR_SQL)
-            .bind(&normalized_names)
-            .fetch_all(&state.db)
-            .await?
-    };
+    let rows = sqlx::query_as::<_, YearBestsByName>(BATCH_BESTS_SINCE_CUTOFF_SQL)
+        .bind(&normalized_names)
+        .bind(cutoff_date)
+        .fetch_all(&state.db)
+        .await?;
 
     // `row.name` is the normalized form; fan it back out to every requested name
     // that normalizes to it.

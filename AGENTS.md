@@ -66,6 +66,8 @@ CI (`.github/workflows/ci.yml`) runs the Rust job (fmt, clippy, `cargo test --lo
 - `convex_id` is the upsert identity in Postgres. Do not add a Convex client, dual-write, or `convex_compat`.
 - Destructive ingest (`DELETE FROM … WHERE meet = $1`, intl ranking prune) must refuse empty keys.
 - Prefer indexes (`meet`, `club`, `wso`, normalized name) over `filter()`-style scans. Name match uses `normalize_name` / `normalized_name_sql!` (`app/src/common/names.rs`), the one spelling of the rule; `concat!` it into a query rather than retyping it.
+- Shipped app builds cannot be patched in lockstep with the API. Stricter validation is gated on the `X-MeetCal-App: <major.minor.patch>` header via `ClientVersion` (`app/src/common/client.rs`): at or above `MIN_STRICT_CLIENT_VERSION` a request fails closed with `400`; older or absent means the legacy behaviour it was built against. Raise the threshold when a new app depends on a stricter contract; remove a legacy branch only once the version tail that needs it is gone.
+- Name-list endpoints (`/lifting-results/by-names`, `/recent`, `/bests`) accept `POST {"names": [...], "cutoff_date"?}` alongside the CSV `GET`. The JSON array is the only form that can carry a name containing a comma.
 - Auth is Clerk JWT (RS256 + JWKS). Protected `/users/me/*` routes fail closed when Clerk env is missing or the token is empty, expired, or wrong `azp`.
 - Club and WSO history endpoints return every registration for that affiliation, including non-completed meets. Do not re-join `meets.status`.
 
@@ -104,3 +106,5 @@ CI (`.github/workflows/ci.yml`) runs the Rust job (fmt, clippy, `cargo test --lo
 - Slack request timestamps older than five minutes are replays. Run ids must be `[A-Za-z0-9._-]`, never path separators.
 - JWT tests may use `rsa` (RUSTSEC-2023-0071 ignored). Production verification uses `jsonwebtoken`'s rust_crypto backend and Clerk's JWKS.
 - `scrapers/urlwatch/` is vendored third-party. Out of scope unless the task names it.
+- An app release is not a flag day: App Store rollouts are gradual, so the API serves old and new clients at once for weeks. Never flip an endpoint's status code or shape globally; gate it on `X-MeetCal-App`.
+- `/meets/package` carries a strong `ETag` (SHA-256 of the exact body) and answers `If-None-Match` with `304`. The app persists the tag only after a fully successful prefetch, and ignores a `304` when its local copy is gone.

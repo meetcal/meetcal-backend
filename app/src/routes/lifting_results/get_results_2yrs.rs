@@ -1,8 +1,9 @@
 use crate::{
     AppError, AppState,
     common::{
+        client::ClientVersion,
         names::{normalize_name, normalized_name_sql},
-        query::deserialize_csv_or_repeated,
+        query::{NameListBody, clean_name_list, deserialize_csv_or_repeated},
     },
     routes::results::types::{LiftingResults, lifting_result_columns},
 };
@@ -17,6 +18,8 @@ pub struct Results2YrsParams {
     pub cutoff_date: Option<String>,
 }
 
+/// `$2` is the caller's cutoff; `NULL` falls back to the legacy two-year window
+/// computed in Postgres so the default is unchanged for clients that omit it.
 const RESULTS_SINCE_CUTOFF_SQL: &str = concat!(
     r#"
             SELECT
@@ -27,22 +30,7 @@ const RESULTS_SINCE_CUTOFF_SQL: &str = concat!(
             WHERE "#,
     normalized_name_sql!(),
     r#" = ANY($1::text[])
-                AND date >= $2
-            ORDER BY date DESC
-            "#
-);
-
-const RESULTS_LAST_2YRS_SQL: &str = concat!(
-    r#"
-            SELECT
-                "#,
-    lifting_result_columns!(),
-    r#"
-            FROM lifting_results
-            WHERE "#,
-    normalized_name_sql!(),
-    r#" = ANY($1::text[])
-                AND date >= (CURRENT_DATE - INTERVAL '2 years')::date::text
+                AND date >= COALESCE($2::text, (CURRENT_DATE - INTERVAL '2 years')::date::text)
             ORDER BY date DESC
             "#
 );
@@ -77,27 +65,42 @@ const RESULTS_LAST_2YRS_SQL: &str = concat!(
 ///
 pub async fn get_results_2yrs(
     State(state): State<AppState>,
+    client: ClientVersion,
     Query(params): Query<Results2YrsParams>,
 ) -> Result<Json<Vec<LiftingResults>>, AppError> {
-    crate::common::query::require_name_list(&params.names)?;
-    let normalized_names: Vec<String> = params
-        .names
-        .iter()
-        .map(|name| normalize_name(name))
-        .collect();
+    results_since_cutoff(&state, client, params.names, params.cutoff_date).await
+}
 
-    let rows = if let Some(cutoff_date) = params.cutoff_date {
-        sqlx::query_as::<_, LiftingResults>(RESULTS_SINCE_CUTOFF_SQL)
-            .bind(&normalized_names)
-            .bind(cutoff_date)
-            .fetch_all(&state.db)
-            .await?
-    } else {
-        sqlx::query_as::<_, LiftingResults>(RESULTS_LAST_2YRS_SQL)
-            .bind(&normalized_names)
-            .fetch_all(&state.db)
-            .await?
-    };
+/// `POST /lifting-results/recent` with `{"names": [...], "cutoff_date": "YYYY-MM-DD"}`.
+pub async fn post_results_2yrs(
+    State(state): State<AppState>,
+    client: ClientVersion,
+    Json(body): Json<NameListBody>,
+) -> Result<Json<Vec<LiftingResults>>, AppError> {
+    results_since_cutoff(
+        &state,
+        client,
+        clean_name_list(body.names),
+        body.cutoff_date,
+    )
+    .await
+}
+
+async fn results_since_cutoff(
+    state: &AppState,
+    client: ClientVersion,
+    names: Vec<String>,
+    cutoff_date: Option<String>,
+) -> Result<Json<Vec<LiftingResults>>, AppError> {
+    crate::common::query::require_name_list(&names)?;
+    client.require_present_iso_date("cutoff_date", cutoff_date.as_deref())?;
+    let normalized_names: Vec<String> = names.iter().map(|name| normalize_name(name)).collect();
+
+    let rows = sqlx::query_as::<_, LiftingResults>(RESULTS_SINCE_CUTOFF_SQL)
+        .bind(&normalized_names)
+        .bind(cutoff_date)
+        .fetch_all(&state.db)
+        .await?;
 
     Ok(Json(rows))
 }

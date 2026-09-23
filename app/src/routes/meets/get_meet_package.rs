@@ -6,10 +6,11 @@ use crate::{
 use axum::{
     body::Bytes,
     extract::{Query, State},
-    http::header,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::FromRow;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{LazyLock, RwLock};
@@ -91,7 +92,38 @@ const YEAR_BESTS_BY_NAME_SQL: &str = concat!(
 
 struct CachedPackage {
     body: Bytes,
+    etag: HeaderValue,
     inserted: Instant,
+}
+
+/// Strong validator over the exact serialized body, so a client that already
+/// holds this package can revalidate with `If-None-Match` and get `304`
+/// instead of re-downloading up to [`MAX_CACHED_PACKAGE_BYTES`].
+fn package_etag(body: &[u8]) -> HeaderValue {
+    let digest = Sha256::digest(body);
+    let mut tag = String::with_capacity(2 + digest.len() * 2);
+    tag.push('"');
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(tag, "{byte:02x}");
+    }
+    tag.push('"');
+    HeaderValue::from_str(&tag).expect("hex etag is a valid header value")
+}
+
+/// `If-None-Match` matching per RFC 9110 §13.1.2: a `*`, or any listed tag
+/// equal to ours after dropping a `W/` weak prefix. The list is bounded by the
+/// header size, not by the caller.
+fn etag_matches(if_none_match: Option<&HeaderValue>, etag: &HeaderValue) -> bool {
+    let Some(candidates) = if_none_match.and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let Ok(etag) = etag.to_str() else {
+        return false;
+    };
+    candidates.split(',').map(str::trim).any(|candidate| {
+        candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == etag
+    })
 }
 
 /// Process-wide cache of pre-serialized package bodies, keyed by meet + cutoff.
@@ -101,13 +133,14 @@ const MAX_PACKAGE_CACHE_ENTRIES: usize = 32;
 const MAX_PACKAGE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CACHED_PACKAGE_BYTES: usize = 8 * 1024 * 1024;
 
-fn cached_package(key: &str) -> Option<Bytes> {
+fn cached_package(key: &str) -> Option<(Bytes, HeaderValue)> {
     let cache = PACKAGE_CACHE.read().ok()?;
     let entry = cache.get(key)?;
-    (entry.inserted.elapsed() < *PACKAGE_CACHE_TTL).then(|| entry.body.clone())
+    (entry.inserted.elapsed() < *PACKAGE_CACHE_TTL)
+        .then(|| (entry.body.clone(), entry.etag.clone()))
 }
 
-fn store_package(key: &str, body: Bytes) {
+fn store_package(key: &str, body: Bytes, etag: HeaderValue) {
     if body.len() > MAX_CACHED_PACKAGE_BYTES {
         return;
     }
@@ -131,6 +164,7 @@ fn store_package(key: &str, body: Bytes) {
             key.to_string(),
             CachedPackage {
                 body,
+                etag,
                 inserted: Instant::now(),
             },
         );
@@ -152,7 +186,11 @@ mod cache_tests {
         let _serialized = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         PACKAGE_CACHE.write().unwrap().clear();
         for index in 0..(MAX_PACKAGE_CACHE_ENTRIES + 5) {
-            store_package(&format!("meet-{index}"), Bytes::from_static(b"{}"));
+            store_package(
+                &format!("meet-{index}"),
+                Bytes::from_static(b"{}"),
+                package_etag(b"{}"),
+            );
         }
         assert_eq!(
             PACKAGE_CACHE.read().unwrap().len(),
@@ -168,13 +206,31 @@ mod cache_tests {
         store_package(
             "oversized",
             Bytes::from(vec![0; MAX_CACHED_PACKAGE_BYTES + 1]),
+            package_etag(b"oversized"),
         );
         assert!(!PACKAGE_CACHE.read().unwrap().contains_key("oversized"));
     }
 }
 
-fn package_response(body: Bytes) -> Response {
-    ([(header::CONTENT_TYPE, "application/json")], body).into_response()
+fn package_response(
+    body: Bytes,
+    etag: HeaderValue,
+    if_none_match: Option<&HeaderValue>,
+) -> Response {
+    if etag_matches(if_none_match, &etag) {
+        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
+    }
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            ),
+            (header::ETAG, etag),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 #[derive(Debug, Serialize)]
@@ -418,8 +474,10 @@ struct AthletePackageRow {
 /// }
 pub async fn get_meet_package(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<MeetPackageParams>,
 ) -> Result<Response, AppError> {
+    let if_none_match = headers.get(header::IF_NONE_MATCH);
     crate::common::query::require_non_empty("meet", &params.meet)?;
     crate::common::query::require_iso_date(
         "history_cutoff_date",
@@ -431,8 +489,8 @@ pub async fn get_meet_package(
         params.meet,
         params.history_cutoff_date.as_deref().unwrap_or("")
     );
-    if let Some(body) = cached_package(&cache_key) {
-        return Ok(package_response(body));
+    if let Some((body, etag)) = cached_package(&cache_key) {
+        return Ok(package_response(body, etag, if_none_match));
     }
 
     let meet = sqlx::query_as::<_, PackageMeet>(
@@ -555,8 +613,9 @@ pub async fn get_meet_package(
     };
 
     let body = Bytes::from(serde_json::to_vec(&package).map_err(anyhow::Error::from)?);
-    store_package(&cache_key, body.clone());
-    Ok(package_response(body))
+    let etag = package_etag(&body);
+    store_package(&cache_key, body.clone(), etag.clone());
+    Ok(package_response(body, etag, if_none_match))
 }
 
 fn build_schedule(rows: Vec<ScheduleRow>) -> Vec<PackageScheduleDay> {
@@ -1556,5 +1615,52 @@ mod tests {
             serde_json::to_string(&reference::build_attempt_estimates_reference(&[], &history))
                 .unwrap(),
         );
+    }
+}
+
+#[cfg(test)]
+mod etag_tests {
+    use super::*;
+
+    #[test]
+    fn etag_is_a_quoted_sha256_of_the_exact_body() {
+        let tag = package_etag(b"{}");
+        let text = tag.to_str().unwrap();
+        assert!(text.starts_with('"') && text.ends_with('"'));
+        assert_eq!(text.len(), 66);
+        assert_eq!(package_etag(b"{}"), tag);
+        assert_ne!(package_etag(b"{ }"), tag);
+    }
+
+    #[test]
+    fn if_none_match_accepts_exact_weak_and_star_but_nothing_else() {
+        let tag = package_etag(b"body");
+        let hv = |value: &str| HeaderValue::from_str(value).unwrap();
+        assert!(etag_matches(Some(&tag), &tag));
+        assert!(etag_matches(
+            Some(&hv(&format!("W/{}", tag.to_str().unwrap()))),
+            &tag
+        ));
+        assert!(etag_matches(
+            Some(&hv(&format!("\"other\", {}", tag.to_str().unwrap()))),
+            &tag
+        ));
+        assert!(etag_matches(Some(&hv("*")), &tag));
+        assert!(!etag_matches(Some(&hv("\"other\"")), &tag));
+        assert!(!etag_matches(None, &tag));
+        assert!(!etag_matches(Some(&package_etag(b"other body")), &tag));
+    }
+
+    #[test]
+    fn matching_validator_short_circuits_to_304_without_a_body() {
+        let body = Bytes::from_static(b"{\"meet\":1}");
+        let tag = package_etag(&body);
+        let response = package_response(body.clone(), tag.clone(), Some(&tag));
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(header::ETAG), Some(&tag));
+
+        let response = package_response(body, tag.clone(), None);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get(header::ETAG), Some(&tag));
     }
 }

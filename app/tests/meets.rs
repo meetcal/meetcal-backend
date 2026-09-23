@@ -268,3 +268,67 @@ async fn empty_meet_package_query_is_rejected() {
         .unwrap();
     assert_eq!(response.status(), 400);
 }
+
+// `/meets/package` conditional requests: the body carries a strong ETag, and a
+// matching `If-None-Match` answers `304` with no body.
+
+const PACKAGE_URL: &str = "/meets/package?meet=2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness&history_cutoff_date=2024-01-01";
+
+#[tokio::test]
+async fn package_revalidates_with_etag() {
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+
+    let first = client
+        .get(format!("{}{PACKAGE_URL}", app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), 200);
+    let etag = first
+        .headers()
+        .get(reqwest::header::ETAG)
+        .expect("package carries an ETag")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(etag.starts_with('"') && etag.ends_with('"'), "{etag}");
+    let body = first.bytes().await.unwrap();
+    assert!(!body.is_empty());
+
+    let revalidate = client
+        .get(format!("{}{PACKAGE_URL}", app.address))
+        .header(reqwest::header::IF_NONE_MATCH, &etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revalidate.status(), 304);
+    assert_eq!(
+        revalidate
+            .headers()
+            .get(reqwest::header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        etag
+    );
+    assert!(revalidate.bytes().await.unwrap().is_empty());
+
+    let stale = client
+        .get(format!("{}{PACKAGE_URL}", app.address))
+        .header(reqwest::header::IF_NONE_MATCH, "\"not-the-etag\"")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), 200);
+    assert_eq!(
+        stale
+            .headers()
+            .get(reqwest::header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        etag,
+        "same body, same validator"
+    );
+}

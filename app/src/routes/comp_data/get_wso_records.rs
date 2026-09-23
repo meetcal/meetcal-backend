@@ -1,4 +1,4 @@
-use crate::common::sort::sort_by_class;
+use crate::common::{client::ClientVersion, sort::sort_by_class};
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::{Query, State};
@@ -69,8 +69,10 @@ pub struct WsoRecord {
 /// ]
 pub async fn get_wso_records(
     State(state): State<AppState>,
+    client: ClientVersion,
     Query(params): Query<WsoRecordParams>,
 ) -> Result<Json<Vec<WsoRecord>>, AppError> {
+    client.require_non_empty("wso", &params.wso)?;
     let rows = sqlx::query_as::<_, WsoRecord>(
         r#"
         SELECT age_category, cj_record, snatch_record, total_record, weight_class, gender, wso
@@ -104,8 +106,10 @@ pub async fn get_wso_records(
 /// ]
 pub async fn get_wso_age_groups(
     State(state): State<AppState>,
+    client: ClientVersion,
     Query(params): Query<WsoAgeGroupsParams>,
 ) -> Result<Json<Vec<String>>, AppError> {
+    client.require_non_empty("wso", &params.wso)?;
     let rows: Vec<(String,)> = sqlx::query_as(
         r#"
         SELECT DISTINCT age_category

@@ -15,9 +15,11 @@ use crate::routes::{
     },
     lifting_results::{
         get_lifting_results::get_lifting_results,
-        get_results_2yrs::get_results_2yrs,
-        get_results_by_names::get_results_by_names,
-        get_results_current_year::{get_results_bests, get_results_current_year},
+        get_results_2yrs::{get_results_2yrs, post_results_2yrs},
+        get_results_by_names::{get_results_by_names, post_results_by_names},
+        get_results_current_year::{
+            get_results_bests, get_results_current_year, post_results_bests,
+        },
     },
     meets::get_sessions_for_athletes::get_sessions_for_athletes,
     results::search::search_wrapped,
@@ -134,10 +136,19 @@ pub async fn run_with_auth(
         .route("/meets/athletes", get(get_athletes_by_meet))
         .route("/meets/athletes-sessions", get(get_sessions_for_athletes))
         .route("/lifting-results", get(get_lifting_results))
-        .route("/lifting-results/by-names", get(get_results_by_names))
-        .route("/lifting-results/recent", get(get_results_2yrs))
+        .route(
+            "/lifting-results/by-names",
+            get(get_results_by_names).post(post_results_by_names),
+        )
+        .route(
+            "/lifting-results/recent",
+            get(get_results_2yrs).post(post_results_2yrs),
+        )
         .route("/lifting-results/year", get(get_results_current_year))
-        .route("/lifting-results/bests", get(get_results_bests))
+        .route(
+            "/lifting-results/bests",
+            get(get_results_bests).post(post_results_bests),
+        )
         .route("/search", get(search_wrapped))
         .route(
             "/users/me/saved-sessions",

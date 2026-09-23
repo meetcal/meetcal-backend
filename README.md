@@ -81,7 +81,7 @@ The server listens on `http://127.0.0.1:3000` by default.
 | ------ | -------------------- | --------------------------------- |
 | `GET`  | `/meets`             | Upcoming meets (next 3 months)    |
 | `GET`  | `/meet-details`      | Single meet metadata              |
-| `GET`  | `/meets/package`     | Selected meet data package        |
+| `GET`  | `/meets/package`     | Selected meet data package (`ETag` / `If-None-Match` → `304`) |
 | `GET`  | `/meets/schedule`    | Session schedule for a meet       |
 | `GET`  | `/meets/athletes`    | Start list with session timing    |
 | `GET`  | `/clubs`             | Club directory                    |
@@ -94,6 +94,10 @@ The server listens on `http://127.0.0.1:3000` by default.
 | `GET`  | `/nat-rankings`      | National rankings                 |
 | `GET`  | `/adaptive`          | Adaptive division records         |
 | `GET`  | `/search`            | Result search                     |
+| `GET` `POST` | `/lifting-results/by-names` | Full history for a list of names (`POST {"names": [...]}`) |
+| `GET` `POST` | `/lifting-results/recent` | History since `cutoff_date` for a list of names |
+| `GET`  | `/lifting-results/year` | Best lifts for one name since `cutoff_date` |
+| `GET` `POST` | `/lifting-results/bests` | Best lifts since `cutoff_date`, keyed by requested name |
 | `GET`  | `/users/me/saved-sessions` | Saved sessions for authenticated user |
 | `PUT`  | `/users/me/saved-sessions/{session_id}` | Upsert saved session |
 | `DELETE` | `/users/me/saved-sessions/{session_id}` | Delete saved session |
@@ -104,6 +108,8 @@ The server listens on `http://127.0.0.1:3000` by default.
 | `POST` | `/scrapers/slack/interactions` | Slack Approve/Reject buttons for staged meet uploads |
 
 Responses are gzip- and Brotli-compressed.
+
+The mobile app sends `X-MeetCal-App: <major.minor.patch>`. Clients at or above the version in `app/src/common/client.rs` opt into fail-closed validation (`400` on a blank `wso`, a missing or malformed `cutoff_date`, or malformed search dates); older or absent headers get the legacy behaviour, so shipped builds keep working across a rollout.
 
 ### Slack control surfaces (scraper lists + approvals)
 
