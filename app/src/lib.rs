@@ -148,6 +148,8 @@ pub async fn run_with_auth(
     // One span per request carrying method, path, and the declared app
     // version (which decides strict-vs-legacy validation), closed with the
     // status and latency at INFO. Failures (5xx) log at ERROR by default.
+    // The path only: query strings carry athlete names (`?names=`, `?name=`,
+    // `?query=`), which stay out of the logs.
     let trace = TraceLayer::new_for_http()
         .make_span_with(|request: &Request| {
             let client = request
@@ -158,7 +160,7 @@ pub async fn run_with_auth(
             tracing::info_span!(
                 "request",
                 method = %request.method(),
-                uri = %request.uri(),
+                path = %request.uri().path(),
                 client = client
             )
         })
