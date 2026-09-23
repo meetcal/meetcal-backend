@@ -21,12 +21,20 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::now_unix_secs;
 use super::signature;
+use super::{now_unix_secs, write_json_request};
 use crate::AppState;
 
 const ACTION_APPROVE: &str = "meet_approve";
 const ACTION_REJECT: &str = "meet_reject";
+
+/// Longest run id accepted from a button click. Real ids are
+/// `<watch-key>-<YYYYMMDD>-<HHMMSS>` (well under 100 chars); the cap keeps a
+/// hostile `value` from becoming an absurd filename in the decisions dir.
+const MAX_RUN_ID_LEN: usize = 200;
+/// Ceiling on the best-effort `response_url` message update. Slack's own
+/// slash-command budget is 3s, so a slow edit must not outlive the request.
+const SLACK_RESPONSE_URL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Deserialize, Default)]
 struct InteractionForm {
@@ -128,23 +136,17 @@ fn write_decision(
     if !is_safe_run_id(run_id) {
         return Err("invalid run id".to_string());
     }
-    let dir = state.slack.decisions_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
     let body = json!({
         "decision": decision,
         "user_id": user_id,
         "user_name": user_name,
         "decided_at_unix": now_unix_secs(),
     });
-    let path = dir.join(format!("{run_id}.json"));
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(
-        &tmp,
-        serde_json::to_vec_pretty(&body).map_err(|e| e.to_string())?,
+    write_json_request(
+        &state.slack.decisions_dir(),
+        &format!("{run_id}.json"),
+        &body,
     )
-    .map_err(|e| format!("write: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
-    Ok(())
 }
 
 /// Replace the original Slack message (instant feedback). Best-effort.
@@ -154,14 +156,14 @@ async fn update_message(response_url: Option<String>, text: &str) {
     let _ = client
         .post(url)
         .json(&json!({ "replace_original": true, "text": text }))
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(SLACK_RESPONSE_URL_TIMEOUT)
         .send()
         .await;
 }
 
 fn is_safe_run_id(run_id: &str) -> bool {
     !run_id.is_empty()
-        && run_id.len() <= 200
+        && run_id.len() <= MAX_RUN_ID_LEN
         // Reject `.`/`..` outright: with the `.json` suffix they can't escape the
         // decisions dir, but they're never valid run ids and shouldn't write a file.
         && run_id != "."
@@ -183,5 +185,8 @@ mod tests {
         assert!(!is_safe_run_id(".."));
         assert!(!is_safe_run_id("../../etc/passwd"));
         assert!(!is_safe_run_id("a/b"));
+        // Max: one character past the declared ceiling is rejected.
+        assert!(is_safe_run_id(&"a".repeat(MAX_RUN_ID_LEN)));
+        assert!(!is_safe_run_id(&"a".repeat(MAX_RUN_ID_LEN + 1)));
     }
 }

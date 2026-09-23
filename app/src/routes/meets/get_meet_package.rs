@@ -1,4 +1,8 @@
-use crate::{AppError, AppState, common::names::normalize_name};
+use crate::{
+    AppError, AppState,
+    common::names::{normalize_name, normalized_name_sql},
+    routes::results::types::{best_lifts_columns, lifting_result_columns},
+};
 use axum::{
     body::Bytes,
     extract::{Query, State},
@@ -23,13 +27,67 @@ pub struct MeetPackageParams {
 /// The package is effectively static during a meet weekend: schedule, roster,
 /// attempt estimates, and history are all fixed beforehand, and this meet's own
 /// results (`meet_results`) aren't scraped in until ~1 week after the meet ends.
+const DEFAULT_PACKAGE_CACHE_TTL_SECS: u64 = 60 * 60;
 static PACKAGE_CACHE_TTL: LazyLock<Duration> = LazyLock::new(|| {
     let secs = std::env::var("APP_PACKAGE_CACHE_TTL_SECS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(3600);
+        .unwrap_or(DEFAULT_PACKAGE_CACHE_TTL_SECS);
     Duration::from_secs(secs)
 });
+
+/// `lifting_results` rows carry their identity into the package so the mobile
+/// app can dedupe across screens; the rest of the projection is the shared one.
+const MEET_RESULTS_SQL: &str = concat!(
+    r#"
+        SELECT
+            id,
+            event_id,
+            "#,
+    lifting_result_columns!(),
+    r#"
+        FROM lifting_results
+        WHERE meet = $1
+        ORDER BY name, date DESC
+        "#
+);
+
+const ATHLETE_HISTORY_SQL: &str = concat!(
+    r#"
+        SELECT
+            id,
+            event_id,
+            "#,
+    lifting_result_columns!(),
+    r#"
+        FROM lifting_results
+        WHERE "#,
+    normalized_name_sql!(),
+    r#" = ANY($1::text[])
+            AND date >= $2
+        ORDER BY name, date DESC
+        "#
+);
+
+const YEAR_BESTS_BY_NAME_SQL: &str = concat!(
+    r#"
+        SELECT
+            "#,
+    normalized_name_sql!(),
+    r#" AS name,
+            "#,
+    best_lifts_columns!(),
+    r#"
+        FROM lifting_results
+        WHERE "#,
+    normalized_name_sql!(),
+    r#" = ANY($1::text[])
+            AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
+        GROUP BY "#,
+    normalized_name_sql!(),
+    r#"
+        "#
+);
 
 struct CachedPackage {
     body: Bytes,
@@ -79,49 +137,19 @@ fn store_package(key: &str, body: Bytes) {
     }
 }
 
-fn is_valid_iso_date(value: &str) -> bool {
-    let mut parts = value.split('-');
-    let (Some(year), Some(month), Some(day), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
-        return false;
-    };
-    if year.len() != 4 || month.len() != 2 || day.len() != 2 {
-        return false;
-    }
-    let (Ok(year), Ok(month), Ok(day)) = (
-        year.parse::<u32>(),
-        month.parse::<u32>(),
-        day.parse::<u32>(),
-    ) else {
-        return false;
-    };
-    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
-    let days = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if leap => 29,
-        2 => 28,
-        _ => return false,
-    };
-    (1..=days).contains(&day)
-}
-
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+    use std::sync::Mutex;
 
-    #[test]
-    fn validates_real_iso_dates() {
-        assert!(is_valid_iso_date("2024-02-29"));
-        assert!(is_valid_iso_date("2026-08-23"));
-        assert!(!is_valid_iso_date("2025-02-29"));
-        assert!(!is_valid_iso_date("2026-13-01"));
-        assert!(!is_valid_iso_date("not-a-date"));
-    }
+    /// `PACKAGE_CACHE` is process-wide, so the tests that clear and fill it
+    /// cannot run concurrently: one clearing the cache mid-fill makes the
+    /// other's count assertion fail. Serialize them.
+    static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn package_cache_never_exceeds_entry_limit() {
+        let _serialized = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         PACKAGE_CACHE.write().unwrap().clear();
         for index in 0..(MAX_PACKAGE_CACHE_ENTRIES + 5) {
             store_package(&format!("meet-{index}"), Bytes::from_static(b"{}"));
@@ -135,6 +163,7 @@ mod cache_tests {
 
     #[test]
     fn oversized_packages_are_not_cached() {
+        let _serialized = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         PACKAGE_CACHE.write().unwrap().clear();
         store_package(
             "oversized",
@@ -316,9 +345,11 @@ struct AttemptData {
 }
 
 #[derive(Debug)]
-struct TempAttemptEstimate {
+struct TempAttemptEstimate<'a> {
     athlete: PackageAthlete,
-    history: Vec<PackageLiftingResult>,
+    /// Borrowed slice out of [`HistoryByName`]; the rows themselves are owned
+    /// by the caller's `history_rows` and are never cloned per athlete.
+    history: &'a [&'a PackageLiftingResult],
     best_snatch: Option<f64>,
     best_cj: Option<f64>,
     avg_snatch_increase: AttemptIncrease,
@@ -390,13 +421,10 @@ pub async fn get_meet_package(
     Query(params): Query<MeetPackageParams>,
 ) -> Result<Response, AppError> {
     crate::common::query::require_non_empty("meet", &params.meet)?;
-    if let Some(cutoff) = params.history_cutoff_date.as_deref()
-        && !is_valid_iso_date(cutoff)
-    {
-        return Err(AppError::Validation(
-            "history_cutoff_date must be a valid YYYY-MM-DD date".to_string(),
-        ));
-    }
+    crate::common::query::require_iso_date(
+        "history_cutoff_date",
+        params.history_cutoff_date.as_deref(),
+    )?;
 
     let cache_key = format!(
         "{}|{}",
@@ -474,35 +502,10 @@ pub async fn get_meet_package(
     .fetch_all(&state.db)
     .await?;
 
-    let meet_results = sqlx::query_as::<_, PackageLiftingResult>(
-        r#"
-        SELECT
-            id,
-            event_id,
-            COALESCE(federation, '') AS federation,
-            meet,
-            date,
-            name,
-            COALESCE(age, '') AS age,
-            COALESCE(body_weight, 0) AS body_weight,
-            COALESCE(snatch1, 0) AS snatch1,
-            COALESCE(snatch2, 0) AS snatch2,
-            COALESCE(snatch3, 0) AS snatch3,
-            COALESCE(snatch_best, 0) AS snatch_best,
-            COALESCE(cj1, 0) AS cj1,
-            COALESCE(cj2, 0) AS cj2,
-            COALESCE(cj3, 0) AS cj3,
-            COALESCE(cj_best, 0) AS cj_best,
-            COALESCE(total, 0) AS total,
-            adaptive
-        FROM lifting_results
-        WHERE meet = $1
-        ORDER BY name, date DESC
-        "#,
-    )
-    .bind(&params.meet)
-    .fetch_all(&state.db)
-    .await?;
+    let meet_results = sqlx::query_as::<_, PackageLiftingResult>(MEET_RESULTS_SQL)
+        .bind(&params.meet)
+        .fetch_all(&state.db)
+        .await?;
 
     let athlete_names: Vec<String> = athletes
         .iter()
@@ -519,40 +522,14 @@ pub async fn get_meet_package(
         let history_rows = if athlete_names.is_empty() {
             Vec::new()
         } else {
-            sqlx::query_as::<_, PackageLiftingResult>(
-                r#"
-                    SELECT
-                        id,
-                        event_id,
-                        COALESCE(federation, '') AS federation,
-                        meet,
-                        date,
-                        name,
-                        COALESCE(age, '') AS age,
-                        COALESCE(body_weight, 0) AS body_weight,
-                        COALESCE(snatch1, 0) AS snatch1,
-                        COALESCE(snatch2, 0) AS snatch2,
-                        COALESCE(snatch3, 0) AS snatch3,
-                        COALESCE(snatch_best, 0) AS snatch_best,
-                        COALESCE(cj1, 0) AS cj1,
-                        COALESCE(cj2, 0) AS cj2,
-                        COALESCE(cj3, 0) AS cj3,
-                        COALESCE(cj_best, 0) AS cj_best,
-                        COALESCE(total, 0) AS total,
-                        adaptive
-                    FROM lifting_results
-                    WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
-                        AND date >= $2
-                    ORDER BY name, date DESC
-                    "#,
-            )
-            .bind(&normalized_athlete_names)
-            .bind(cutoff_date)
-            .fetch_all(&state.db)
-            .await?
+            sqlx::query_as::<_, PackageLiftingResult>(ATHLETE_HISTORY_SQL)
+                .bind(&normalized_athlete_names)
+                .bind(cutoff_date)
+                .fetch_all(&state.db)
+                .await?
         };
 
-        let (recent_results_by_name, _) = build_history_maps(&athlete_names, history_rows.clone());
+        let recent_results_by_name = build_recent_results_by_name(&athlete_names, &history_rows);
         (recent_results_by_name, history_rows)
     } else {
         (BTreeMap::new(), Vec::new())
@@ -626,10 +603,34 @@ fn build_schedule(rows: Vec<ScheduleRow>) -> Vec<PackageScheduleDay> {
     days
 }
 
+/// History rows bucketed by [`normalize_name`] of the lifter's name, in the
+/// order they arrived from Postgres.
+type HistoryByName<'a> = HashMap<String, Vec<&'a PackageLiftingResult>>;
+
+/// Normalizes each history row's name exactly once.
+///
+/// The per-athlete lookup used to re-scan and re-normalize every history row,
+/// which is `athletes x history` normalizations and String allocations per
+/// cache miss. Bucketing first makes it `history` normalizations plus one hash
+/// lookup per athlete. Rows keep their arrival order inside a bucket, which is
+/// the order the old `filter` produced, so every downstream average, best, and
+/// make-rate sees the same sequence of rows.
+fn index_history_by_name(history_rows: &[PackageLiftingResult]) -> HistoryByName<'_> {
+    let mut by_name: HistoryByName<'_> = HashMap::new();
+    for row in history_rows {
+        by_name
+            .entry(normalize_name(&row.name))
+            .or_default()
+            .push(row);
+    }
+    by_name
+}
+
 fn build_attempt_estimates(
     athletes: &[PackageAthlete],
     history_rows: &[PackageLiftingResult],
 ) -> Vec<PackageAttemptEstimateSession> {
+    let history_by_name = index_history_by_name(history_rows);
     let mut sessions: Vec<PackageAttemptEstimateSession> = Vec::new();
 
     for athlete in athletes {
@@ -655,7 +656,7 @@ fn build_attempt_estimates(
     }
 
     for session in &mut sessions {
-        let session_athletes: Vec<PackageAthlete> = athletes
+        let session_athletes: Vec<&PackageAthlete> = athletes
             .iter()
             .filter(|athlete| {
                 athlete.session.as_ref().is_some_and(|athlete_session| {
@@ -663,9 +664,8 @@ fn build_attempt_estimates(
                         && athlete_session.session_platform == session.platform
                 })
             })
-            .cloned()
             .collect();
-        session.estimates = build_session_attempt_estimates(&session_athletes, history_rows);
+        session.estimates = build_session_attempt_estimates(&session_athletes, &history_by_name);
     }
 
     sessions.sort_by(|a, b| {
@@ -676,28 +676,45 @@ fn build_attempt_estimates(
     sessions
 }
 
+/// Attempt-estimator coefficients. Each one appeared as a bare literal at two
+/// or three call sites, so a tuning change had to be applied in every copy;
+/// they are declared once here with their unit.
+///
+/// An opener is planned at 93% of the reference lift (historical best, or the
+/// declared entry total when there is no history). An entry total is split
+/// 43% snatch / 57% clean & jerk. With no history to average, attempts step by
+/// the default jump for the lift.
+const OPENER_SHARE_OF_BEST: f64 = 0.93;
+const SNATCH_SHARE_OF_TOTAL: f64 = 0.43;
+const CJ_SHARE_OF_TOTAL: f64 = 0.57;
+const DEFAULT_SNATCH_JUMP_KG: f64 = 3.0;
+const DEFAULT_CJ_JUMP_KG: f64 = 4.0;
+
 fn build_session_attempt_estimates(
-    athletes: &[PackageAthlete],
-    history_rows: &[PackageLiftingResult],
+    athletes: &[&PackageAthlete],
+    history_by_name: &HistoryByName<'_>,
 ) -> Vec<PackageAttemptEstimate> {
-    let mut temp_estimates = Vec::new();
+    let mut temp_estimates = Vec::with_capacity(athletes.len());
 
     for athlete in athletes {
-        let normalized_name = normalize_name(&athlete.name);
-        let history: Vec<PackageLiftingResult> = history_rows
-            .iter()
-            .filter(|row| normalize_name(&row.name) == normalized_name)
-            .cloned()
-            .collect();
+        let history: &[&PackageLiftingResult] = history_by_name
+            .get(&normalize_name(&athlete.name))
+            .map_or(&[], Vec::as_slice);
 
-        let best_snatch = history.iter().filter_map(snatch_best).reduce(f64::max);
-        let best_cj = history.iter().filter_map(cj_best).reduce(f64::max);
-        let avg_snatch_increase = calculate_average_increase(&history, LiftType::Snatch);
-        let avg_cj_increase = calculate_average_increase(&history, LiftType::CleanAndJerk);
-        let (snatch_make_rate, cj_make_rate) = calculate_make_rates(&history);
+        let best_snatch = history
+            .iter()
+            .filter_map(|row| snatch_best(row))
+            .reduce(f64::max);
+        let best_cj = history
+            .iter()
+            .filter_map(|row| cj_best(row))
+            .reduce(f64::max);
+        let avg_snatch_increase = calculate_average_increase(history, LiftType::Snatch);
+        let avg_cj_increase = calculate_average_increase(history, LiftType::CleanAndJerk);
+        let (snatch_make_rate, cj_make_rate) = calculate_make_rates(history);
 
         temp_estimates.push(TempAttemptEstimate {
-            athlete: athlete.clone(),
+            athlete: (*athlete).clone(),
             history,
             best_snatch,
             best_cj,
@@ -713,14 +730,14 @@ fn build_session_attempt_estimates(
             .iter()
             .filter(|estimate| estimate.best_snatch.is_some())
             .map(|estimate| estimate.avg_snatch_increase),
-        3.0,
+        DEFAULT_SNATCH_JUMP_KG,
     );
     let session_avg_cj = session_average_increase(
         temp_estimates
             .iter()
             .filter(|estimate| estimate.best_cj.is_some())
             .map(|estimate| estimate.avg_cj_increase),
-        4.0,
+        DEFAULT_CJ_JUMP_KG,
     );
 
     let mut estimates: Vec<PackageAttemptEstimate> = temp_estimates
@@ -731,8 +748,8 @@ fn build_session_attempt_estimates(
                 estimate.avg_snatch_increase,
                 session_avg_snatch,
                 estimate.athlete.entry_total,
-                0.43,
-                3.0,
+                SNATCH_SHARE_OF_TOTAL,
+                DEFAULT_SNATCH_JUMP_KG,
                 estimate.snatch_make_rate,
             );
             let clean_and_jerk = estimate_lift(
@@ -740,8 +757,8 @@ fn build_session_attempt_estimates(
                 estimate.avg_cj_increase,
                 session_avg_cj,
                 estimate.athlete.entry_total,
-                0.57,
-                4.0,
+                CJ_SHARE_OF_TOTAL,
+                DEFAULT_CJ_JUMP_KG,
                 estimate.cj_make_rate,
             );
 
@@ -782,7 +799,7 @@ fn estimate_lift(
     make_rate: f64,
 ) -> PackageLiftAttemptEstimate {
     if let Some(best) = historical_best {
-        let first_attempt = (best * 0.93).round();
+        let first_attempt = (best * OPENER_SHARE_OF_BEST).round();
         let second_attempt = first_attempt + athlete_average_increase.first_to_second;
         let third_attempt = second_attempt + athlete_average_increase.second_to_third;
         return PackageLiftAttemptEstimate {
@@ -796,7 +813,7 @@ fn estimate_lift(
     }
 
     if entry_total > 0.0 {
-        let estimated_total = (entry_total * 0.93).round();
+        let estimated_total = (entry_total * OPENER_SHARE_OF_BEST).round();
         let first_attempt = (estimated_total * total_ratio).round();
         let second_attempt = first_attempt + session_average_increase.first_to_second;
         let third_attempt = second_attempt + session_average_increase.second_to_third;
@@ -885,7 +902,7 @@ fn attempts_out_before_first_attempt(attempts: &[AttemptData], athlete_id: &str)
 }
 
 fn calculate_average_increase(
-    results: &[PackageLiftingResult],
+    results: &[&PackageLiftingResult],
     lift_type: LiftType,
 ) -> AttemptIncrease {
     let mut first_to_second = Vec::new();
@@ -906,8 +923,8 @@ fn calculate_average_increase(
     }
 
     let default_jump = match lift_type {
-        LiftType::Snatch => 3.0,
-        LiftType::CleanAndJerk => 4.0,
+        LiftType::Snatch => DEFAULT_SNATCH_JUMP_KG,
+        LiftType::CleanAndJerk => DEFAULT_CJ_JUMP_KG,
     };
 
     AttemptIncrease {
@@ -951,14 +968,14 @@ fn rounded_average(values: &[f64], default_value: f64) -> f64 {
     (values.iter().sum::<f64>() / values.len() as f64).round()
 }
 
-fn calculate_make_rates(results: &[PackageLiftingResult]) -> (f64, f64) {
+fn calculate_make_rates(results: &[&PackageLiftingResult]) -> (f64, f64) {
     (
         calculate_lift_make_rate(results, LiftType::Snatch),
         calculate_lift_make_rate(results, LiftType::CleanAndJerk),
     )
 }
 
-fn calculate_lift_make_rate(results: &[PackageLiftingResult], lift_type: LiftType) -> f64 {
+fn calculate_lift_make_rate(results: &[&PackageLiftingResult], lift_type: LiftType) -> f64 {
     let mut openers_declared = 0;
     let mut openers_made = 0;
 
@@ -1001,31 +1018,18 @@ fn max_successful(values: [f64; 4]) -> Option<f64> {
     if best > 0.0 { Some(best) } else { None }
 }
 
-fn build_history_maps(
+/// Groups history rows under each requested athlete name. Year bests come from
+/// [`fetch_year_bests_by_name`], which uses its own one-year window rather than
+/// the caller's history cutoff.
+fn build_recent_results_by_name(
     athlete_names: &[String],
-    rows: Vec<PackageLiftingResult>,
-) -> (
-    BTreeMap<String, Vec<PackageLiftingResult>>,
-    BTreeMap<String, YearBests>,
-) {
+    rows: &[PackageLiftingResult],
+) -> BTreeMap<String, Vec<PackageLiftingResult>> {
     let requested_by_normalized = requested_names_by_normalized(athlete_names);
 
     let mut recent_results_by_name: BTreeMap<String, Vec<PackageLiftingResult>> = athlete_names
         .iter()
         .map(|name| (name.clone(), Vec::new()))
-        .collect();
-    let mut bests_by_name: HashMap<String, YearBests> = athlete_names
-        .iter()
-        .map(|name| {
-            (
-                name.clone(),
-                YearBests {
-                    best_snatch: 0.0,
-                    best_cj: 0.0,
-                    best_total: 0.0,
-                },
-            )
-        })
         .collect();
 
     for row in rows {
@@ -1037,26 +1041,6 @@ fn build_history_maps(
         };
 
         for requested in requested_names {
-            let bests = bests_by_name
-                .entry(requested.clone())
-                .or_insert_with(|| YearBests {
-                    best_snatch: 0.0,
-                    best_cj: 0.0,
-                    best_total: 0.0,
-                });
-
-            bests.best_snatch = bests.best_snatch.max(max_positive([
-                row.snatch_best,
-                row.snatch1,
-                row.snatch2,
-                row.snatch3,
-            ]));
-            bests.best_cj =
-                bests
-                    .best_cj
-                    .max(max_positive([row.cj_best, row.cj1, row.cj2, row.cj3]));
-            bests.best_total = bests.best_total.max(row.total.max(0.0));
-
             recent_results_by_name
                 .entry(requested.clone())
                 .or_default()
@@ -1064,9 +1048,7 @@ fn build_history_maps(
         }
     }
 
-    let year_bests_by_name = bests_by_name.into_iter().collect();
-
-    (recent_results_by_name, year_bests_by_name)
+    recent_results_by_name
 }
 
 /// Builds a lookup from normalized name to the requested display name(s) that
@@ -1103,32 +1085,10 @@ async fn fetch_year_bests_by_name(
 
     let requested_by_normalized = requested_names_by_normalized(athlete_names);
 
-    let rows = sqlx::query_as::<_, YearBestsByNameRow>(
-        r#"
-        SELECT
-            lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) AS name,
-            COALESCE(MAX(GREATEST(
-                COALESCE(snatch_best, 0),
-                COALESCE(snatch1, 0),
-                COALESCE(snatch2, 0),
-                COALESCE(snatch3, 0)
-            )), 0) AS best_snatch,
-            COALESCE(MAX(GREATEST(
-                COALESCE(cj_best, 0),
-                COALESCE(cj1, 0),
-                COALESCE(cj2, 0),
-                COALESCE(cj3, 0)
-            )), 0) AS best_cj,
-            COALESCE(MAX(COALESCE(total, 0)), 0) AS best_total
-        FROM lifting_results
-        WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
-            AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
-        GROUP BY lower(btrim(regexp_replace(name, '\s+', ' ', 'g')))
-        "#,
-    )
-    .bind(normalized_athlete_names)
-    .fetch_all(&state.db)
-    .await?;
+    let rows = sqlx::query_as::<_, YearBestsByNameRow>(YEAR_BESTS_BY_NAME_SQL)
+        .bind(normalized_athlete_names)
+        .fetch_all(&state.db)
+        .await?;
 
     for row in rows {
         let Some(requested_names) = requested_by_normalized.get(&row.name) else {
@@ -1154,6 +1114,184 @@ fn max_positive(values: [f64; 4]) -> f64 {
         .into_iter()
         .filter(|value| *value > 0.0)
         .fold(0.0, f64::max)
+}
+
+/// Pre-optimization implementations of [`build_attempt_estimates`] and
+/// [`build_session_attempt_estimates`], kept as the regression oracle for
+/// `attempt_estimates_match_pre_index_reference`.
+///
+/// They are the original control flow verbatim: the per-athlete history is
+/// found by rescanning and re-normalizing every history row, which is the
+/// O(athletes x history) cost `index_history_by_name` removed. Only the
+/// container changed (owned row clones -> borrows), which cannot affect
+/// output; every comparison, average, sort key, and tie-break is the original.
+/// If a future change to the fast path alters ordering or rounding, the
+/// equivalence test fails.
+#[cfg(test)]
+mod reference {
+    use super::*;
+
+    struct RefTempEstimate<'a> {
+        athlete: PackageAthlete,
+        history: Vec<&'a PackageLiftingResult>,
+        best_snatch: Option<f64>,
+        best_cj: Option<f64>,
+        avg_snatch_increase: AttemptIncrease,
+        avg_cj_increase: AttemptIncrease,
+        snatch_make_rate: f64,
+        cj_make_rate: f64,
+    }
+
+    pub(super) fn build_attempt_estimates_reference(
+        athletes: &[PackageAthlete],
+        history_rows: &[PackageLiftingResult],
+    ) -> Vec<PackageAttemptEstimateSession> {
+        let mut sessions: Vec<PackageAttemptEstimateSession> = Vec::new();
+
+        for athlete in athletes {
+            let Some(session) = athlete.session.as_ref() else {
+                continue;
+            };
+
+            let session_exists = sessions.iter().any(|estimate_session| {
+                estimate_session.session_number == session.session_number
+                    && estimate_session.platform == session.session_platform
+            });
+
+            if !session_exists {
+                sessions.push(PackageAttemptEstimateSession {
+                    session_number: session.session_number,
+                    platform: session.session_platform.clone(),
+                    date: session.date.clone(),
+                    start_time: session.start_time.clone(),
+                    weigh_in_time: session.weigh_in_time.clone(),
+                    estimates: Vec::new(),
+                });
+            }
+        }
+
+        for session in &mut sessions {
+            let session_athletes: Vec<PackageAthlete> = athletes
+                .iter()
+                .filter(|athlete| {
+                    athlete.session.as_ref().is_some_and(|athlete_session| {
+                        athlete_session.session_number == session.session_number
+                            && athlete_session.session_platform == session.platform
+                    })
+                })
+                .cloned()
+                .collect();
+            session.estimates = build_session_reference(&session_athletes, history_rows);
+        }
+
+        sessions.sort_by(|a, b| {
+            a.session_number
+                .total_cmp(&b.session_number)
+                .then_with(|| a.platform.cmp(&b.platform))
+        });
+        sessions
+    }
+
+    fn build_session_reference(
+        athletes: &[PackageAthlete],
+        history_rows: &[PackageLiftingResult],
+    ) -> Vec<PackageAttemptEstimate> {
+        let mut temp_estimates = Vec::new();
+
+        for athlete in athletes {
+            let normalized_name = normalize_name(&athlete.name);
+            let history: Vec<&PackageLiftingResult> = history_rows
+                .iter()
+                .filter(|row| normalize_name(&row.name) == normalized_name)
+                .collect();
+
+            let best_snatch = history
+                .iter()
+                .filter_map(|row| snatch_best(row))
+                .reduce(f64::max);
+            let best_cj = history
+                .iter()
+                .filter_map(|row| cj_best(row))
+                .reduce(f64::max);
+            let avg_snatch_increase = calculate_average_increase(&history, LiftType::Snatch);
+            let avg_cj_increase = calculate_average_increase(&history, LiftType::CleanAndJerk);
+            let (snatch_make_rate, cj_make_rate) = calculate_make_rates(&history);
+
+            temp_estimates.push(RefTempEstimate {
+                athlete: athlete.clone(),
+                history,
+                best_snatch,
+                best_cj,
+                avg_snatch_increase,
+                avg_cj_increase,
+                snatch_make_rate,
+                cj_make_rate,
+            });
+        }
+
+        let session_avg_snatch = session_average_increase(
+            temp_estimates
+                .iter()
+                .filter(|estimate| estimate.best_snatch.is_some())
+                .map(|estimate| estimate.avg_snatch_increase),
+            DEFAULT_SNATCH_JUMP_KG,
+        );
+        let session_avg_cj = session_average_increase(
+            temp_estimates
+                .iter()
+                .filter(|estimate| estimate.best_cj.is_some())
+                .map(|estimate| estimate.avg_cj_increase),
+            DEFAULT_CJ_JUMP_KG,
+        );
+
+        let mut estimates: Vec<PackageAttemptEstimate> = temp_estimates
+            .into_iter()
+            .map(|estimate| {
+                let snatch = estimate_lift(
+                    estimate.best_snatch,
+                    estimate.avg_snatch_increase,
+                    session_avg_snatch,
+                    estimate.athlete.entry_total,
+                    SNATCH_SHARE_OF_TOTAL,
+                    DEFAULT_SNATCH_JUMP_KG,
+                    estimate.snatch_make_rate,
+                );
+                let clean_and_jerk = estimate_lift(
+                    estimate.best_cj,
+                    estimate.avg_cj_increase,
+                    session_avg_cj,
+                    estimate.athlete.entry_total,
+                    CJ_SHARE_OF_TOTAL,
+                    DEFAULT_CJ_JUMP_KG,
+                    estimate.cj_make_rate,
+                );
+
+                PackageAttemptEstimate {
+                    athlete_id: estimate.athlete.member_id.clone(),
+                    athlete_name: estimate.athlete.name,
+                    weight_class: estimate.athlete.weight_class,
+                    entry_total: estimate.athlete.entry_total,
+                    history_result_count: estimate.history.len(),
+                    snatch,
+                    clean_and_jerk,
+                }
+            })
+            .collect();
+
+        calculate_attempts_out(&mut estimates);
+        estimates.sort_by(|a, b| {
+            a.snatch
+                .attempts_out
+                .cmp(&b.snatch.attempts_out)
+                .then_with(|| {
+                    a.clean_and_jerk
+                        .attempts_out
+                        .cmp(&b.clean_and_jerk.attempts_out)
+                })
+                .then_with(|| a.athlete_name.cmp(&b.athlete_name))
+        });
+        estimates
+    }
 }
 
 impl From<AthletePackageRow> for PackageAthlete {
@@ -1229,5 +1367,194 @@ mod tests {
             estimate.clean_and_jerk.source,
             AttemptEstimateSource::EntryTotal
         ));
+    }
+
+    /// Fixtures for the equivalence test. Names are deliberately adversarial
+    /// for the normalized-name index: duplicates, case-only and whitespace-only
+    /// differences, an athlete with no history at all, and history rows that
+    /// match no athlete.
+    fn equivalence_athlete(
+        member_id: &str,
+        name: &str,
+        entry_total: f64,
+        session_number: f64,
+        platform: &str,
+    ) -> PackageAthlete {
+        PackageAthlete {
+            member_id: member_id.to_string(),
+            name: name.to_string(),
+            age: 24.0,
+            club: "Test Barbell".to_string(),
+            wso: Some("Test WSO".to_string()),
+            gender: "Female".to_string(),
+            weight_class: "71".to_string(),
+            entry_total,
+            adaptive: false,
+            session: Some(PackageAthleteSession {
+                session_number,
+                session_platform: platform.to_string(),
+                date: Some("2026-06-20".to_string()),
+                start_time: Some("08:00:00".to_string()),
+                weigh_in_time: Some("06:00:00".to_string()),
+            }),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn equivalence_result(
+        id: i64,
+        name: &str,
+        date: &str,
+        snatches: [f64; 3],
+        snatch_best: f64,
+        cjs: [f64; 3],
+        cj_best: f64,
+    ) -> PackageLiftingResult {
+        PackageLiftingResult {
+            id,
+            event_id: format!("event-{id}"),
+            federation: "USAW".to_string(),
+            meet: format!("Meet {id}"),
+            date: date.to_string(),
+            name: name.to_string(),
+            age: "Open".to_string(),
+            body_weight: 70.0,
+            snatch1: snatches[0],
+            snatch2: snatches[1],
+            snatch3: snatches[2],
+            snatch_best,
+            cj1: cjs[0],
+            cj2: cjs[1],
+            cj3: cjs[2],
+            cj_best,
+            total: snatch_best + cj_best,
+            adaptive: false,
+        }
+    }
+
+    /// The normalized-name index in [`build_attempt_estimates`] is a pure
+    /// performance change, so its output must be byte-for-byte what the
+    /// pre-index implementation produced -- same sessions, same order, same
+    /// tie-breaks, same rounding, same `history_result_count`. This compares
+    /// the serialized JSON of both implementations over a fixture built to
+    /// exercise every way the two could diverge.
+    #[test]
+    fn attempt_estimates_match_pre_index_reference() {
+        let athletes = vec![
+            // Same lifter spelled three ways: exact, upper-case, and with
+            // collapsible whitespace. All three must find the same history.
+            equivalence_athlete("1", "Alexander Nordstrom", 300.0, 1.0, "Red"),
+            equivalence_athlete("2", "ALEXANDER  NORDSTROM", 300.0, 1.0, "Red"),
+            equivalence_athlete("3", "  alexander nordstrom  ", 295.0, 2.0, "Blue"),
+            // Two distinct athletes sharing a display name: the estimates must
+            // still be emitted once per athlete, ordered by the same tie-break.
+            equivalence_athlete("4", "Jordan Lee", 250.0, 1.0, "Red"),
+            equivalence_athlete("5", "Jordan Lee", 250.0, 1.0, "Red"),
+            // No history anywhere in the fixture -> entry-total path.
+            equivalence_athlete("6", "Ghost Lifter", 210.0, 1.0, "Red"),
+            // No history and no entry total -> unavailable path.
+            equivalence_athlete("7", "Zero Total", 0.0, 2.0, "Blue"),
+            // Same session number, different platform: two distinct sessions.
+            equivalence_athlete("8", "Platform Split", 240.0, 1.0, "Blue"),
+            // Unsessioned athletes are skipped entirely.
+            PackageAthlete {
+                session: None,
+                ..equivalence_athlete("9", "No Session", 260.0, 3.0, "Red")
+            },
+        ];
+
+        let history = vec![
+            // Order matters: averages and make rates walk the rows in arrival
+            // order, so the index must preserve it inside each name bucket.
+            equivalence_result(
+                1,
+                "alexander nordstrom",
+                "2025-03-01",
+                [100.0, 104.0, -108.0],
+                104.0,
+                [125.0, 130.0, 134.0],
+                134.0,
+            ),
+            equivalence_result(
+                2,
+                "Alexander   Nordstrom",
+                "2025-07-01",
+                [-101.0, 106.0, 110.0],
+                110.0,
+                [-128.0, 132.0, 0.0],
+                132.0,
+            ),
+            equivalence_result(
+                3,
+                "ALEXANDER NORDSTROM",
+                "2024-11-01",
+                [98.0, 0.0, 0.0],
+                98.0,
+                [0.0, 0.0, 0.0],
+                0.0,
+            ),
+            equivalence_result(
+                4,
+                "Jordan Lee",
+                "2025-05-01",
+                [80.0, 84.0, 87.0],
+                87.0,
+                [100.0, 105.0, -109.0],
+                105.0,
+            ),
+            // Matches no athlete in the roster -- must be bucketed and ignored,
+            // never folded into someone else's averages.
+            equivalence_result(
+                5,
+                "Unrelated Person",
+                "2025-05-01",
+                [200.0, 205.0, 210.0],
+                210.0,
+                [240.0, 245.0, 250.0],
+                250.0,
+            ),
+            equivalence_result(
+                6,
+                "  PLATFORM   split ",
+                "2025-01-01",
+                [90.0, 0.0, 95.0],
+                95.0,
+                [115.0, 0.0, 0.0],
+                115.0,
+            ),
+        ];
+
+        let optimized = build_attempt_estimates(&athletes, &history);
+        let reference = reference::build_attempt_estimates_reference(&athletes, &history);
+
+        assert_eq!(
+            serde_json::to_string(&optimized).expect("optimized estimates serialize"),
+            serde_json::to_string(&reference).expect("reference estimates serialize"),
+        );
+
+        // Guard against the fixture silently degenerating into "both empty".
+        assert_eq!(optimized.len(), 3, "expected three distinct sessions");
+        assert!(
+            optimized.iter().any(|session| session
+                .estimates
+                .iter()
+                .any(|estimate| matches!(estimate.snatch.source, AttemptEstimateSource::History))),
+            "fixture must exercise the history path"
+        );
+
+        // The empty-history and empty-roster edges go through the same index.
+        assert_eq!(
+            serde_json::to_string(&build_attempt_estimates(&athletes, &[])).unwrap(),
+            serde_json::to_string(&reference::build_attempt_estimates_reference(
+                &athletes,
+                &[]
+            ))
+            .unwrap(),
+        );
+        assert_eq!(
+            serde_json::to_string(&build_attempt_estimates(&[], &history)).unwrap(),
+            serde_json::to_string(&reference::build_attempt_estimates_reference(&[], &history))
+                .unwrap(),
+        );
     }
 }

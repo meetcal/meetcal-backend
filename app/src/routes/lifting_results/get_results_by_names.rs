@@ -1,7 +1,10 @@
 use crate::{
     AppError, AppState,
-    common::{names::normalize_name, query::deserialize_csv_or_repeated},
-    routes::results::types::LiftingResults,
+    common::{
+        names::{normalize_name, normalized_name_sql},
+        query::deserialize_csv_or_repeated,
+    },
+    routes::results::types::{LiftingResults, lifting_result_columns},
 };
 use axum::Json;
 use axum::extract::{Query, State};
@@ -12,6 +15,20 @@ pub struct ResultsByNamesParams {
     #[serde(deserialize_with = "deserialize_csv_or_repeated")]
     pub names: Vec<String>,
 }
+
+const RESULTS_BY_NAMES_SQL: &str = concat!(
+    r#"
+        SELECT
+            "#,
+    lifting_result_columns!(),
+    r#"
+        FROM lifting_results
+        WHERE "#,
+    normalized_name_sql!(),
+    r#" = ANY($1::text[])
+        ORDER BY date DESC
+        "#
+);
 
 /// /lifting-results/by-names endpoint
 ///
@@ -50,33 +67,10 @@ pub async fn get_results_by_names(
         .map(|name| normalize_name(name))
         .collect();
 
-    let rows = sqlx::query_as::<_, LiftingResults>(
-        r#"
-        SELECT
-            COALESCE(federation, '') AS federation,
-            meet,
-            date,
-            name,
-            COALESCE(age, '') AS age,
-            COALESCE(body_weight, 0) AS body_weight,
-            COALESCE(snatch1, 0) AS snatch1,
-            COALESCE(snatch2, 0) AS snatch2,
-            COALESCE(snatch3, 0) AS snatch3,
-            COALESCE(snatch_best, 0) AS snatch_best,
-            COALESCE(cj1, 0) AS cj1,
-            COALESCE(cj2, 0) AS cj2,
-            COALESCE(cj3, 0) AS cj3,
-            COALESCE(cj_best, 0) AS cj_best,
-            COALESCE(total, 0) AS total,
-            adaptive
-        FROM lifting_results
-        WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = ANY($1::text[])
-        ORDER BY date DESC
-        "#,
-    )
-    .bind(&normalized_names)
-    .fetch_all(&state.db)
-    .await?;
+    let rows = sqlx::query_as::<_, LiftingResults>(RESULTS_BY_NAMES_SQL)
+        .bind(&normalized_names)
+        .fetch_all(&state.db)
+        .await?;
 
     Ok(Json(rows))
 }

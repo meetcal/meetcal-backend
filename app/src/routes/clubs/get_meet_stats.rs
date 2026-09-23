@@ -1,3 +1,4 @@
+use crate::common::names::normalized_name_sql;
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::{Query, State};
@@ -40,6 +41,130 @@ pub struct AthleteMeetResult {
     pub is_pr: bool,
     pub perfect_lifts: bool,
 }
+
+const CLUB_MEET_ATHLETE_COUNT_SQL: &str = concat!(
+    r#"
+        SELECT COUNT(DISTINCT "#,
+    normalized_name_sql!(),
+    r#")::BIGINT
+        FROM athletes
+        WHERE club = $1
+            AND meet = $2
+        "#
+);
+
+/// Results for one club at one meet, with per-weight-class placings and each
+/// lifter's previous best total.
+///
+/// Every name comparison goes through the shared normalization rule, because
+/// `athletes.name` and `lifting_results.name` are scraped from different
+/// sources and differ in case and spacing.
+const CLUB_MEET_RESULTS_SQL: &str = concat!(
+    r#"
+        WITH roster AS (
+            SELECT DISTINCT ON (
+                "#,
+    normalized_name_sql!(),
+    r#"
+            )
+                "#,
+    normalized_name_sql!(),
+    r#" AS normalized_name,
+                name,
+                weight_class,
+                club
+            FROM athletes
+            WHERE meet = $2
+            ORDER BY
+                "#,
+    normalized_name_sql!(),
+    r#",
+                name,
+                weight_class,
+                club
+        ),
+        club_athletes AS (
+            SELECT normalized_name
+            FROM roster
+            WHERE club = $1
+        ),
+        result_rows AS (
+            SELECT DISTINCT ON (
+                "#,
+    normalized_name_sql!(),
+    r#"
+            )
+                *
+            FROM lifting_results
+            WHERE meet = $2
+            ORDER BY
+                "#,
+    normalized_name_sql!(),
+    r#",
+                COALESCE(total, 0) DESC,
+                date DESC,
+                id DESC
+        ),
+        meet_results AS (
+            SELECT
+                lr.*,
+                a.weight_class,
+                RANK() OVER (
+                    PARTITION BY a.weight_class
+                    ORDER BY COALESCE(lr.snatch_best, 0) DESC
+                ) AS snatch_placing,
+                RANK() OVER (
+                    PARTITION BY a.weight_class
+                    ORDER BY COALESCE(lr.cj_best, 0) DESC
+                ) AS cj_placing,
+                RANK() OVER (
+                    PARTITION BY a.weight_class
+                    ORDER BY COALESCE(lr.total, 0) DESC
+                ) AS total_placing
+            FROM result_rows lr
+            INNER JOIN roster a
+                ON a.normalized_name
+                    = "#,
+    normalized_name_sql!("lr.name"),
+    r#"
+        )
+        SELECT
+            mr.name,
+            mr.weight_class,
+            COALESCE(mr.body_weight, 0) AS body_weight,
+            COALESCE(mr.snatch1, 0) AS snatch1,
+            COALESCE(mr.snatch2, 0) AS snatch2,
+            COALESCE(mr.snatch3, 0) AS snatch3,
+            COALESCE(mr.snatch_best, 0) AS snatch_best,
+            COALESCE(mr.cj1, 0) AS cj1,
+            COALESCE(mr.cj2, 0) AS cj2,
+            COALESCE(mr.cj3, 0) AS cj3,
+            COALESCE(mr.cj_best, 0) AS cj_best,
+            COALESCE(mr.total, 0) AS total,
+            mr.snatch_placing,
+            mr.cj_placing,
+            mr.total_placing,
+            (
+                SELECT MAX(previous.total)
+                FROM lifting_results previous
+                WHERE "#,
+    normalized_name_sql!("previous.name"),
+    r#"
+                        = "#,
+    normalized_name_sql!("mr.name"),
+    r#"
+                    AND previous.date < mr.date
+                    AND (previous.federation IS NULL OR previous.federation <> 'BWL')
+            ) AS previous_best_total
+        FROM meet_results mr
+        INNER JOIN club_athletes ca
+            ON ca.normalized_name
+                = "#,
+    normalized_name_sql!("mr.name"),
+    r#"
+        ORDER BY mr.name
+        "#
+);
 
 #[derive(Debug, FromRow)]
 struct ClubResultRow {
@@ -86,111 +211,17 @@ pub async fn get_meet_stats(
 ) -> Result<Json<MeetStats>, AppError> {
     crate::common::query::require_non_empty("club", &params.club)?;
     crate::common::query::require_non_empty("meet", &params.meet)?;
-    let total_athletes: (i64,) = sqlx::query_as(
-        r#"
-        SELECT COUNT(DISTINCT lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))))::BIGINT
-        FROM athletes
-        WHERE club = $1
-            AND meet = $2
-        "#,
-    )
-    .bind(&params.club)
-    .bind(&params.meet)
-    .fetch_one(&state.db)
-    .await?;
+    let total_athletes: (i64,) = sqlx::query_as(CLUB_MEET_ATHLETE_COUNT_SQL)
+        .bind(&params.club)
+        .bind(&params.meet)
+        .fetch_one(&state.db)
+        .await?;
 
-    let rows: Vec<ClubResultRow> = sqlx::query_as(
-        r#"
-        WITH roster AS (
-            SELECT DISTINCT ON (
-                lower(btrim(regexp_replace(name, '\s+', ' ', 'g')))
-            )
-                lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) AS normalized_name,
-                name,
-                weight_class,
-                club
-            FROM athletes
-            WHERE meet = $2
-            ORDER BY
-                lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))),
-                name,
-                weight_class,
-                club
-        ),
-        club_athletes AS (
-            SELECT normalized_name
-            FROM roster
-            WHERE club = $1
-        ),
-        result_rows AS (
-            SELECT DISTINCT ON (
-                lower(btrim(regexp_replace(name, '\s+', ' ', 'g')))
-            )
-                *
-            FROM lifting_results
-            WHERE meet = $2
-            ORDER BY
-                lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))),
-                COALESCE(total, 0) DESC,
-                date DESC,
-                id DESC
-        ),
-        meet_results AS (
-            SELECT
-                lr.*,
-                a.weight_class,
-                RANK() OVER (
-                    PARTITION BY a.weight_class
-                    ORDER BY COALESCE(lr.snatch_best, 0) DESC
-                ) AS snatch_placing,
-                RANK() OVER (
-                    PARTITION BY a.weight_class
-                    ORDER BY COALESCE(lr.cj_best, 0) DESC
-                ) AS cj_placing,
-                RANK() OVER (
-                    PARTITION BY a.weight_class
-                    ORDER BY COALESCE(lr.total, 0) DESC
-                ) AS total_placing
-            FROM result_rows lr
-            INNER JOIN roster a
-                ON a.normalized_name
-                    = lower(btrim(regexp_replace(lr.name, '\s+', ' ', 'g')))
-        )
-        SELECT
-            mr.name,
-            mr.weight_class,
-            COALESCE(mr.body_weight, 0) AS body_weight,
-            COALESCE(mr.snatch1, 0) AS snatch1,
-            COALESCE(mr.snatch2, 0) AS snatch2,
-            COALESCE(mr.snatch3, 0) AS snatch3,
-            COALESCE(mr.snatch_best, 0) AS snatch_best,
-            COALESCE(mr.cj1, 0) AS cj1,
-            COALESCE(mr.cj2, 0) AS cj2,
-            COALESCE(mr.cj3, 0) AS cj3,
-            COALESCE(mr.cj_best, 0) AS cj_best,
-            COALESCE(mr.total, 0) AS total,
-            mr.snatch_placing,
-            mr.cj_placing,
-            mr.total_placing,
-            (
-                SELECT MAX(previous.total)
-                FROM lifting_results previous
-                WHERE lower(btrim(regexp_replace(previous.name, '\s+', ' ', 'g')))
-                        = lower(btrim(regexp_replace(mr.name, '\s+', ' ', 'g')))
-                    AND previous.date < mr.date
-                    AND (previous.federation IS NULL OR previous.federation <> 'BWL')
-            ) AS previous_best_total
-        FROM meet_results mr
-        INNER JOIN club_athletes ca
-            ON ca.normalized_name
-                = lower(btrim(regexp_replace(mr.name, '\s+', ' ', 'g')))
-        ORDER BY mr.name
-        "#,
-    )
-    .bind(&params.club)
-    .bind(&params.meet)
-    .fetch_all(&state.db)
-    .await?;
+    let rows: Vec<ClubResultRow> = sqlx::query_as(CLUB_MEET_RESULTS_SQL)
+        .bind(&params.club)
+        .bind(&params.meet)
+        .fetch_all(&state.db)
+        .await?;
 
     let medal_placings = rows
         .iter()

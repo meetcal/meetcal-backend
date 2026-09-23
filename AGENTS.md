@@ -65,7 +65,7 @@ CI (`.github/workflows/ci.yml`) runs the Rust job (fmt, clippy, `cargo test --lo
 - Slack mutating surfaces verify HMAC signatures and write files, not Postgres. Approval → ingest is a Python single transaction.
 - `convex_id` is the upsert identity in Postgres. Do not add a Convex client, dual-write, or `convex_compat`.
 - Destructive ingest (`DELETE FROM … WHERE meet = $1`, intl ranking prune) must refuse empty keys.
-- Prefer indexes (`meet`, `club`, `wso`, normalized name) over `filter()`-style scans. Name match uses `normalize_name` / `NORMALIZED_NAME_SQL`.
+- Prefer indexes (`meet`, `club`, `wso`, normalized name) over `filter()`-style scans. Name match uses `normalize_name` / `normalized_name_sql!` (`app/src/common/names.rs`), the one spelling of the rule; `concat!` it into a query rather than retyping it.
 - Auth is Clerk JWT (RS256 + JWKS). Protected `/users/me/*` routes fail closed when Clerk env is missing or the token is empty, expired, or wrong `azp`.
 - Club and WSO history endpoints return every registration for that affiliation, including non-completed meets. Do not re-join `meets.status`.
 

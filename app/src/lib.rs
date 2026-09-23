@@ -62,6 +62,11 @@ use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
 
+/// Wall-clock ceiling on one HTTP request. A read that outruns it answers
+/// `408` instead of holding a pool connection for the client's lifetime.
+/// `AGENTS.md` pins this at 15s.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
@@ -153,7 +158,7 @@ pub async fn run_with_auth(
         .layer(cors)
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(15),
+            REQUEST_TIMEOUT,
         ))
         .with_state(AppState {
             db,

@@ -16,8 +16,8 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::store::{JsonListStore, require_http_url, validate_slug};
-use super::{ListKind, now_unix_secs, signature};
+use super::store::{JsonListStore, is_http_url, require_http_url, validate_slug};
+use super::{ListKind, now_unix_secs, signature, write_json_request};
 use crate::AppState;
 
 const WATCHES_USAGE: &str = "*Meet watches*\n\
@@ -50,6 +50,20 @@ const VENUE_MAP_USAGE: &str = "*Venue map links*\n\
     • `/meets-remove-pdf \"MEET NAME\"` — clear the venue map PDF link\n\
     • `/meets-remove-map \"MEET NAME\"` — clear the Apple Maps link\n\
     Meet names contain spaces, so quote them; copy exact names from `/meets-list`.";
+
+/// Defaults stamped on a watch created from Slack. They must stay in step with
+/// the `MeetWatch` dataclass defaults in
+/// `scrapers/usaw/meet_automation/config.py` (`DEFAULT_START_MEMBER_ID`,
+/// `DEFAULT_SCHEDULE_START_ID`, `DEFAULT_MEET_YEAR`) -- the pipeline reads the
+/// same `watches.json` this writes.
+const DEFAULT_START_MEMBER_ID: i64 = 3100;
+const DEFAULT_SCHEDULE_START_ID: i64 = 1;
+const DEFAULT_MEET_YEAR: i64 = 2026;
+
+/// Ceiling on PDF links accepted by one `/usamw-results` command. A results
+/// import is a handful of session PDFs; the cap keeps a pasted wall of links
+/// from queueing an unbounded download list for the scraper worker.
+const MAX_USAMW_PDF_URLS: usize = 32;
 
 #[derive(Deserialize, Default)]
 struct SlackCommand {
@@ -203,9 +217,9 @@ fn build_watch(args: &str) -> Result<Value, String> {
         "start_list_url": start_list_url,
         "schedule_url": schedule_url,
         "source_format": "auto",
-        "start_member_id": 3100,
-        "schedule_start_id": 1,
-        "default_year": 2026,
+        "start_member_id": DEFAULT_START_MEMBER_ID,
+        "schedule_start_id": DEFAULT_SCHEDULE_START_ID,
+        "default_year": DEFAULT_MEET_YEAR,
     }))
 }
 
@@ -269,18 +283,11 @@ fn parse_run_target(args: &str) -> Result<Option<String>, String> {
 /// off the `__all__` sentinel; a specific key keys off itself, so re-running the
 /// same watch before the cron drains it just refreshes one file.
 fn queue_run(cfg: &super::SlackConfig, key: Option<&str>, user_id: &str) -> Result<(), String> {
-    let dir = cfg.run_requests_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
-    let body = run_request_body(key, user_id);
-    let path = dir.join(run_request_filename(key));
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(
-        &tmp,
-        serde_json::to_vec_pretty(&body).map_err(|e| e.to_string())?,
+    write_json_request(
+        &cfg.run_requests_dir(),
+        &run_request_filename(key),
+        &run_request_body(key, user_id),
     )
-    .map_err(|e| format!("write: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
-    Ok(())
 }
 
 fn run_request_filename(key: Option<&str>) -> String {
@@ -381,7 +388,13 @@ async fn venue_map_reply(db: &sqlx::PgPool, cmd: VenueMapCommand, text: &str) ->
                 cmd.label()
             ),
         },
-        Err(e) => format!(":warning: Database error: {e}"),
+        // Same boundary rule as `AppError::Database`: the driver's message can
+        // name tables, columns, and constraints, so it goes to the server log,
+        // not into a Slack channel.
+        Err(error) => {
+            eprintln!("venue map update failed: {error}");
+            ":warning: Database error updating the meet; check the server log.".to_string()
+        }
     }
 }
 
@@ -485,8 +498,13 @@ fn build_usamw_results_request(text: &str, user_id: &str) -> Result<Value, Strin
             if token.eq_ignore_ascii_case("adaptive") || token.eq_ignore_ascii_case("true") {
                 continue;
             }
-            if token.starts_with("http://") || token.starts_with("https://") {
+            if is_http_url(token) {
                 require_http_url("PDF URL", Some(token))?;
+                if urls.len() >= MAX_USAMW_PDF_URLS {
+                    return Err(format!(
+                        "too many PDF URLs (limit {MAX_USAMW_PDF_URLS}); split the import"
+                    ));
+                }
                 urls.push(token.to_string());
             }
         }
@@ -523,8 +541,6 @@ fn validate_date(date: &str) -> Result<(), String> {
 }
 
 fn queue_usamw_results(cfg: &super::SlackConfig, body: &Value) -> Result<(), String> {
-    let dir = cfg.usamw_results_requests_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
     let file_name = format!(
         "{}-{}.json",
         slugify(&field(body, "meet")),
@@ -532,15 +548,7 @@ fn queue_usamw_results(cfg: &super::SlackConfig, body: &Value) -> Result<(), Str
             .as_u64()
             .unwrap_or_else(now_unix_secs)
     );
-    let path = dir.join(file_name);
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(
-        &tmp,
-        serde_json::to_vec_pretty(body).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("write: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
-    Ok(())
+    write_json_request(&cfg.usamw_results_requests_dir(), &file_name, body)
 }
 
 fn slugify(value: &str) -> String {
@@ -728,6 +736,37 @@ mod tests {
 
         assert!(build_usamw_results_request("Meet | nope | https://e.com/a.pdf", "U1").is_err());
         assert!(build_usamw_results_request("Meet | 2026-03-29", "U1").is_err());
+    }
+
+    #[test]
+    fn usamw_results_pdf_urls_are_bounded() {
+        let links = |count: usize| {
+            let urls: Vec<String> = (0..count)
+                .map(|i| format!("https://e.com/{i}.pdf"))
+                .collect();
+            format!("Meet | 2026-03-29 | {}", urls.join(" "))
+        };
+
+        // Zero PDF links is already a usage error; one and many are accepted.
+        assert!(build_usamw_results_request("Meet | 2026-03-29 | adaptive", "U1").is_err());
+        assert_eq!(
+            build_usamw_results_request(&links(1), "U1").unwrap()["pdf_urls"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        // Max: exactly the cap is fine, one past it is rejected rather than
+        // queueing an unbounded download list.
+        assert_eq!(
+            build_usamw_results_request(&links(MAX_USAMW_PDF_URLS), "U1").unwrap()["pdf_urls"]
+                .as_array()
+                .unwrap()
+                .len(),
+            MAX_USAMW_PDF_URLS
+        );
+        let error = build_usamw_results_request(&links(MAX_USAMW_PDF_URLS + 1), "U1").unwrap_err();
+        assert!(error.contains("too many PDF URLs"), "{error}");
     }
 
     #[test]

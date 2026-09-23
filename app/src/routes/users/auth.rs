@@ -7,12 +7,21 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, RwLock};
 
 const MIN_JWKS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+/// Ceiling on one JWKS fetch. Clerk is a third party on the auth path, so a
+/// hung fetch must not hold the request open to the 15s server timeout.
+const JWKS_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Ceiling on how many keys one JWKS response may contribute. Clerk publishes
+/// the current signing key plus any mid-rotation predecessors -- a handful.
+/// The response is a third party's array, so the loop that walks it declares a
+/// bound rather than trusting the body's length.
+const MAX_JWKS_KEYS: usize = 16;
 
+/// Only the claims this code inspects. `exp` / `nbf` are enforced by
+/// `jsonwebtoken`'s own validation (see [`AuthVerifier::verify`]), which
+/// deserializes them separately, so they are deliberately absent here.
 #[derive(Debug, Deserialize)]
 struct JwtClaims {
     sub: String,
-    #[allow(dead_code)]
-    exp: u64,
     iss: String,
     azp: Option<String>,
 }
@@ -69,7 +78,7 @@ impl AuthVerifier {
         }
 
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
+            .timeout(JWKS_FETCH_TIMEOUT)
             .build()?;
 
         Ok(Some(Arc::new(Self {
@@ -122,18 +131,7 @@ impl AuthVerifier {
             .await
             .map_err(|_| ())?;
 
-        let mut next_keys = HashMap::new();
-        for jwk in response.keys {
-            if jwk.kty != "RSA"
-                || jwk.alg.as_deref().is_some_and(|alg| alg != "RS256")
-                || jwk.key_use.as_deref().is_some_and(|usage| usage != "sig")
-            {
-                continue;
-            }
-            if let Ok(key) = DecodingKey::from_rsa_components(&jwk.n, &jwk.e) {
-                next_keys.insert(jwk.kid, Arc::new(key));
-            }
-        }
+        let next_keys = usable_signing_keys(response.keys);
 
         if next_keys.is_empty() {
             return Err(());
@@ -188,6 +186,25 @@ impl AuthVerifier {
     }
 }
 
+/// Keep the RS256 signing keys from a JWKS response, at most [`MAX_JWKS_KEYS`]
+/// of them. Split out from `refresh_keys` so the bound is testable without a
+/// network round trip.
+fn usable_signing_keys(keys: Vec<Jwk>) -> HashMap<String, Arc<DecodingKey>> {
+    let mut usable = HashMap::new();
+    for jwk in keys.into_iter().take(MAX_JWKS_KEYS) {
+        if jwk.kty != "RSA"
+            || jwk.alg.as_deref().is_some_and(|alg| alg != "RS256")
+            || jwk.key_use.as_deref().is_some_and(|usage| usage != "sig")
+        {
+            continue;
+        }
+        if let Ok(key) = DecodingKey::from_rsa_components(&jwk.n, &jwk.e) {
+            usable.insert(jwk.kid, Arc::new(key));
+        }
+    }
+    usable
+}
+
 pub async fn user_id_from_headers(
     headers: &HeaderMap,
     verifier: Option<&AuthVerifier>,
@@ -224,7 +241,7 @@ mod tests {
     use rand::rngs::OsRng;
     use rsa::{
         RsaPrivateKey, RsaPublicKey,
-        pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
+        pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey, LineEnding},
     };
     use serde::Serialize;
     use std::{
@@ -294,6 +311,54 @@ mod tests {
             None,
         )
         .unwrap()
+    }
+
+    /// Modulus and exponent of the generated test key, so a synthetic JWKS
+    /// entry actually decodes.
+    fn rsa_components() -> (String, String) {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        use rsa::traits::PublicKeyParts;
+        let public = RsaPublicKey::from(
+            &RsaPrivateKey::from_pkcs8_pem(&TEST_KEYS.private_pem).expect("parse test key"),
+        );
+        (
+            URL_SAFE_NO_PAD.encode(public.n().to_bytes_be()),
+            URL_SAFE_NO_PAD.encode(public.e().to_bytes_be()),
+        )
+    }
+
+    fn jwk(kid: &str, kty: &str, alg: Option<&str>) -> Jwk {
+        let (n, e) = rsa_components();
+        Jwk {
+            kid: kid.to_string(),
+            kty: kty.to_string(),
+            n,
+            e,
+            alg: alg.map(str::to_string),
+            key_use: Some("sig".to_string()),
+        }
+    }
+
+    #[test]
+    fn jwks_key_set_is_bounded_and_filtered() {
+        // Zero: a JWKS with nothing usable leaves the cache untouched (the
+        // caller treats an empty set as a refresh failure).
+        assert!(usable_signing_keys(Vec::new()).is_empty());
+        // One.
+        assert_eq!(usable_signing_keys(vec![jwk("a", "RSA", None)]).len(), 1);
+        // Many, mixed: non-RSA and non-RS256 entries are dropped.
+        let mixed = vec![
+            jwk("a", "RSA", Some("RS256")),
+            jwk("b", "EC", None),
+            jwk("c", "RSA", Some("HS256")),
+        ];
+        assert_eq!(usable_signing_keys(mixed).len(), 1);
+        // Max: an oversized third-party response cannot grow the map without
+        // bound.
+        let oversized: Vec<Jwk> = (0..(MAX_JWKS_KEYS + 10))
+            .map(|index| jwk(&format!("kid-{index}"), "RSA", Some("RS256")))
+            .collect();
+        assert_eq!(usable_signing_keys(oversized).len(), MAX_JWKS_KEYS);
     }
 
     #[tokio::test]

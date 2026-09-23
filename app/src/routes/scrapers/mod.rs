@@ -18,8 +18,9 @@ pub mod signature;
 pub mod slack_commands;
 pub mod store;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use serde_json::Value;
 use store::JsonListStore;
 
 /// Which managed list a command targets.
@@ -129,6 +130,24 @@ impl SlackConfig {
     }
 }
 
+/// Atomically drop `body` as pretty JSON at `dir/file_name` (temp file +
+/// rename), creating `dir` first. Every Slack surface hands work to the Python
+/// crons this way — decisions, `/meet-run` requests, USAMW result imports — and
+/// those crons glob the directory, so a half-written file must never be visible
+/// under its final name. `Err` is the message surfaced back into Slack.
+pub(crate) fn write_json_request(dir: &Path, file_name: &str, body: &Value) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("create dir: {e}"))?;
+    let path = dir.join(file_name);
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(
+        &tmp,
+        serde_json::to_vec_pretty(body).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("write: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
+    Ok(())
+}
+
 /// Unix epoch seconds. Used to stamp decision / run-request files dropped on the
 /// shared filesystem; informational only, so we avoid pulling in a date crate.
 pub(crate) fn now_unix_secs() -> u64 {
@@ -153,4 +172,42 @@ fn split_list(value: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn json_request_lands_atomically_and_leaves_no_temp_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "meetcal-request-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        // The directory is created on demand: the Python cron may never have run.
+        write_json_request(&dir, "2026-nats.json", &json!({ "decision": "approved" })).unwrap();
+
+        let written = std::fs::read_to_string(dir.join("2026-nats.json")).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&written).unwrap(),
+            json!({ "decision": "approved" })
+        );
+        // A `.json.tmp` left behind would be picked up by nothing and leak.
+        let entries: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["2026-nats.json".to_string()]);
+
+        // Re-dropping the same key replaces the file rather than accumulating.
+        write_json_request(&dir, "2026-nats.json", &json!({ "decision": "rejected" })).unwrap();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

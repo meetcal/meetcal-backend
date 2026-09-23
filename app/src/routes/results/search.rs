@@ -1,11 +1,50 @@
 use crate::{
-    AppError, AppState, common::names::normalize_name, routes::results::types::LiftingResults,
+    AppError, AppState,
+    common::names::{normalize_name, normalized_name_sql},
+    common::query::{like_contains_pattern, require_non_empty},
+    routes::results::types::{LiftingResults, lifting_result_columns},
 };
 use axum::{
     Json,
     extract::{Query, State},
 };
 use serde::{Deserialize, Serialize};
+
+/// Ceiling on rows returned by one wrapped search. A name can appear in
+/// hundreds of meets, and the mobile client renders a list, so the row budget
+/// is declared here once and bound into both range queries rather than typed
+/// into each `LIMIT`.
+const MAX_SEARCH_RESULT_ROWS: i64 = 600;
+/// Ceiling on name suggestions offered for a partial query.
+const MAX_SEARCH_SUGGESTIONS: i64 = 8;
+
+const EXACT_NAME_IN_RANGE_SQL: &str = concat!(
+    r#"
+        SELECT
+            "#,
+    lifting_result_columns!(),
+    r#"
+        FROM lifting_results
+        WHERE "#,
+    normalized_name_sql!(),
+    r#" = $1 AND date >= $2 AND date < $3
+        ORDER BY date ASC
+        LIMIT $4
+        "#
+);
+
+const NAME_LIKE_IN_RANGE_SQL: &str = concat!(
+    r#"
+        SELECT
+            "#,
+    lifting_result_columns!(),
+    r#"
+        FROM lifting_results
+        WHERE name ILIKE $1 AND date >= $2 AND date < $3
+        ORDER BY date ASC
+        LIMIT $4
+        "#
+);
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SearchParams {
@@ -62,7 +101,7 @@ pub async fn search_wrapped(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, AppError> {
-    crate::common::query::require_non_empty("query", &params.query)?;
+    require_non_empty("query", &params.query)?;
     let suggestions = search_suggestions(&state, &params.query).await?;
 
     let (Some(start_date), Some(end_date)) = (params.start_date.as_ref(), params.end_date.as_ref())
@@ -74,36 +113,13 @@ pub async fn search_wrapped(
         }));
     };
 
-    let exact = sqlx::query_as::<_, LiftingResults>(
-        r#"
-        SELECT
-            COALESCE(federation, '') AS federation,
-            meet,
-            date,
-            name,
-            COALESCE(age, '') AS age,
-            COALESCE(body_weight, 0) AS body_weight,
-            COALESCE(snatch1, 0) AS snatch1,
-            COALESCE(snatch2, 0) AS snatch2,
-            COALESCE(snatch3, 0) AS snatch3,
-            COALESCE(snatch_best, 0) AS snatch_best,
-            COALESCE(cj1, 0) AS cj1,
-            COALESCE(cj2, 0) AS cj2,
-            COALESCE(cj3, 0) AS cj3,
-            COALESCE(cj_best, 0) AS cj_best,
-            COALESCE(total, 0) AS total,
-            adaptive
-        FROM lifting_results
-        WHERE lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) = $1 AND date >= $2 AND date < $3
-        ORDER BY date ASC
-        LIMIT 600
-        "#,
-    )
-    .bind(normalize_name(&params.query))
-    .bind(start_date)
-    .bind(end_date)
-    .fetch_all(&state.db)
-    .await?;
+    let exact = sqlx::query_as::<_, LiftingResults>(EXACT_NAME_IN_RANGE_SQL)
+        .bind(normalize_name(&params.query))
+        .bind(start_date)
+        .bind(end_date)
+        .bind(MAX_SEARCH_RESULT_ROWS)
+        .fetch_all(&state.db)
+        .await?;
 
     if !exact.is_empty() {
         return Ok(Json(SearchResponse {
@@ -113,38 +129,15 @@ pub async fn search_wrapped(
         }));
     }
 
-    let pattern = format!("%{}%", params.query);
+    let pattern = like_contains_pattern(&params.query);
 
-    let fallback = sqlx::query_as::<_, LiftingResults>(
-        r#"
-        SELECT
-            COALESCE(federation, '') AS federation,
-            meet,
-            date,
-            name,
-            COALESCE(age, '') AS age,
-            COALESCE(body_weight, 0) AS body_weight,
-            COALESCE(snatch1, 0) AS snatch1,
-            COALESCE(snatch2, 0) AS snatch2,
-            COALESCE(snatch3, 0) AS snatch3,
-            COALESCE(snatch_best, 0) AS snatch_best,
-            COALESCE(cj1, 0) AS cj1,
-            COALESCE(cj2, 0) AS cj2,
-            COALESCE(cj3, 0) AS cj3,
-            COALESCE(cj_best, 0) AS cj_best,
-            COALESCE(total, 0) AS total,
-            adaptive
-        FROM lifting_results
-        WHERE name ILIKE $1 AND date >= $2 AND date < $3
-        ORDER BY date ASC
-        LIMIT 600
-        "#,
-    )
-    .bind(&pattern)
-    .bind(start_date)
-    .bind(end_date)
-    .fetch_all(&state.db)
-    .await?;
+    let fallback = sqlx::query_as::<_, LiftingResults>(NAME_LIKE_IN_RANGE_SQL)
+        .bind(&pattern)
+        .bind(start_date)
+        .bind(end_date)
+        .bind(MAX_SEARCH_RESULT_ROWS)
+        .fetch_all(&state.db)
+        .await?;
 
     Ok(Json(SearchResponse {
         matched_name: None,
@@ -154,7 +147,7 @@ pub async fn search_wrapped(
 }
 
 async fn search_suggestions(state: &AppState, query: &str) -> Result<Vec<String>, AppError> {
-    let pattern = format!("%{}%", query);
+    let pattern = like_contains_pattern(query);
 
     let rows: Vec<(String,)> = sqlx::query_as(
         r#"
@@ -162,10 +155,11 @@ async fn search_suggestions(state: &AppState, query: &str) -> Result<Vec<String>
         FROM lifting_results
         WHERE name ILIKE $1
         ORDER BY name
-        LIMIT 8
+        LIMIT $2
         "#,
     )
     .bind(pattern)
+    .bind(MAX_SEARCH_SUGGESTIONS)
     .fetch_all(&state.db)
     .await?;
 

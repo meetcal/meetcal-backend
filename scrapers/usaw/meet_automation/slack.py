@@ -21,6 +21,13 @@ from .models import StagedBundle, SlackRef
 
 _API = "https://slack.com/api"
 REQUEST_TIMEOUT_SECONDS = 30
+# Slack block limits and review-message budget, declared rather than inlined.
+MAX_HEADER_CHARS = 150  # Slack rejects a header block longer than this
+MAX_SECTION_CHARS = 2900  # mrkdwn section limit is 3000; leave headroom
+MAX_FINDINGS_SHOWN = 8  # the rest stay in the HTML preview
+# Ceiling on thread replies scanned for an approve/reject word. Also sent to
+# Slack as `limit`, so the response itself is bounded rather than trusted.
+MAX_THREAD_REPLIES = 200
 
 
 def _preview_link(cfg: SlackConfig, bundle: StagedBundle) -> Optional[str]:
@@ -33,7 +40,7 @@ def build_blocks(cfg: SlackConfig, bundle: StagedBundle) -> List[Dict[str, Any]]
     v = bundle.validation or {}
     counts = v.get("counts", {})
     status_emoji = ":white_check_mark:" if v.get("ok") else ":warning:"
-    header = f"{status_emoji} {bundle.meet_name}"[:150]
+    header = f"{status_emoji} {bundle.meet_name}"[:MAX_HEADER_CHARS]
 
     summary = (
         f"*{counts.get('athletes', 0)}* athletes · "
@@ -45,7 +52,7 @@ def build_blocks(cfg: SlackConfig, bundle: StagedBundle) -> List[Dict[str, Any]]
     )
 
     top = []
-    for f in v.get("findings", [])[:8]:
+    for f in v.get("findings", [])[:MAX_FINDINGS_SHOWN]:
         mark = {"error": ":red_circle:", "warning": ":large_yellow_circle:"}.get(
             f["severity"], ":white_circle:"
         )
@@ -56,7 +63,10 @@ def build_blocks(cfg: SlackConfig, bundle: StagedBundle) -> List[Dict[str, Any]]
     blocks: List[Dict[str, Any]] = [
         {"type": "header", "text": {"type": "plain_text", "text": header}},
         {"type": "section", "text": {"type": "mrkdwn", "text": summary}},
-        {"type": "section", "text": {"type": "mrkdwn", "text": findings_text[:2900]}},
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": findings_text[:MAX_SECTION_CHARS]},
+        },
     ]
 
     links = []
@@ -164,14 +174,18 @@ def poll_approval(cfg: SlackConfig, bundle: StagedBundle) -> Optional[str]:
     resp = requests.get(
         f"{_API}/conversations.replies",
         headers={"Authorization": f"Bearer {cfg.bot_token}"},
-        params={"channel": bundle.slack.channel, "ts": bundle.slack.ts},
+        params={
+            "channel": bundle.slack.channel,
+            "ts": bundle.slack.ts,
+            "limit": MAX_THREAD_REPLIES,
+        },
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
     data = resp.json()
     if not data.get("ok"):
         raise RuntimeError(f"slack conversations.replies failed: {data.get('error')}")
 
-    for msg in data.get("messages", []):
+    for msg in list(data.get("messages", []))[:MAX_THREAD_REPLIES]:
         if msg.get("ts") == bundle.slack.ts:
             continue  # the root review message itself
         if msg.get("bot_id"):

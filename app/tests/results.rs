@@ -227,3 +227,46 @@ async fn empty_search_query_is_rejected() {
         .unwrap();
     assert_eq!(response.status(), 400);
 }
+
+#[tokio::test]
+async fn wildcard_search_query_does_not_match_every_name() {
+    let app = support::spawn_test_app().await;
+    // `%` is a LIKE wildcard. Unescaped it matched every seeded athlete, so the
+    // endpoint answered a one-character query with the whole table.
+    let response = reqwest::get(format!(
+        "{}/search?query=%25&start_date=2025-01-01&end_date=2025-12-31",
+        app.address
+    ))
+    .await
+    .unwrap();
+    assert_eq!(response.status(), 200);
+
+    let body: SearchResponse = response.json().await.unwrap();
+    assert!(
+        body.suggestions.is_empty(),
+        "no seeded name contains a literal `%`, got {:?}",
+        body.suggestions
+    );
+    assert!(
+        body.results.is_empty(),
+        "no seeded name contains a literal `%`, got {:?}",
+        body.results
+    );
+}
+
+#[tokio::test]
+async fn underscore_search_query_does_not_match_every_name() {
+    let app = support::spawn_test_app().await;
+    // `_` is LIKE's single-character wildcard: `%_%` matched every non-empty name.
+    let response = reqwest::get(format!("{}/search?query=_", app.address))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    let body: SearchResponse = response.json().await.unwrap();
+    assert!(
+        body.suggestions.is_empty(),
+        "no seeded name contains a literal `_`, got {:?}",
+        body.suggestions
+    );
+}

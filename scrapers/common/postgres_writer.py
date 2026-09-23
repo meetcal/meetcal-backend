@@ -107,6 +107,79 @@ def row_changed(existing: dict[str, Any] | None, values: dict[str, Any]) -> bool
     return any(comparable(existing.get(key)) != comparable(value) for key, value in values.items())
 
 
+def require_text(value: Any, field: str) -> str:
+    """Guard for identity fields a destructive write keys off. Empty or
+    non-string values raise rather than widening the statement's blast radius."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} is required")
+    return value
+
+
+def delete_athletes_by_meet(conn, meet: Any) -> int:
+    """Delete every athlete row for one meet. Refuses an empty meet."""
+    meet = require_text(meet, "meet")
+    return conn.execute(
+        "DELETE FROM athletes WHERE meet = %s RETURNING 1",
+        (meet,),
+    ).rowcount
+
+
+def delete_session_schedule_by_meet(conn, meet: Any) -> int:
+    """Delete every schedule row for one meet. Refuses an empty meet."""
+    meet = require_text(meet, "meet")
+    return conn.execute(
+        "DELETE FROM session_schedule WHERE meet = %s RETURNING 1",
+        (meet,),
+    ).rowcount
+
+
+def _plan_exact_set_sync(
+    existing_by_id: dict[Any, dict[str, Any]],
+    existing_by_key: dict[Any, dict[str, Any]],
+    prepared: Iterable[tuple[dict[str, Any], Any, Any, dict[str, Any]]],
+    duplicate_message: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
+    """The one copy of the exact-set replace policy.
+
+    ``prepared`` yields ``(row, key, convex_id, values)`` per incoming row. Rows
+    that disappeared from the payload are deleted, the rest are upserted, and
+    rows whose values are unchanged are skipped. Planning is complete before the
+    caller writes anything, so a duplicate key in the payload aborts the whole
+    sync without having deleted a single row.
+    """
+    inserted = 0
+    updated = 0
+    unchanged = 0
+    incoming_keys: set[Any] = set()
+    rows_to_write: list[dict[str, Any]] = []
+
+    for row, key, convex_id, values in prepared:
+        if key in incoming_keys:
+            raise ValueError(f"{duplicate_message}: {key}")
+        incoming_keys.add(key)
+        existing = existing_by_id.get(convex_id) or existing_by_key.get(key)
+        if existing is None:
+            inserted += 1
+            rows_to_write.append(row)
+        elif row_changed(existing, values):
+            updated += 1
+            rows_to_write.append(row)
+        else:
+            unchanged += 1
+
+    rows_to_delete = [row for key, row in existing_by_key.items() if key not in incoming_keys]
+    return (
+        rows_to_write,
+        rows_to_delete,
+        {
+            "inserted": inserted,
+            "updated": updated,
+            "unchanged": unchanged,
+            "deleted": len(rows_to_delete),
+        },
+    )
+
+
 def upsert_lifting_result(conn, row: dict[str, Any]) -> dict[str, Any]:
     row = clean(row)
     legacy_id = first(row, "legacyId", "legacy_id")
@@ -781,6 +854,18 @@ def upsert_intl_ranking(conn, row: dict[str, Any]) -> dict[str, Any]:
 
 
 def replace_records(conn, record_type: str, rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Wholesale replace of one record type (e.g. IWF world records).
+
+    Refuses an empty ``record_type`` so the DELETE always has a key, and an
+    empty payload so a failed scrape cannot wipe the set -- the same rule
+    ``replace_all_intl_rankings`` enforces.
+    """
+    record_type = require_text(record_type, "recordType")
+    rows = list(rows)
+    if not rows:
+        raise ValueError(
+            f"refusing to replace {record_type} records with an empty payload"
+        )
     conn.execute("DELETE FROM records WHERE record_type = %s", (record_type,))
     inserted = 0
     for row in rows:
@@ -790,9 +875,17 @@ def replace_records(conn, record_type: str, rows: Iterable[dict[str, Any]]) -> d
 
 
 def replace_wso_records(conn, wso: str, rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    if not isinstance(wso, str) or not wso.strip():
-        raise ValueError("wso is required")
+    """Exact-set sync of one WSO's record set.
+
+    Refuses an empty ``wso`` so the scan always has a key, and an empty payload
+    because an exact-set sync treats "no incoming rows" as "every existing row
+    disappeared" -- a failed PDF parse would silently delete the WSO's whole
+    record set. Same rule ``replace_records`` enforces.
+    """
+    require_text(wso, "wso")
     prepared_rows = [{**row, "wso": wso} for row in rows]
+    if not prepared_rows:
+        raise ValueError(f"refusing to replace {wso} WSO records with an empty payload")
     existing_rows = conn.execute(
         """
         SELECT convex_id, wso, age_category, gender, weight_class,
@@ -807,46 +900,32 @@ def replace_wso_records(conn, wso: str, rows: Iterable[dict[str, Any]]) -> dict[
         (row["wso"], row["age_category"], row["gender"], row["weight_class"]): row
         for row in existing_rows
     }
-    inserted = 0
-    updated = 0
-    unchanged = 0
-    incoming_keys: set[tuple[Any, Any, Any, Any]] = set()
-    rows_to_write: list[dict[str, Any]] = []
-    for row in prepared_rows:
-        age_category = normalize_age_category(first(row, "ageCategory", "age_category", default=""))
-        gender = normalize_gender(first(row, "gender", default=""))
-        weight_class = first(row, "weightClass", "weight_class", default="")
-        key = (wso, age_category, gender, weight_class)
-        if key in incoming_keys:
-            raise ValueError(f"Duplicate WSO record in payload: {key}")
-        incoming_keys.add(key)
-        convex_id = first(row, "convexId", "convex_id") or stable_id(
-            "wso_record", wso, age_category, gender, weight_class
-        )
-        values = {
-            "wso": wso,
-            "age_category": age_category,
-            "gender": gender,
-            "weight_class": weight_class,
-            "snatch_record": first(row, "snatchRecord", "snatch_record"),
-            "cj_record": first(row, "cjRecord", "cj_record"),
-            "total_record": first(row, "totalRecord", "total_record"),
-        }
-        existing = existing_by_id.get(convex_id) or existing_by_key.get(key)
-        if existing is None:
-            inserted += 1
-            rows_to_write.append(row)
-        elif row_changed(existing, values):
-            updated += 1
-            rows_to_write.append(row)
-        else:
-            unchanged += 1
 
-    rows_to_delete = [
-        row
-        for key, row in existing_by_key.items()
-        if key not in incoming_keys
-    ]
+    def prepare():
+        for row in prepared_rows:
+            age_category = normalize_age_category(
+                first(row, "ageCategory", "age_category", default="")
+            )
+            gender = normalize_gender(first(row, "gender", default=""))
+            weight_class = first(row, "weightClass", "weight_class", default="")
+            key = (wso, age_category, gender, weight_class)
+            convex_id = first(row, "convexId", "convex_id") or stable_id(
+                "wso_record", wso, age_category, gender, weight_class
+            )
+            values = {
+                "wso": wso,
+                "age_category": age_category,
+                "gender": gender,
+                "weight_class": weight_class,
+                "snatch_record": first(row, "snatchRecord", "snatch_record"),
+                "cj_record": first(row, "cjRecord", "cj_record"),
+                "total_record": first(row, "totalRecord", "total_record"),
+            }
+            yield row, key, convex_id, values
+
+    rows_to_write, rows_to_delete, counts = _plan_exact_set_sync(
+        existing_by_id, existing_by_key, prepare(), "Duplicate WSO record in payload"
+    )
     for row in rows_to_delete:
         conn.execute(
             "DELETE FROM wso_records WHERE convex_id = %s",
@@ -854,27 +933,27 @@ def replace_wso_records(conn, wso: str, rows: Iterable[dict[str, Any]]) -> dict[
         )
     for row in rows_to_write:
         upsert_wso_record(conn, row)
-    return {
-        "inserted": inserted,
-        "updated": updated,
-        "unchanged": unchanged,
-        "deleted": len(rows_to_delete),
-    }
+    return counts
 
 
 def replace_intl_rankings_group(conn, args: dict[str, Any]) -> dict[str, Any]:
     meet = first(args, "meet", default="")
     gender = normalize_gender(first(args, "gender", default=""))
     age_category = normalize_age_category(first(args, "ageCategory", "age_category", default=""))
-    if not isinstance(meet, str) or not meet.strip():
-        raise ValueError("meet is required")
-    if not isinstance(gender, str) or not str(gender).strip():
-        raise ValueError("gender is required")
-    if not isinstance(age_category, str) or not str(age_category).strip():
-        raise ValueError("ageCategory is required")
+    require_text(meet, "meet")
+    require_text(gender, "gender")
+    require_text(age_category, "ageCategory")
     rankings = args.get("rankings", [])
     if not isinstance(rankings, list):
         raise ValueError("rankings must be a list")
+    # An exact-set sync with no incoming rows deletes the whole group. Removing
+    # a group that genuinely disappeared is `deleteMissingIntlRankingGroups`'
+    # job, so an empty payload here is a failed scrape, not an empty group.
+    if not rankings:
+        raise ValueError(
+            f"refusing to replace intl rankings for {meet}/{gender}/{age_category} "
+            "with an empty payload"
+        )
     existing_rows = conn.execute(
         """
         SELECT convex_id, legacy_id, meet, ranking, name, weight_class,
@@ -889,45 +968,30 @@ def replace_intl_rankings_group(conn, args: dict[str, Any]) -> dict[str, Any]:
         (row["meet"], row["gender"], row["age_category"], row["ranking"], row["name"]): row
         for row in existing_rows
     }
-    inserted = 0
-    updated = 0
-    unchanged = 0
-    incoming_keys: set[tuple[Any, Any, Any, Any, Any]] = set()
-    rows_to_write: list[dict[str, Any]] = []
-    for row in rankings:
-        ranking = first(row, "ranking", default=0)
-        name = first(row, "name", default="")
-        key = (meet, gender, age_category, ranking, name)
-        if key in incoming_keys:
-            raise ValueError(f"Duplicate intl ranking in payload: {key}")
-        incoming_keys.add(key)
-        convex_id = first(row, "convexId", "convex_id") or stable_id(
-            "intl_ranking", meet, gender, age_category, ranking, name
-        )
-        values = {
-            "legacy_id": first(row, "legacyId", "legacy_id"),
-            "meet": meet,
-            "ranking": ranking,
-            "name": name,
-            "weight_class": first(row, "weightClass", "weight_class"),
-            "total": first(row, "total"),
-            "percent_a": first(row, "percentA", "percent_a"),
-            "gender": gender,
-            "age_category": age_category,
-        }
-        existing = existing_by_id.get(convex_id) or existing_by_key.get(key)
-        if existing is None:
-            inserted += 1
-            rows_to_write.append(row)
-        elif row_changed(existing, values):
-            updated += 1
-            rows_to_write.append(row)
-        else:
-            unchanged += 1
+    def prepare():
+        for row in rankings:
+            ranking = first(row, "ranking", default=0)
+            name = first(row, "name", default="")
+            key = (meet, gender, age_category, ranking, name)
+            convex_id = first(row, "convexId", "convex_id") or stable_id(
+                "intl_ranking", meet, gender, age_category, ranking, name
+            )
+            values = {
+                "legacy_id": first(row, "legacyId", "legacy_id"),
+                "meet": meet,
+                "ranking": ranking,
+                "name": name,
+                "weight_class": first(row, "weightClass", "weight_class"),
+                "total": first(row, "total"),
+                "percent_a": first(row, "percentA", "percent_a"),
+                "gender": gender,
+                "age_category": age_category,
+            }
+            yield row, key, convex_id, values
 
-    rows_to_delete = [
-        row for key, row in existing_by_key.items() if key not in incoming_keys
-    ]
+    rows_to_write, rows_to_delete, counts = _plan_exact_set_sync(
+        existing_by_id, existing_by_key, prepare(), "Duplicate intl ranking in payload"
+    )
     for row in rows_to_delete:
         conn.execute(
             "DELETE FROM intl_rankings WHERE convex_id = %s",
@@ -937,12 +1001,19 @@ def replace_intl_rankings_group(conn, args: dict[str, Any]) -> dict[str, Any]:
         upsert_intl_ranking(
             conn, {**row, "meet": meet, "gender": gender, "ageCategory": age_category}
         )
-    return {
-        "inserted": inserted,
-        "updated": updated,
-        "unchanged": unchanged,
-        "deleted": len(rows_to_delete),
-    }
+    return counts
+
+
+def replace_all_intl_rankings(conn, rankings: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Wholesale replace of every intl ranking. Refuses an empty payload so a
+    failed scrape cannot wipe the table."""
+    rankings = list(rankings)
+    if not rankings:
+        raise ValueError("refusing to replace all intl rankings with an empty payload")
+    conn.execute("DELETE FROM intl_rankings")
+    for row in rankings:
+        upsert_intl_ranking(conn, row)
+    return {"inserted": len(rankings)}
 
 
 def delete_missing_intl_ranking_groups(conn, groups: Iterable[dict[str, Any]]) -> dict[str, Any]:

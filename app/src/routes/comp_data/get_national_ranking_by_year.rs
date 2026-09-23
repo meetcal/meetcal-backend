@@ -3,7 +3,6 @@ use axum::Json;
 use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct NatRankingsParamsYear {
@@ -82,24 +81,9 @@ pub async fn get_national_rankings_by_year(
     .fetch_all(&state.db)
     .await?;
 
-    let mut rows_hash: HashMap<String, NatRankingsYear> = HashMap::new();
-
-    // if not in map -> insert, else if name is in map -> check total, compare, keep highest
-    for row in rows {
-        if rows_hash.contains_key(&row.name) {
-            // this is the val associated with the key
-            let entry = rows_hash.get_mut(&row.name).unwrap();
-            if row.total > entry.total {
-                *entry = row;
-            }
-        } else {
-            rows_hash.insert(row.name.clone(), row);
-        }
-    }
-
-    // pull out just the vals from the HashMap
-    let mut row_array: Vec<NatRankingsYear> = rows_hash.into_values().collect();
-    row_array.sort_by(|a, b| b.total.total_cmp(&a.total));
-
-    Ok(Json(row_array))
+    Ok(Json(super::best_total_per_athlete(
+        rows,
+        |row| row.name.as_str(),
+        |row| row.total,
+    )))
 }

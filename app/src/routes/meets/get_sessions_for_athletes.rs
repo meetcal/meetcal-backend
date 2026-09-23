@@ -29,6 +29,57 @@ pub struct SessionsAthletes {
     pub weigh_in_time: Option<String>,
 }
 
+/// One projection for all four filter combinations, so the column list and the
+/// schedule join condition exist once.
+///
+/// `$join` is `LEFT JOIN` only for the unfiltered variant, which must still
+/// list athletes whose session has no schedule row yet; the filtered variants
+/// match on a session/platform that by definition has one. `$filters` is
+/// appended to the `WHERE`. Both are literals written here, never caller input,
+/// and the expansion is a string literal so the query stays `&'static str`.
+macro_rules! sessions_for_athletes_sql {
+    ($join:literal, $filters:literal) => {
+        concat!(
+            r#"
+        SELECT
+            a.member_id,
+            a.name,
+            a.age,
+            a.club,
+            a.wso,
+            a.gender,
+            a.weight_class,
+            a.entry_total,
+            a.adaptive,
+            a.session_number,
+            a.session_platform,
+            s.date,
+            s.start_time,
+            s.weigh_in_time
+        FROM athletes a
+        "#,
+            $join,
+            r#" session_schedule s
+            ON s.meet = a.meet
+            AND s.session_id = a.session_number
+            AND s.platform = a.session_platform
+        WHERE a.meet = $1
+            "#,
+            $filters,
+            r#"
+        "#
+        )
+    };
+}
+
+const BY_SESSION_AND_PLATFORM_SQL: &str = sessions_for_athletes_sql!(
+    "JOIN",
+    "AND a.session_number = $2\n            AND a.session_platform = $3"
+);
+const BY_SESSION_SQL: &str = sessions_for_athletes_sql!("JOIN", "AND a.session_number = $2");
+const BY_PLATFORM_SQL: &str = sessions_for_athletes_sql!("JOIN", "AND a.session_platform = $2");
+const ALL_SESSIONS_SQL: &str = sessions_for_athletes_sql!("LEFT JOIN", "");
+
 /// /meets/athletes-sessions endpoint
 ///
 /// curl 'https://api.meetcal.app/meets/athletes-sessions?meet=2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness' | jq .
@@ -61,132 +112,32 @@ pub async fn get_sessions_for_athletes(
     crate::common::query::require_non_empty("meet", &params.meet)?;
     let rows: Vec<SessionsAthletes> = match (params.session_number, params.platform) {
         (Some(session_number), Some(platform)) => {
-            sqlx::query_as(
-                r#"
-        SELECT  
-            a.member_id,
-            a.name,
-            a.age,
-            a.club,
-            a.wso,
-            a.gender,
-            a.weight_class,
-            a.entry_total,
-            a.adaptive,
-            a.session_number,
-            a.session_platform,
-            s.date,
-            s.start_time,
-            s.weigh_in_time
-        FROM athletes a
-        JOIN session_schedule s
-            ON s.meet = a.meet
-            AND s.session_id = a.session_number
-            AND s.platform = a.session_platform
-        WHERE a.meet = $1
-            AND a.session_number = $2
-            AND a.session_platform = $3
-        "#,
-            )
-            .bind(&params.meet)
-            .bind(session_number)
-            .bind(platform)
-            .fetch_all(&state.db)
-            .await?
+            sqlx::query_as(BY_SESSION_AND_PLATFORM_SQL)
+                .bind(&params.meet)
+                .bind(session_number)
+                .bind(platform)
+                .fetch_all(&state.db)
+                .await?
         }
         (Some(session_number), None) => {
-            sqlx::query_as(
-                r#"
-        SELECT  
-            a.member_id,
-            a.name,
-            a.age,
-            a.club,
-            a.wso,
-            a.gender,
-            a.weight_class,
-            a.entry_total,
-            a.adaptive,
-            a.session_number,
-            a.session_platform,
-            s.date,
-            s.start_time,
-            s.weigh_in_time
-        FROM athletes a
-        JOIN session_schedule s
-            ON s.meet = a.meet
-            AND s.session_id = a.session_number
-            AND s.platform = a.session_platform
-        WHERE a.meet = $1
-            AND a.session_number = $2
-        "#,
-            )
-            .bind(&params.meet)
-            .bind(session_number)
-            .fetch_all(&state.db)
-            .await?
+            sqlx::query_as(BY_SESSION_SQL)
+                .bind(&params.meet)
+                .bind(session_number)
+                .fetch_all(&state.db)
+                .await?
         }
         (None, Some(platform)) => {
-            sqlx::query_as(
-                r#"
-        SELECT  
-            a.member_id,
-            a.name,
-            a.age,
-            a.club,
-            a.wso,
-            a.gender,
-            a.weight_class,
-            a.entry_total,
-            a.adaptive,
-            a.session_number,
-            a.session_platform,
-            s.date,
-            s.start_time,
-            s.weigh_in_time
-        FROM athletes a
-        JOIN session_schedule s
-            ON s.meet = a.meet
-            AND s.session_id = a.session_number
-            AND s.platform = a.session_platform
-        WHERE a.meet = $1
-            AND a.session_platform = $2
-        "#,
-            )
-            .bind(&params.meet)
-            .bind(platform)
-            .fetch_all(&state.db)
-            .await?
+            sqlx::query_as(BY_PLATFORM_SQL)
+                .bind(&params.meet)
+                .bind(platform)
+                .fetch_all(&state.db)
+                .await?
         }
         (None, None) => {
-            sqlx::query_as(
-                r#"
-        SELECT  
-            a.member_id,
-            a.name,
-            a.age,
-            a.club,
-            a.wso,
-            a.gender,
-            a.weight_class,
-            a.entry_total,
-            a.adaptive,
-            a.session_number,
-            a.session_platform,
-            s.date,
-            s.start_time,
-            s.weigh_in_time
-        FROM athletes a
-        LEFT JOIN session_schedule s
-            ON s.meet = a.meet
-            AND s.session_id = a.session_number
-            AND s.platform = a.session_platform
-        WHERE a.meet = $1
-        "#,
-            )
-            .bind(&params.meet)
-            .fetch_all(&state.db)
-            .await?
+            sqlx::query_as(ALL_SESSIONS_SQL)
+                .bind(&params.meet)
+                .fetch_all(&state.db)
+                .await?
         }
     };
 

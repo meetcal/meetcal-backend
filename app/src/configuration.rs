@@ -60,17 +60,6 @@ impl DatabaseSettings {
             percent_encode(&self.database_name)
         ))
     }
-
-    pub fn connection_string_without_db(&self) -> Result<String, config::ConfigError> {
-        let password = self.password()?;
-        Ok(format!(
-            "postgres://{}:{}@{}:{}",
-            percent_encode(&self.username),
-            percent_encode(&password),
-            self.host,
-            self.port
-        ))
-    }
 }
 
 fn percent_encode(value: &str) -> String {

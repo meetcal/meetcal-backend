@@ -10,6 +10,12 @@
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+/// Ceiling on how many items one Slack-managed list may hold. Both lists are
+/// hand-curated: a season's worth of watched meets and entry targets is tens of
+/// entries, so this is generous headroom, but `add` is a Slack-driven append
+/// with no other bound and the pipeline walks the whole file every tick.
+pub const MAX_LIST_ITEMS: usize = 500;
+
 #[derive(Clone)]
 pub struct JsonListStore {
     path: PathBuf,
@@ -84,6 +90,11 @@ impl JsonListStore {
                 self.key_field
             ));
         }
+        if items.len() >= MAX_LIST_ITEMS {
+            return Err(format!(
+                "the list is full ({MAX_LIST_ITEMS} entries); delete one before adding another"
+            ));
+        }
         items.push(object);
         self.save(&items)
     }
@@ -138,12 +149,18 @@ mod tests {
     struct Tmp(PathBuf);
     impl Tmp {
         fn new() -> Self {
+            // Tests run in parallel and the clock is not guaranteed to tick
+            // between two calls, so the directory name carries a counter as
+            // well: two tests sharing a directory made one delete the other's
+            // list on drop.
+            static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let mut p = std::env::temp_dir();
             let n = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            p.push(format!("meetcal-store-test-{n}"));
+            let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            p.push(format!("meetcal-store-test-{n}-{id}"));
             std::fs::create_dir_all(&p).unwrap();
             Tmp(p)
         }
@@ -165,6 +182,24 @@ mod tests {
         assert!(s.add(json!({"key": "A"})).is_err()); // dup, case-insensitive
         assert!(s.delete("A").unwrap());
         assert!(!s.delete("missing").unwrap());
+    }
+
+    #[test]
+    fn list_is_bounded_at_max_items() {
+        let dir = Tmp::new();
+        let s = JsonListStore::new(dir.0.join("list.json"), "key");
+        // Zero, one, many: adds succeed up to the declared ceiling.
+        for index in 0..MAX_LIST_ITEMS {
+            s.add(json!({ "key": format!("k{index}") })).unwrap();
+        }
+        assert_eq!(s.items().unwrap().len(), MAX_LIST_ITEMS);
+        // Max: the next add is refused rather than growing the file forever.
+        let error = s.add(json!({ "key": "one-too-many" })).unwrap_err();
+        assert!(error.contains("list is full"), "{error}");
+        assert_eq!(s.items().unwrap().len(), MAX_LIST_ITEMS);
+        // Deleting frees a slot again.
+        assert!(s.delete("k0").unwrap());
+        s.add(json!({ "key": "one-too-many" })).unwrap();
     }
 
     #[test]

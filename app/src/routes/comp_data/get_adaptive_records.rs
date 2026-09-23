@@ -1,5 +1,5 @@
 use crate::common::sort::sort_by_class;
-use crate::routes::results::types::LiftingResults;
+use crate::routes::results::types::{LiftingResults, lifting_result_columns};
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::{Query, State};
@@ -14,7 +14,7 @@ pub struct AdaptiveRecordsParams {
     pub gender: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 pub struct AdaptiveRecords {
     pub weight_class: String,
     pub snatch: f64,
@@ -26,6 +26,18 @@ static MEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bmen\b").unwrap
 static WOMEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bwomen\b").unwrap());
 static YEAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\d{4}\b").unwrap());
 static WEIGHT_CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(\d+\+?)kg").unwrap());
+
+const ADAPTIVE_RESULTS_SQL: &str = concat!(
+    r#"
+        SELECT
+            "#,
+    lifting_result_columns!(),
+    r#"
+        FROM lifting_results
+        WHERE adaptive = true
+            AND (federation IS NULL OR federation <> $1)
+        "#
+);
 
 /// /data/adaptive endpoint
 ///
@@ -49,44 +61,33 @@ pub async fn get_adaptive_records(
     State(state): State<AppState>,
     Query(params): Query<AdaptiveRecordsParams>,
 ) -> Result<Json<Vec<AdaptiveRecords>>, AppError> {
-    let rows = sqlx::query_as::<_, LiftingResults>(
-        r#"
-        SELECT
-            COALESCE(federation, '') AS federation,
-            meet,
-            date,
-            name,
-            COALESCE(age, '') AS age,
-            COALESCE(body_weight, 0) AS body_weight,
-            COALESCE(snatch1, 0) AS snatch1,
-            COALESCE(snatch2, 0) AS snatch2,
-            COALESCE(snatch3, 0) AS snatch3,
-            COALESCE(snatch_best, 0) AS snatch_best,
-            COALESCE(cj1, 0) AS cj1,
-            COALESCE(cj2, 0) AS cj2,
-            COALESCE(cj3, 0) AS cj3,
-            COALESCE(cj_best, 0) AS cj_best,
-            COALESCE(total, 0) AS total,
-            adaptive
-        FROM lifting_results
-        WHERE adaptive = true
-            AND (federation IS NULL OR federation <> $1)
-        "#,
-    )
-    .bind(&params.exclude_federation)
-    .fetch_all(&state.db)
-    .await?;
+    let rows = sqlx::query_as::<_, LiftingResults>(ADAPTIVE_RESULTS_SQL)
+        .bind(&params.exclude_federation)
+        .fetch_all(&state.db)
+        .await?;
 
-    let gender = params.gender;
+    Ok(Json(best_by_weight_class(&rows, &params.gender)))
+}
+
+/// Collapses adaptive result rows to one record per weight class, keeping the
+/// heaviest snatch, clean and jerk, and total seen in each.
+///
+/// `age` is a scraped free-text combo of age group and weight class, so a row
+/// can carry no `NNkg` token at all (`"Adaptive Men"`, or an empty `age`
+/// column). Those rows have no class to file under and are skipped; reading the
+/// class was previously an `unwrap`, which panicked the request.
+fn best_by_weight_class(rows: &[LiftingResults], gender: &str) -> Vec<AdaptiveRecords> {
     let mut records: HashMap<String, AdaptiveRecords> = HashMap::new();
 
     let filtered = rows
         .iter()
-        .filter(|g| extract_gender(g.age.as_str(), gender.as_str()))
+        .filter(|g| extract_gender(g.age.as_str(), gender))
         .filter(|y| extract_year(y.date.as_str()) >= 2026);
 
     for row in filtered {
-        let class = extract_class(row.age.as_str()).unwrap();
+        let Some(class) = extract_class(row.age.as_str()) else {
+            continue;
+        };
 
         let current = records.get(&class).cloned().unwrap_or(AdaptiveRecords {
             weight_class: class.clone(),
@@ -96,9 +97,9 @@ pub async fn get_adaptive_records(
         });
 
         records.insert(
-            class.to_string(),
+            class.clone(),
             AdaptiveRecords {
-                weight_class: class.to_string(),
+                weight_class: class,
                 snatch: current.snatch.max(row.snatch_best),
                 cj: current.cj.max(row.cj_best),
                 total: current.total.max(row.total),
@@ -106,9 +107,7 @@ pub async fn get_adaptive_records(
         );
     }
 
-    let sorted = sort_by_class(records.into_values().collect(), |r| r.weight_class.as_str());
-
-    Ok(Json(sorted))
+    sort_by_class(records.into_values().collect(), |r| r.weight_class.as_str())
 }
 
 pub fn extract_gender(age: &str, gender: &str) -> bool {
@@ -150,4 +149,83 @@ fn is_inside_parens(text: &str, index: usize) -> bool {
     };
 
     !before[open..].contains(')')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(age: &str, date: &str, snatch: f64, cj: f64, total: f64) -> LiftingResults {
+        LiftingResults {
+            federation: "USAW".to_string(),
+            meet: "2026 Adaptive Nationals".to_string(),
+            date: date.to_string(),
+            name: "Adaptive Test Athlete".to_string(),
+            age: age.to_string(),
+            body_weight: 84.5,
+            snatch1: 0.0,
+            snatch2: 0.0,
+            snatch3: 0.0,
+            snatch_best: snatch,
+            cj1: 0.0,
+            cj2: 0.0,
+            cj3: 0.0,
+            cj_best: cj,
+            total,
+            adaptive: true,
+        }
+    }
+
+    #[test]
+    fn rows_without_a_weight_class_are_skipped_not_panicked() {
+        // `age` is scraped free text; these three carry no `NNkg` token, and
+        // reading one used to panic the request.
+        let rows = vec![
+            row("Adaptive Men", "2026-02-01", 60.0, 70.0, 130.0),
+            row("Men", "2026-02-01", 61.0, 71.0, 132.0),
+            // A class that only appears parenthesized is not a class either.
+            row("Adaptive Men (85kg group)", "2026-02-01", 62.0, 72.0, 134.0),
+            row("Adaptive Men 85kg", "2026-02-01", 40.0, 50.0, 90.0),
+        ];
+
+        assert_eq!(
+            best_by_weight_class(&rows, "Men"),
+            vec![AdaptiveRecords {
+                weight_class: "85".to_string(),
+                snatch: 40.0,
+                cj: 50.0,
+                total: 90.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn keeps_the_heaviest_lift_per_class_in_class_order() {
+        let rows = vec![
+            row("Adaptive Men 85kg", "2026-02-01", 40.0, 50.0, 90.0),
+            row("Adaptive Men 85kg", "2026-03-01", 45.0, 45.0, 88.0),
+            row("Adaptive Men 110+kg", "2026-02-01", 80.0, 90.0, 170.0),
+            // Before the 2026 cutoff, and the wrong gender: both excluded.
+            row("Adaptive Men 85kg", "2025-02-01", 999.0, 999.0, 999.0),
+            row("Adaptive Women 85kg", "2026-02-01", 999.0, 999.0, 999.0),
+        ];
+
+        assert_eq!(
+            best_by_weight_class(&rows, "Men"),
+            vec![
+                AdaptiveRecords {
+                    weight_class: "85".to_string(),
+                    snatch: 45.0,
+                    cj: 50.0,
+                    total: 90.0,
+                },
+                AdaptiveRecords {
+                    weight_class: "110+".to_string(),
+                    snatch: 80.0,
+                    cj: 90.0,
+                    total: 170.0,
+                },
+            ]
+        );
+    }
 }

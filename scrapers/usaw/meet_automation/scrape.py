@@ -43,7 +43,7 @@ def scrape_start_list(
     pdf_bytes: bytes,
     meet_name: str,
     source_format: str = "auto",
-    start_member_id: int = 3100,
+    start_member_id: int = config.DEFAULT_START_MEMBER_ID,
 ) -> List[Dict[str, Any]]:
     mod = _load_module(config.FINAL_START_SCRAPER, "meet_automation_start_scraper")
     detected = mod.detect_source_format(pdf_bytes, source_format)
@@ -61,7 +61,7 @@ def scrape_schedule(
     pdf_bytes: bytes,
     meet_name: str,
     start_list_url: Optional[str] = None,
-    start_id: int = 1,
+    start_id: int = config.DEFAULT_SCHEDULE_START_ID,
 ) -> List[Dict[str, Any]]:
     mod = _load_module(config.SCHEDULE_SCRAPER, "meet_automation_schedule_scraper")
     rows = mod.extract_schedule_data(

@@ -121,6 +121,27 @@ class DiscoverPdfsTests(unittest.TestCase):
         self.assertIsNone(sched)
         self.assertEqual(candidates, [])
 
+    def test_candidate_list_is_bounded(self):
+        # The meet page is third-party HTML; the candidate list declares a
+        # ceiling instead of growing with whatever the page contains.
+        html = "".join(
+            f'<a href="https://cdn/{i}.pdf">doc {i}</a>'
+            for i in range(detect.MAX_PDF_CANDIDATES + 50)
+        )
+        _, _, candidates = detect.discover_pdfs(html)
+        self.assertEqual(len(candidates), detect.MAX_PDF_CANDIDATES)
+
+    def test_classification_survives_the_ceiling(self):
+        # A start list inside the bound is still classified even when the page
+        # carries more links than the ceiling.
+        html = '<a href="https://cdn/x_START_LIST.pdf">Start List</a>' + "".join(
+            f'<a href="https://cdn/{i}.pdf">doc {i}</a>'
+            for i in range(detect.MAX_PDF_CANDIDATES + 50)
+        )
+        start, _, candidates = detect.discover_pdfs(html)
+        self.assertEqual(start, "https://cdn/x_START_LIST.pdf")
+        self.assertEqual(len(candidates), detect.MAX_PDF_CANDIDATES)
+
 
 class SlackBlocksTests(unittest.TestCase):
     def _bundle(self):
@@ -179,6 +200,23 @@ class CliTests(unittest.TestCase):
         args = pipeline.build_parser().parse_args(["approve", "--all-pending"])
         self.assertTrue(args.all_pending)
         self.assertIsNone(args.run_id)
+
+    def test_approve_skips_an_unreadable_run(self):
+        # One corrupt run directory used to raise out of the loop, so every
+        # other pending approval on that tick was never published.
+        args = pipeline.build_parser().parse_args(["approve", "--all-pending"])
+        loaded = []
+
+        def load(run_id):
+            if run_id == "broken":
+                raise ValueError("bundle.json is not JSON")
+            loaded.append(run_id)
+            return StagedBundle(run_id=run_id, watch_key="w", meet_name=MEET, status="ingested")
+
+        with mock.patch.object(pipeline.stage, "list_runs", return_value=["broken", "fine"]), \
+                mock.patch.object(pipeline.stage, "load_run", side_effect=load):
+            self.assertEqual(pipeline.cmd_approve(args), 0)
+        self.assertEqual(loaded, ["fine"])
 
 
 class RunGuardTests(unittest.TestCase):
@@ -371,6 +409,33 @@ class ReplyAllowlistTests(unittest.TestCase):
 
     def test_empty_allowlist_allows_anyone(self):
         self.assertEqual(self._poll([], reply_user="U_ANY"), "approved")
+
+
+class ThreadReplyBoundTests(unittest.TestCase):
+    """`poll_approval` walks a third-party response; the scan is bounded and
+    the bound is also requested from Slack."""
+
+    def test_asks_slack_for_a_bounded_page_and_stops_at_the_bound(self):
+        bundle = StagedBundle(
+            run_id="r", watch_key="w", meet_name=MEET, slack=SlackRef(channel="C1", ts="root")
+        )
+        cfg = SlackConfig(bot_token="x")
+        # The approving reply sits one past the ceiling, so a bounded scan must
+        # not reach it.
+        messages = [{"ts": "root"}] + [
+            {"user": "U", "text": "noise"} for _ in range(slack.MAX_THREAD_REPLIES)
+        ]
+        messages.append({"user": "U", "text": "okay"})
+        captured = {}
+
+        class _Requests(_FakeRequests):
+            def get(self, *a, **k):
+                captured.update(k.get("params", {}))
+                return _FakeResp({"ok": True, "messages": messages})
+
+        with mock.patch.dict(sys.modules, {"requests": _Requests({})}):
+            self.assertIsNone(slack.poll_approval(cfg, bundle))
+        self.assertEqual(captured.get("limit"), slack.MAX_THREAD_REPLIES)
 
 
 class IngestGuardTests(unittest.TestCase):

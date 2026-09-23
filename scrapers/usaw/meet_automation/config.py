@@ -40,6 +40,19 @@ SCHEDULE_SCRAPER = (
     SCRAPERS_DIR / "usaw" / "owlcms_schedule_scraper" / "final_scraper.py"
 )
 
+# Defaults for a watch. These are the one spelling of these numbers: `scrape.py`
+# imports them, and the Rust `/meet-add` command mirrors them in
+# `app/src/routes/scrapers/slack_commands.rs` because it writes the same
+# `watches.json` this module reads.
+DEFAULT_START_MEMBER_ID = 3100
+"""First synthetic member id for athletes a start list gives no id for."""
+
+DEFAULT_SCHEDULE_START_ID = 1
+"""First id assigned to schedule rows."""
+
+DEFAULT_MEET_YEAR = 2026
+"""Year used for schedule dates that lack one."""
+
 # Filename keywords used to classify PDF links discovered on a meet page.
 START_LIST_KEYWORDS = ("start list", "start_list", "startlist", "start-list")
 SCHEDULE_KEYWORDS = ("schedule",)
@@ -71,13 +84,13 @@ class MeetWatch:
     source_format: str = "auto"
     """Start-list parser format hint: auto|masters|owlcms|registration."""
 
-    start_member_id: int = 3100
+    start_member_id: int = DEFAULT_START_MEMBER_ID
     """First synthetic member id for athletes without one."""
 
-    schedule_start_id: int = 1
+    schedule_start_id: int = DEFAULT_SCHEDULE_START_ID
     """First id assigned to schedule rows."""
 
-    default_year: int = 2026
+    default_year: int = DEFAULT_MEET_YEAR
     """Year used for schedule dates that lack one."""
 
     def __post_init__(self) -> None:

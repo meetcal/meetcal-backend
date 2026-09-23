@@ -9,11 +9,6 @@ pub struct TestApp {
     pub address: String,
 }
 
-pub async fn spawn_app() -> TestApp {
-    let auth = AuthVerifier::from_env().expect("Invalid Clerk authentication configuration");
-    spawn_app_with_auth(auth).await
-}
-
 pub async fn spawn_app_with_auth(auth: Option<Arc<AuthVerifier>>) -> TestApp {
     crate::load_env();
 
