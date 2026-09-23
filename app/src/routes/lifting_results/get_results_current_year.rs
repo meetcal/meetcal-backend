@@ -126,7 +126,6 @@ pub async fn get_results_current_year(
     Query(params): Query<ResultsCurrentYearParams>,
 ) -> Result<Json<YearBests>, AppError> {
     crate::common::query::require_non_empty("name", &params.name)?;
-    crate::common::query::require_iso_date("cutoff_date", params.cutoff_date.as_deref())?;
     let rows = if let Some(cutoff_date) = params.cutoff_date {
         sqlx::query_as::<_, YearBests>(BESTS_SINCE_CUTOFF_SQL)
             .bind(normalize_name(&params.name))
@@ -163,7 +162,6 @@ pub async fn get_results_bests(
     Query(params): Query<BatchYearBestsParams>,
 ) -> Result<Json<BTreeMap<String, YearBests>>, AppError> {
     crate::common::query::require_name_list(&params.names)?;
-    crate::common::query::require_iso_date("cutoff_date", params.cutoff_date.as_deref())?;
     let mut by_name: BTreeMap<String, YearBests> = params
         .names
         .iter()

@@ -80,7 +80,6 @@ pub async fn get_results_2yrs(
     Query(params): Query<Results2YrsParams>,
 ) -> Result<Json<Vec<LiftingResults>>, AppError> {
     crate::common::query::require_name_list(&params.names)?;
-    crate::common::query::require_iso_date("cutoff_date", params.cutoff_date.as_deref())?;
     let normalized_names: Vec<String> = params
         .names
         .iter()
