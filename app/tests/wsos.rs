@@ -29,12 +29,24 @@ async fn missing_wso_query_is_rejected() {
 }
 
 #[tokio::test]
-async fn empty_wso_is_rejected() {
+async fn empty_wso_is_rejected_for_strict_clients() {
     let app = support::spawn_test_app().await;
-    let response = reqwest::get(format!("{}/wsos/athletes?wso=%20", app.address))
+    let strict = reqwest::Client::new()
+        .get(format!("{}/wsos/athletes?wso=%20", app.address))
+        .header("X-MeetCal-App", "6.2.0")
+        .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), 400);
+    assert_eq!(strict.status(), 400);
+    let body: serde_json::Value = strict.json().await.unwrap();
+    assert_eq!(body["error"], "wso is required");
+
+    // Legacy builds were shipped against `200 []`.
+    let legacy = reqwest::get(format!("{}/wsos/athletes?wso=%20", app.address))
+        .await
+        .unwrap();
+    assert_eq!(legacy.status(), 200);
+    assert!(legacy.json::<Vec<WsoAthlete>>().await.unwrap().is_empty());
 }
 
 #[tokio::test]

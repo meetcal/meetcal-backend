@@ -229,6 +229,16 @@ async function updateDatabase(entries) {
     return updatePostgres(entries);
 }
 
+// Deterministic stand-in for a missing membership number. Mirrors
+// `placeholder_member_id` in scrapers/common/normalize.py: the writer keys an
+// athlete carrying a `noid:` id on (meet, normalized name), so every nightly
+// re-scrape updates the same row instead of minting a new one.
+function placeholderMemberId(name) {
+    const normalized = String(name || '').split(/\s+/).filter(Boolean).join(' ').toLowerCase();
+    const slug = normalized.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return `noid:${slug}`;
+}
+
 function updatePostgres(entries) {
     if (entries.length === 0) {
         console.log('No entries to update in Postgres');
@@ -239,7 +249,7 @@ function updatePostgres(entries) {
     const rows = entries.map((entry) => {
         const memberId = (entry.member_id && entry.member_id.trim())
             ? entry.member_id.trim()
-            : String(Math.floor(Math.random() * 900000000) + 100000000);
+            : placeholderMemberId(entry.name);
 
         return {
             memberId,
@@ -408,4 +418,4 @@ if (require.main === module) {
         });
 }
 
-module.exports = { scrapeWeightliftingData };
+module.exports = { scrapeWeightliftingData, placeholderMemberId };

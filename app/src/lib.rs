@@ -231,7 +231,35 @@ pub async fn run_with_auth(
             auth,
         });
 
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .unwrap();
+}
+
+/// Resolves on SIGINT or SIGTERM so `axum::serve` stops accepting connections
+/// and lets in-flight requests finish before the process exits. Deploys use
+/// `docker rm -f` / systemd stop, which send SIGTERM first.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!("shutdown signal received; draining in-flight requests");
 }
 
 #[cfg(test)]
@@ -260,7 +288,12 @@ mod timeout_tests {
 
         let response = app
             .clone()
-            .oneshot(Request::builder().uri("/slow").body(Default::default()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/slow")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
@@ -272,7 +305,12 @@ mod timeout_tests {
         assert_eq!(body.as_ref(), br#"{"error":"timeout"}"#);
 
         let response = app
-            .oneshot(Request::builder().uri("/fast").body(Default::default()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/fast")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);

@@ -48,7 +48,9 @@ class DetectResult:
 
 
 def _verify_arg():
-    return os.getenv("REQUESTS_CA_BUNDLE") or os.getenv("CCR_CA_BUNDLE") or True
+    """CA bundle for outbound fetches: the standard requests/OpenSSL variables
+    only. Anything else (sandbox or proxy specific) is not honoured."""
+    return os.getenv("REQUESTS_CA_BUNDLE") or os.getenv("SSL_CERT_FILE") or True
 
 
 def fetch_text(url: str) -> str:

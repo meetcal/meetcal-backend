@@ -551,29 +551,29 @@ mod tests {
     /// missing `aud`.
     #[tokio::test]
     async fn configured_audience_is_required_and_must_match() {
-        let verifier = verifier_with_audience(Some("meetcal-api"));
+        let with_audience = verifier_with_audience(Some("meetcal-api"));
         assert!(
-            verifier
+            with_audience
                 .verify(&token_with(KID, ISSUER, None, None, false))
                 .await
                 .is_err(),
             "missing aud must fail once an audience is configured"
         );
         assert!(
-            verifier
+            with_audience
                 .verify(&token_with(KID, ISSUER, Some(AZP), None, false))
                 .await
                 .is_err(),
             "a listed azp does not stand in for the audience"
         );
         assert!(
-            verifier
+            with_audience
                 .verify(&token_with(KID, ISSUER, None, Some("other-api"), false))
                 .await
                 .is_err()
         );
         assert_eq!(
-            verifier
+            with_audience
                 .verify(&token_with(KID, ISSUER, None, Some("meetcal-api"), false))
                 .await
                 .unwrap(),

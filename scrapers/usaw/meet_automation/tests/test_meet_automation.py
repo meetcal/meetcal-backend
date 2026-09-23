@@ -448,3 +448,158 @@ class IngestGuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApproveFailurePathTests(unittest.TestCase):
+    """A failing ingest must park the run as failed and consume the decision
+    file; otherwise the approve cron retries it (and spams Slack) forever."""
+
+    def _run(self, tmp_path, ingest_side_effect):
+        config_original = config.STATE_DIR
+        config.STATE_DIR = tmp_path
+        decisions = tmp_path / "decisions"
+        decisions.mkdir()
+        for run_id in ("boom", "fine"):
+            (decisions / f"{run_id}.json").write_text(json.dumps({"decision": "approved"}))
+        bundles = {
+            run_id: StagedBundle(
+                run_id=run_id, watch_key="w", meet_name=MEET, status="pending_approval",
+                slack=SlackRef(channel="C1", ts="1.2"),
+            )
+            for run_id in ("boom", "fine")
+        }
+        saved = []
+        notified = []
+
+        def do_ingest(bundle, replace, slack_cfg=None):
+            if bundle.run_id == "boom":
+                raise ingest_side_effect
+            bundle.status = "ingested"
+            return bundle
+
+        args = pipeline.build_parser().parse_args(["approve", "--all-pending"])
+        try:
+            with mock.patch.object(pipeline.stage, "list_runs", return_value=["boom", "fine"]), \
+                    mock.patch.object(pipeline.stage, "load_run", side_effect=lambda r: bundles[r]), \
+                    mock.patch.object(pipeline.stage, "write_run", side_effect=lambda b: saved.append((b.run_id, b.status))), \
+                    mock.patch.object(pipeline, "_do_ingest", side_effect=do_ingest), \
+                    mock.patch.object(pipeline.slack, "post_thread_reply", side_effect=lambda cfg, b, t: notified.append((b.run_id, t))), \
+                    mock.patch.object(pipeline.SlackConfig, "from_env", return_value=SlackConfig()):
+                code = pipeline.cmd_approve(args)
+        finally:
+            config.STATE_DIR = config_original
+        return code, bundles, saved, notified, decisions
+
+    def test_failed_ingest_is_recorded_consumed_and_does_not_block_other_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, bundles, saved, notified, decisions = self._run(Path(tmp), RuntimeError("db down"))
+            self.assertEqual(code, 1)
+            self.assertEqual(bundles["boom"].status, "failed")
+            self.assertIn(("boom", "failed"), saved)
+            # The decision files are consumed either way, so the next tick
+            # does not re-run the same approval.
+            self.assertFalse((decisions / "boom.json").exists())
+            self.assertFalse((decisions / "fine.json").exists())
+            # The later run on the same tick still published.
+            self.assertEqual(bundles["fine"].status, "ingested")
+            failure_notes = [t for r, t in notified if r == "boom" and "failed to publish" in t]
+            self.assertEqual(len(failure_notes), 1)
+            self.assertIn("db down", failure_notes[0])
+
+    def test_failed_run_is_skipped_on_the_next_tick(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, bundles, _, _, _ = self._run(Path(tmp), RuntimeError("db down"))
+        bundles["boom"].status = "failed"
+        args = pipeline.build_parser().parse_args(["approve", "--all-pending"])
+        with mock.patch.object(pipeline.stage, "list_runs", return_value=["boom"]), \
+                mock.patch.object(pipeline.stage, "load_run", return_value=bundles["boom"]), \
+                mock.patch.object(pipeline, "_do_ingest") as ingest, \
+                mock.patch.object(pipeline.SlackConfig, "from_env", return_value=SlackConfig()):
+            self.assertEqual(pipeline.cmd_approve(args), 0)
+        ingest.assert_not_called()
+
+
+class ReplyClassificationTests(unittest.TestCase):
+    def _classify(self, text):
+        cfg = SlackConfig()
+        return slack.classify_reply(text, cfg.approve_words, cfg.reject_words)
+
+    def test_negation_inside_an_approval_is_an_approval(self):
+        self.assertEqual(self._classify("no issues, ship it"), "approved")
+        self.assertEqual(self._classify("No problems. OK!"), "approved")
+
+    def test_plain_keywords(self):
+        self.assertEqual(self._classify("approve"), "approved")
+        self.assertEqual(self._classify("okay"), "approved")
+        self.assertEqual(self._classify("reject"), "rejected")
+        self.assertEqual(self._classify("stop"), "rejected")
+        self.assertEqual(self._classify("no"), "rejected")
+        self.assertEqual(self._classify("No, redo it."), "rejected")
+
+    def test_explicit_reject_wins_over_an_approve_word(self):
+        self.assertEqual(self._classify("no, don't ship this"), "rejected")
+        self.assertEqual(self._classify("ok but please reject, wrong PDF"), "rejected")
+
+    def test_unrelated_chatter_is_not_a_decision(self):
+        self.assertIsNone(self._classify("looking now"))
+        self.assertIsNone(self._classify(""))
+        self.assertIsNone(self._classify("there is no wso column, checking"))
+
+    def test_poll_uses_the_classifier(self):
+        bundle = StagedBundle(
+            run_id="r", watch_key="w", meet_name=MEET, slack=SlackRef(channel="C1", ts="root")
+        )
+        data = {"ok": True, "messages": [{"ts": "root"}, {"user": "U", "text": "no issues, ship it"}]}
+        with mock.patch.dict(sys.modules, {"requests": _FakeRequests(data)}):
+            self.assertEqual(slack.poll_approval(SlackConfig(bot_token="x"), bundle), "approved")
+
+
+class CaBundleTests(unittest.TestCase):
+    def test_only_standard_variables_are_honoured(self):
+        with mock.patch.dict("os.environ", {"CCR_CA_BUNDLE": "/sandbox.pem"}, clear=True):
+            self.assertIs(detect._verify_arg(), True)
+        with mock.patch.dict("os.environ", {"SSL_CERT_FILE": "/etc/ssl/ca.pem"}, clear=True):
+            self.assertEqual(detect._verify_arg(), "/etc/ssl/ca.pem")
+        with mock.patch.dict(
+            "os.environ", {"REQUESTS_CA_BUNDLE": "/req.pem", "SSL_CERT_FILE": "/ssl.pem"}, clear=True
+        ):
+            self.assertEqual(detect._verify_arg(), "/req.pem")
+
+
+class PlatformAndTimeValidationTests(unittest.TestCase):
+    def test_platform_casing_is_normalised_before_the_check(self):
+        report = validate(
+            [_athlete(sessionPlatform="red")], [_session(platform="RED ")], MEET
+        )
+        codes = {f["code"] for f in report["findings"]}
+        self.assertTrue(report["ok"], report["findings"])
+        self.assertNotIn("platform_unknown", codes)
+        self.assertNotIn("schedule_platform_unknown", codes)
+        self.assertNotIn("athlete_session_not_in_schedule", codes)
+        self.assertEqual(report["counts"]["platforms"], ["Red"])
+
+    def test_unknown_platform_is_an_error(self):
+        report = validate(
+            [_athlete(sessionPlatform="Gold")], [_session(platform="Gold")], MEET
+        )
+        by_code = {f["code"]: f for f in report["findings"]}
+        self.assertFalse(report["ok"])
+        self.assertEqual(by_code["platform_unknown"]["severity"], "error")
+        self.assertEqual(by_code["schedule_platform_unknown"]["severity"], "error")
+
+    def test_accepted_time_formats_do_not_warn(self):
+        for start in ("09:00:00", "9:00", "9:00 AM", "14:30"):
+            with self.subTest(start=start):
+                report = validate([_athlete()], [_session(startTime=start)], MEET)
+                self.assertNotIn(
+                    "schedule_time_unparseable", {f["code"] for f in report["findings"]}
+                )
+
+    def test_unparseable_time_is_a_warning_not_an_error(self):
+        report = validate(
+            [_athlete()], [_session(startTime="after lunch", weighInTime="TBD")], MEET
+        )
+        by_code = {f["code"]: f for f in report["findings"]}
+        self.assertTrue(report["ok"])
+        self.assertEqual(by_code["schedule_time_unparseable"]["severity"], "warning")
+        self.assertEqual(by_code["schedule_time_unparseable"]["count"], 2)

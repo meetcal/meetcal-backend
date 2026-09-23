@@ -40,7 +40,9 @@ Required variables:
 
 | Variable                 | Description                                      |
 | ------------------------ | ------------------------------------------------ |
+| `APP_DATABASE__USERNAME` | Postgres role for the API (`postgres` locally; production must use `meetcal_api`) |
 | `APP_DATABASE__PASSWORD` | Postgres password for the API                    |
+| `RUST_LOG`               | Log filter for `tracing` (default `info`, one line per request) |
 | `POSTGRES_PASSWORD`      | Same password, used by `init_db.sh`              |
 | `DATABASE_URL`           | Full connection string (URL-encode the password) |
 | `CLERK_JWKS_URL`         | Clerk JWKS endpoint used to verify session JWTs  |
@@ -81,7 +83,7 @@ The server listens on `http://127.0.0.1:3000` by default.
 | ------ | -------------------- | --------------------------------- |
 | `GET`  | `/meets`             | Upcoming meets (next 3 months)    |
 | `GET`  | `/meet-details`      | Single meet metadata              |
-| `GET`  | `/meets/package`     | Selected meet data package (`ETag` / `If-None-Match` → `304`) |
+| `GET`  | `/meets/package`     | Selected meet data package (`ETag` / `If-None-Match` → `304`); optional `include=year_bests,recent_results,attempt_estimates` (absent = all). `/meets`, `/meets/details`, `/meets/schedule` and the reference-data routes also send `ETag` + `Cache-Control: public, max-age=300`. Timeouts answer `408 {"error":"timeout"}`; `/health` returns `{"status":"ok","db":{"size","idle"}}` |
 | `GET`  | `/meets/schedule`    | Session schedule for a meet       |
 | `GET`  | `/meets/athletes`    | Start list with session timing    |
 | `GET`  | `/clubs`             | Club directory                    |
@@ -92,9 +94,9 @@ The server listens on `http://127.0.0.1:3000` by default.
 | `GET`  | `/qualifying-totals` | Qualifying totals                 |
 | `GET`  | `/intl-rankings`     | International rankings            |
 | `GET`  | `/nat-rankings`      | National rankings                 |
-| `GET`  | `/adaptive`          | Adaptive division records         |
+| `GET`  | `/adaptive`          | Adaptive division records (optional `season=YYYY`) |
 | `GET`  | `/search`            | Result search                     |
-| `GET` `POST` | `/lifting-results/by-names` | Full history for a list of names (`POST {"names": [...]}`) |
+| `GET` `POST` | `/lifting-results/by-names` | Full history for a list of names (`POST {"names": [...]}`); optional `latest_only=true` or `limit_per_name=1..200` |
 | `GET` `POST` | `/lifting-results/recent` | History since `cutoff_date` for a list of names |
 | `GET`  | `/lifting-results/year` | Best lifts for one name since `cutoff_date` |
 | `GET` `POST` | `/lifting-results/bests` | Best lifts since `cutoff_date`, keyed by requested name |

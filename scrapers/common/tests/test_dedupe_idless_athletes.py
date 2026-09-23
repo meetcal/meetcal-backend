@@ -73,9 +73,14 @@ class DedupeIdlessAthletesTests(unittest.TestCase):
         older = self._insert("Jane Doe", "512345678")
         assigned = self._insert("jane doe", "612345678", session_number=4, session_platform="Red")
         newest = self._insert("Jane  Doe", "712345678")
-        # Same name but a real membership number seen at another meet: untouched.
-        real = self._insert("Jane Doe", "1234567")
-        self._insert("Jane Doe", "1234567", meet=f"{self.meet}_other")
+        # A random-looking id that also appears at another meet is treated as
+        # a real membership number: that group is ambiguous and left alone.
+        seen_elsewhere = self._insert("Chris Roe", "912345678")
+        self._insert("Chris Roe", "912345678", meet=f"{self.meet}_other")
+        chris_dup = self._insert("Chris Roe", "922345678")
+        # A group mixing a real id with random ones is ambiguous too.
+        mixed_real = self._insert("Alex Kim", "1234567")
+        mixed_random = self._insert("Alex Kim", "932345678")
         # A different athlete altogether.
         other = self._insert("Someone Else", "812345678")
 
@@ -84,15 +89,19 @@ class DedupeIdlessAthletesTests(unittest.TestCase):
         self.assertEqual(len(dry["groups"]), 1)
         self.assertEqual(dry["groups"][0]["keep_id"], assigned)
         self.assertEqual(sorted(dry["groups"][0]["delete_ids"]), [older, newest])
-        self.assertEqual(len(self._rows()), 5)
+        self.assertEqual(len(self._rows()), 8)
 
         applied = dedupe.dedupe_meet(self.conn, self.meet, apply=True)
         self.assertEqual(applied["deleted"], 2)
         rows = {row["id"]: row for row in self._rows()}
-        self.assertEqual(set(rows), {assigned, real, other})
+        self.assertEqual(
+            set(rows),
+            {assigned, seen_elsewhere, chris_dup, mixed_real, mixed_random, other},
+        )
         self.assertEqual(rows[assigned]["member_id"], "noid:jane-doe")
         self.assertEqual(float(rows[assigned]["session_number"]), 4.0)
-        self.assertEqual(rows[real]["member_id"], "1234567")
+        self.assertEqual(rows[seen_elsewhere]["member_id"], "912345678")
+        self.assertEqual(rows[mixed_real]["member_id"], "1234567")
 
         # Idempotent: nothing left to collapse.
         again = dedupe.dedupe_meet(self.conn, self.meet, apply=True)

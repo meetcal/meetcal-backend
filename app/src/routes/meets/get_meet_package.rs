@@ -1,33 +1,98 @@
 use crate::{
     AppError, AppState,
-    common::names::{normalize_name, normalized_name_sql},
-    routes::results::types::{best_lifts_columns, lifting_result_columns},
+    common::{
+        client::ClientVersion,
+        http_cache::{json_response, strong_etag},
+        names::{normalize_name, normalized_name_sql},
+    },
+    routes::results::types::{LiftingResults, best_lifts_columns, lifting_result_columns},
 };
 use axum::{
     body::Bytes,
     extract::{Query, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
-    response::{IntoResponse, Response},
+    http::{HeaderMap, HeaderValue, header},
+    response::Response,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use sqlx::FromRow;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct MeetPackageParams {
     pub meet: String,
     pub history_cutoff_date: Option<String>,
+    /// Comma-separated subset of `year_bests`, `recent_results`,
+    /// `attempt_estimates`. Absent means all three, the historical shape.
+    pub include: Option<String>,
+}
+
+/// Which optional sections a package carries. Parsed from `include=`; the
+/// set is part of the cache key, and because omitted sections are left out of
+/// the body, it is part of the `ETag` as well.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackageInclude {
+    pub year_bests: bool,
+    pub recent_results: bool,
+    pub attempt_estimates: bool,
+}
+
+impl PackageInclude {
+    pub const ALL: Self = Self {
+        year_bests: true,
+        recent_results: true,
+        attempt_estimates: true,
+    };
+
+    /// `None` or blank is [`Self::ALL`]; an unknown section name is a `400`
+    /// for every client, since no shipped app sends `include` at all.
+    pub fn parse(raw: Option<&str>) -> Result<Self, AppError> {
+        let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+            return Ok(Self::ALL);
+        };
+        let mut include = Self {
+            year_bests: false,
+            recent_results: false,
+            attempt_estimates: false,
+        };
+        for section in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            match section {
+                "year_bests" => include.year_bests = true,
+                "recent_results" => include.recent_results = true,
+                "attempt_estimates" => include.attempt_estimates = true,
+                other => {
+                    return Err(AppError::Validation(format!(
+                        "include has unknown section '{other}'; expected year_bests, recent_results, attempt_estimates"
+                    )));
+                }
+            }
+        }
+        Ok(include)
+    }
+
+    /// Both `recent_results` and `attempt_estimates` are built from the same
+    /// history rows; `year_bests` has its own aggregate and needs neither.
+    fn needs_history(&self) -> bool {
+        self.recent_results || self.attempt_estimates
+    }
+
+    fn cache_key_part(&self) -> String {
+        format!(
+            "{}{}{}",
+            u8::from(self.year_bests),
+            u8::from(self.recent_results),
+            u8::from(self.attempt_estimates)
+        )
+    }
 }
 
 /// How long a built package is served from cache before being rebuilt, set via
 /// APP_PACKAGE_CACHE_TTL_SECS (default 3600s / 1 hour).
 ///
-/// The package is effectively static during a meet weekend: schedule, roster,
-/// attempt estimates, and history are all fixed beforehand, and this meet's own
-/// results (`meet_results`) aren't scraped in until ~1 week after the meet ends.
+/// The TTL is a backstop. Invalidation after ingest is immediate: every request
+/// reads a cheap freshness stamp for the meet ([`FRESHNESS_SQL`]) and a cached
+/// body is only served while its stamp still matches.
 const DEFAULT_PACKAGE_CACHE_TTL_SECS: u64 = 60 * 60;
 static PACKAGE_CACHE_TTL: LazyLock<Duration> = LazyLock::new(|| {
     let secs = std::env::var("APP_PACKAGE_CACHE_TTL_SECS")
@@ -37,13 +102,12 @@ static PACKAGE_CACHE_TTL: LazyLock<Duration> = LazyLock::new(|| {
     Duration::from_secs(secs)
 });
 
-/// `lifting_results` rows carry their identity into the package so the mobile
-/// app can dedupe across screens; the rest of the projection is the shared one.
+/// One `lifting_results` row, the same shape every result endpoint returns.
+pub type PackageLiftingResult = LiftingResults;
+
 const MEET_RESULTS_SQL: &str = concat!(
     r#"
         SELECT
-            id,
-            event_id,
             "#,
     lifting_result_columns!(),
     r#"
@@ -56,8 +120,6 @@ const MEET_RESULTS_SQL: &str = concat!(
 const ATHLETE_HISTORY_SQL: &str = concat!(
     r#"
         SELECT
-            id,
-            event_id,
             "#,
     lifting_result_columns!(),
     r#"
@@ -70,6 +132,11 @@ const ATHLETE_HISTORY_SQL: &str = concat!(
         "#
 );
 
+/// Bests over the year that starts one year after the caller's
+/// `history_cutoff_date` (`$2`). The app sends a two-year cutoff for recent
+/// results, so this is "the last year" on the caller's clock, the same window
+/// `/lifting-results/bests` gets from its `cutoff_date`, rather than the
+/// server's `CURRENT_DATE`.
 const YEAR_BESTS_BY_NAME_SQL: &str = concat!(
     r#"
         SELECT
@@ -83,64 +150,153 @@ const YEAR_BESTS_BY_NAME_SQL: &str = concat!(
         WHERE "#,
     normalized_name_sql!(),
     r#" = ANY($1::text[])
-            AND date >= (CURRENT_DATE - INTERVAL '1 year')::date::text
+            AND date >= (($2::date + INTERVAL '1 year')::date)::text
         GROUP BY "#,
     normalized_name_sql!(),
     r#"
         "#
 );
 
+const MEET_SQL: &str = r#"
+        SELECT
+            convex_id AS id,
+            name,
+            federation,
+            status,
+            start_date::text AS start_date,
+            end_date::text AS end_date,
+            time_zone,
+            venue_name,
+            venue_street,
+            venue_city,
+            venue_state,
+            venue_zip,
+            venue_map_pdf_url,
+            venue_map_apple_url
+        FROM meets
+        WHERE name = $1
+        "#;
+
+const SCHEDULE_SQL: &str = r#"
+        SELECT date, session_id, start_time, weigh_in_time, platform, weight_class
+        FROM session_schedule
+        WHERE meet = $1
+        ORDER BY date, session_id, platform
+        "#;
+
+const ATHLETES_SQL: &str = r#"
+        SELECT
+            a.member_id,
+            a.name,
+            a.age,
+            a.club,
+            a.wso,
+            a.gender,
+            a.weight_class,
+            a.entry_total,
+            a.adaptive,
+            a.session_number,
+            a.session_platform,
+            s.date,
+            s.start_time,
+            s.weigh_in_time
+        FROM athletes a
+        LEFT JOIN session_schedule s
+            ON s.meet = a.meet
+            AND s.session_id = a.session_number
+            AND s.platform = a.session_platform
+        WHERE a.meet = $1
+        ORDER BY a.name
+        "#;
+
+/// Freshness stamp for one meet, read on every package request before the
+/// cache lookup.
+///
+/// None of `athletes`, `session_schedule`, or `lifting_results` carries an
+/// `updated_at`, so the stamp is, per table for this meet, the row count plus
+/// the newest `xmin` (the transaction id that last wrote each row). A replace
+/// ingest (delete + insert), an upsert that rewrites a row in place, and a
+/// deletion all change one of those; `meets.updated_at` covers the meet row
+/// itself. Each subquery is an index scan on `meet` over the meet's own rows,
+/// which is orders of magnitude cheaper than the rebuild it avoids. Missing
+/// meet is a `404` here, before anything is built.
+const FRESHNESS_SQL: &str = r#"
+        SELECT
+            m.updated_at AS meet_updated_at,
+            (SELECT COUNT(*) FROM athletes a WHERE a.meet = m.name) AS athlete_rows,
+            (SELECT COALESCE(MAX(a.xmin::text::bigint), 0) FROM athletes a WHERE a.meet = m.name)
+                AS athlete_tx,
+            (SELECT COUNT(*) FROM session_schedule s WHERE s.meet = m.name) AS schedule_rows,
+            (SELECT COALESCE(MAX(s.xmin::text::bigint), 0) FROM session_schedule s WHERE s.meet = m.name)
+                AS schedule_tx,
+            (SELECT COUNT(*) FROM lifting_results r WHERE r.meet = m.name) AS result_rows,
+            (SELECT COALESCE(MAX(r.xmin::text::bigint), 0) FROM lifting_results r WHERE r.meet = m.name)
+                AS result_tx
+        FROM meets m
+        WHERE m.name = $1
+        LIMIT 1
+        "#;
+
+#[derive(Debug, FromRow)]
+struct FreshnessRow {
+    meet_updated_at: i64,
+    athlete_rows: i64,
+    athlete_tx: i64,
+    schedule_rows: i64,
+    schedule_tx: i64,
+    result_rows: i64,
+    result_tx: i64,
+}
+
+async fn freshness_stamp(state: &AppState, meet: &str) -> Result<String, AppError> {
+    let row = sqlx::query_as::<_, FreshnessRow>(FRESHNESS_SQL)
+        .bind(meet)
+        .fetch_one(&state.db)
+        .await?;
+    Ok(format!(
+        "{}:{}:{}:{}:{}:{}:{}",
+        row.meet_updated_at,
+        row.athlete_rows,
+        row.athlete_tx,
+        row.schedule_rows,
+        row.schedule_tx,
+        row.result_rows,
+        row.result_tx
+    ))
+}
+
 struct CachedPackage {
     body: Bytes,
     etag: HeaderValue,
+    stamp: String,
     inserted: Instant,
 }
 
-/// Strong validator over the exact serialized body, so a client that already
-/// holds this package can revalidate with `If-None-Match` and get `304`
-/// instead of re-downloading up to [`MAX_CACHED_PACKAGE_BYTES`].
-fn package_etag(body: &[u8]) -> HeaderValue {
-    let digest = Sha256::digest(body);
-    let mut tag = String::with_capacity(2 + digest.len() * 2);
-    tag.push('"');
-    for byte in digest {
-        use std::fmt::Write;
-        let _ = write!(tag, "{byte:02x}");
-    }
-    tag.push('"');
-    HeaderValue::from_str(&tag).expect("hex etag is a valid header value")
-}
-
-/// `If-None-Match` matching per RFC 9110 §13.1.2: a `*`, or any listed tag
-/// equal to ours after dropping a `W/` weak prefix. The list is bounded by the
-/// header size, not by the caller.
-fn etag_matches(if_none_match: Option<&HeaderValue>, etag: &HeaderValue) -> bool {
-    let Some(candidates) = if_none_match.and_then(|value| value.to_str().ok()) else {
-        return false;
-    };
-    let Ok(etag) = etag.to_str() else {
-        return false;
-    };
-    candidates.split(',').map(str::trim).any(|candidate| {
-        candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == etag
-    })
-}
-
-/// Process-wide cache of pre-serialized package bodies, keyed by meet + cutoff.
+/// Process-wide cache of pre-serialized package bodies, keyed by
+/// meet + cutoff + include set. The freshness stamp lives in the entry, so a
+/// meet has one entry per key and an ingest replaces it rather than leaving a
+/// stale twin behind.
 static PACKAGE_CACHE: LazyLock<RwLock<HashMap<String, CachedPackage>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 const MAX_PACKAGE_CACHE_ENTRIES: usize = 32;
-const MAX_PACKAGE_CACHE_BYTES: usize = 64 * 1024 * 1024;
-const MAX_CACHED_PACKAGE_BYTES: usize = 8 * 1024 * 1024;
+/// Bytes of one cached package. A national championship (about 1,000 lifters
+/// with two years of history and attempt estimates) serializes to roughly
+/// 6-8 MiB, so the previous 8 MiB cap let exactly the packages that are most
+/// expensive to rebuild fall out of the cache. 16 MiB keeps them with headroom.
+const MAX_CACHED_PACKAGE_BYTES: usize = 16 * 1024 * 1024;
+/// Total bytes across all cached packages: six national-size packages, or
+/// dozens of local meets. The API container has no memory cap, so this is
+/// the bound on the cache's footprint.
+const MAX_PACKAGE_CACHE_BYTES: usize = 96 * 1024 * 1024;
 
-fn cached_package(key: &str) -> Option<(Bytes, HeaderValue)> {
+fn cached_package(key: &str, stamp: &str) -> Option<(Bytes, HeaderValue)> {
     let cache = PACKAGE_CACHE.read().ok()?;
     let entry = cache.get(key)?;
-    (entry.inserted.elapsed() < *PACKAGE_CACHE_TTL)
+    (entry.stamp == stamp && entry.inserted.elapsed() < *PACKAGE_CACHE_TTL)
         .then(|| (entry.body.clone(), entry.etag.clone()))
 }
 
-fn store_package(key: &str, body: Bytes, etag: HeaderValue) {
+fn store_package(key: &str, stamp: String, body: Bytes, etag: HeaderValue) {
     if body.len() > MAX_CACHED_PACKAGE_BYTES {
         return;
     }
@@ -165,16 +321,83 @@ fn store_package(key: &str, body: Bytes, etag: HeaderValue) {
             CachedPackage {
                 body,
                 etag,
+                stamp,
                 inserted: Instant::now(),
             },
         );
     }
 }
 
+/// Single-flight guard: one build per cache key at a time.
+///
+/// When a cached package expires (or an ingest changes its stamp) during a
+/// meet weekend, every phone in the venue misses at once. Without this, each
+/// miss ran its own rebuild -- N times the queries and N times the
+/// serialization for one identical body. Now the first miss builds while the
+/// rest wait on its per-key lock and then read the entry it stored.
+///
+/// The map holds one entry per key currently being built and the last holder
+/// removes it, so it is bounded by in-flight distinct keys, not by history.
+static IN_FLIGHT: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+struct BuildSlot {
+    key: String,
+    lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+fn build_slot(key: &str) -> BuildSlot {
+    let mut in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+    let lock = in_flight.entry(key.to_string()).or_default().clone();
+    BuildSlot {
+        key: key.to_string(),
+        lock,
+    }
+}
+
+impl Drop for BuildSlot {
+    fn drop(&mut self) {
+        let mut in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+        // The map's reference plus ours: nobody else is waiting on this key.
+        // Checked under the map lock, so no new waiter can clone in between.
+        if in_flight
+            .get(&self.key)
+            .is_some_and(|slot| Arc::ptr_eq(slot, &self.lock))
+            && Arc::strong_count(&self.lock) <= 2
+        {
+            in_flight.remove(&self.key);
+        }
+    }
+}
+
+/// How many times each meet's package has been built since process start.
+/// A diagnostic for the single-flight guard and the freshness stamp: bounded
+/// by clearing once it outgrows twice the cache, since only the recent counts
+/// are ever read.
+static BUILD_COUNTS: LazyLock<Mutex<HashMap<String, u64>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn record_build(meet: &str) {
+    let mut counts = BUILD_COUNTS.lock().unwrap_or_else(|e| e.into_inner());
+    if counts.len() >= MAX_PACKAGE_CACHE_ENTRIES * 2 && !counts.contains_key(meet) {
+        counts.clear();
+    }
+    *counts.entry(meet.to_string()).or_default() += 1;
+}
+
+/// Package builds for `meet` since process start (see [`BUILD_COUNTS`]).
+pub fn package_builds(meet: &str) -> u64 {
+    BUILD_COUNTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(meet)
+        .copied()
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod cache_tests {
     use super::*;
-    use std::sync::Mutex;
 
     /// `PACKAGE_CACHE` is process-wide, so the tests that clear and fill it
     /// cannot run concurrently: one clearing the cache mid-fill makes the
@@ -188,8 +411,9 @@ mod cache_tests {
         for index in 0..(MAX_PACKAGE_CACHE_ENTRIES + 5) {
             store_package(
                 &format!("meet-{index}"),
+                "stamp".to_string(),
                 Bytes::from_static(b"{}"),
-                package_etag(b"{}"),
+                strong_etag(b"{}"),
             );
         }
         assert_eq!(
@@ -205,32 +429,70 @@ mod cache_tests {
         PACKAGE_CACHE.write().unwrap().clear();
         store_package(
             "oversized",
+            "stamp".to_string(),
             Bytes::from(vec![0; MAX_CACHED_PACKAGE_BYTES + 1]),
-            package_etag(b"oversized"),
+            strong_etag(b"oversized"),
         );
         assert!(!PACKAGE_CACHE.read().unwrap().contains_key("oversized"));
     }
-}
 
-fn package_response(
-    body: Bytes,
-    etag: HeaderValue,
-    if_none_match: Option<&HeaderValue>,
-) -> Response {
-    if etag_matches(if_none_match, &etag) {
-        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
+    #[test]
+    fn a_changed_freshness_stamp_is_a_cache_miss() {
+        let _serialized = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        PACKAGE_CACHE.write().unwrap().clear();
+        store_package(
+            "stamped",
+            "1:2:3".to_string(),
+            Bytes::from_static(b"{}"),
+            strong_etag(b"{}"),
+        );
+        assert!(cached_package("stamped", "1:2:3").is_some());
+        assert!(cached_package("stamped", "1:2:4").is_none());
+        PACKAGE_CACHE.write().unwrap().clear();
     }
-    (
-        [
-            (
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            ),
-            (header::ETAG, etag),
-        ],
-        body,
-    )
-        .into_response()
+
+    #[test]
+    fn include_parses_the_three_sections_and_rejects_others() {
+        assert_eq!(PackageInclude::parse(None).unwrap(), PackageInclude::ALL);
+        assert_eq!(
+            PackageInclude::parse(Some("  ")).unwrap(),
+            PackageInclude::ALL
+        );
+        assert_eq!(
+            PackageInclude::parse(Some("year_bests")).unwrap(),
+            PackageInclude {
+                year_bests: true,
+                recent_results: false,
+                attempt_estimates: false,
+            }
+        );
+        assert_eq!(
+            PackageInclude::parse(Some("attempt_estimates, recent_results")).unwrap(),
+            PackageInclude {
+                year_bests: false,
+                recent_results: true,
+                attempt_estimates: true,
+            }
+        );
+        assert!(PackageInclude::parse(Some("schedule")).is_err());
+        assert_ne!(
+            PackageInclude::ALL.cache_key_part(),
+            PackageInclude::parse(Some("year_bests"))
+                .unwrap()
+                .cache_key_part()
+        );
+    }
+
+    #[test]
+    fn build_slots_are_shared_per_key_and_released_by_the_last_holder() {
+        let first = build_slot("slot-key");
+        let second = build_slot("slot-key");
+        assert!(Arc::ptr_eq(&first.lock, &second.lock));
+        drop(first);
+        assert!(IN_FLIGHT.lock().unwrap().contains_key("slot-key"));
+        drop(second);
+        assert!(!IN_FLIGHT.lock().unwrap().contains_key("slot-key"));
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -239,9 +501,12 @@ pub struct MeetPackage {
     pub schedule: Vec<PackageScheduleDay>,
     pub athletes: Vec<PackageAthlete>,
     pub meet_results: Vec<PackageLiftingResult>,
-    pub attempt_estimates: Vec<PackageAttemptEstimateSession>,
-    pub year_bests_by_name: BTreeMap<String, YearBests>,
-    pub recent_results_by_name: BTreeMap<String, Vec<PackageLiftingResult>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_estimates: Option<Vec<PackageAttemptEstimateSession>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year_bests_by_name: Option<BTreeMap<String, YearBests>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recent_results_by_name: Option<BTreeMap<String, Vec<PackageLiftingResult>>>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -303,28 +568,6 @@ pub struct PackageAthleteSession {
     pub date: Option<String>,
     pub start_time: Option<String>,
     pub weigh_in_time: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, FromRow)]
-pub struct PackageLiftingResult {
-    pub id: i64,
-    pub event_id: String,
-    pub federation: String,
-    pub meet: String,
-    pub date: String,
-    pub name: String,
-    pub age: String,
-    pub body_weight: f64,
-    pub snatch1: f64,
-    pub snatch2: f64,
-    pub snatch3: f64,
-    pub snatch_best: f64,
-    pub cj1: f64,
-    pub cj2: f64,
-    pub cj3: f64,
-    pub cj_best: f64,
-    pub total: f64,
-    pub adaptive: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -449,6 +692,17 @@ struct AthletePackageRow {
 /// This endpoint returns a selected meet package for app screens that share the same meet data:
 /// schedule, start list, schedule details, offline download, attempt estimator, and cached bests.
 /// If history_cutoff_date is omitted, recent_results_by_name and year_bests_by_name are empty.
+/// year_bests_by_name covers the year starting one year after history_cutoff_date (the app sends
+/// a two-year cutoff, so that is the last year on the app's clock).
+///
+/// Optional `include=year_bests,recent_results,attempt_estimates` (any subset) leaves the other
+/// sections out of the body entirely; absent means all three. A blank `meet` is `400` for a
+/// 6.2.0+ client and `404` for a legacy one; an unknown meet is `404`.
+///
+/// The body carries a strong `ETag` and answers a matching `If-None-Match` with `304`. Bodies are
+/// cached per meet + cutoff + include set, revalidated against a per-meet freshness stamp on every
+/// request (an ingest invalidates immediately) with a one-hour TTL as backstop, and built at most
+/// once at a time per key.
 ///
 /// {
 ///   "meet": {
@@ -474,96 +728,64 @@ struct AthletePackageRow {
 /// }
 pub async fn get_meet_package(
     State(state): State<AppState>,
+    client: ClientVersion,
     headers: HeaderMap,
     Query(params): Query<MeetPackageParams>,
 ) -> Result<Response, AppError> {
     let if_none_match = headers.get(header::IF_NONE_MATCH);
-    crate::common::query::require_non_empty("meet", &params.meet)?;
+    client.require_non_empty("meet", &params.meet)?;
     crate::common::query::require_iso_date(
         "history_cutoff_date",
         params.history_cutoff_date.as_deref(),
     )?;
+    let include = PackageInclude::parse(params.include.as_deref())?;
 
+    let stamp = freshness_stamp(&state, &params.meet).await?;
     let cache_key = format!(
-        "{}|{}",
+        "{}|{}|{}",
         params.meet,
-        params.history_cutoff_date.as_deref().unwrap_or("")
+        params.history_cutoff_date.as_deref().unwrap_or(""),
+        include.cache_key_part()
     );
-    if let Some((body, etag)) = cached_package(&cache_key) {
-        return Ok(package_response(body, etag, if_none_match));
+    if let Some((body, etag)) = cached_package(&cache_key, &stamp) {
+        return Ok(json_response(body, etag, None, if_none_match));
     }
 
-    let meet = sqlx::query_as::<_, PackageMeet>(
-        r#"
-        SELECT
-            convex_id AS id,
-            name,
-            federation,
-            status,
-            start_date::text AS start_date,
-            end_date::text AS end_date,
-            time_zone,
-            venue_name,
-            venue_street,
-            venue_city,
-            venue_state,
-            venue_zip,
-            venue_map_pdf_url,
-            venue_map_apple_url
-        FROM meets
-        WHERE name = $1
-        "#,
-    )
-    .bind(&params.meet)
-    .fetch_one(&state.db)
-    .await?;
+    let slot = build_slot(&cache_key);
+    let _building = slot.lock.lock().await;
+    // Another request may have built this key while we waited for the slot.
+    if let Some((body, etag)) = cached_package(&cache_key, &stamp) {
+        return Ok(json_response(body, etag, None, if_none_match));
+    }
 
-    let schedule_rows = sqlx::query_as::<_, ScheduleRow>(
-        r#"
-        SELECT date, session_id, start_time, weigh_in_time, platform, weight_class
-        FROM session_schedule
-        WHERE meet = $1
-        ORDER BY date, session_id, platform
-        "#,
-    )
-    .bind(&params.meet)
-    .fetch_all(&state.db)
-    .await?;
+    let (body, etag) = build_package(&state, &params, include).await?;
+    store_package(&cache_key, stamp, body.clone(), etag.clone());
+    Ok(json_response(body, etag, None, if_none_match))
+}
 
-    let athletes = sqlx::query_as::<_, AthletePackageRow>(
-        r#"
-        SELECT
-            a.member_id,
-            a.name,
-            a.age,
-            a.club,
-            a.wso,
-            a.gender,
-            a.weight_class,
-            a.entry_total,
-            a.adaptive,
-            a.session_number,
-            a.session_platform,
-            s.date,
-            s.start_time,
-            s.weigh_in_time
-        FROM athletes a
-        LEFT JOIN session_schedule s
-            ON s.meet = a.meet
-            AND s.session_id = a.session_number
-            AND s.platform = a.session_platform
-        WHERE a.meet = $1
-        ORDER BY a.name
-        "#,
-    )
-    .bind(&params.meet)
-    .fetch_all(&state.db)
-    .await?;
+async fn build_package(
+    state: &AppState,
+    params: &MeetPackageParams,
+    include: PackageInclude,
+) -> Result<(Bytes, HeaderValue), AppError> {
+    record_build(&params.meet);
 
-    let meet_results = sqlx::query_as::<_, PackageLiftingResult>(MEET_RESULTS_SQL)
-        .bind(&params.meet)
-        .fetch_all(&state.db)
-        .await?;
+    // The meet row, schedule, roster, and this meet's own results depend only
+    // on the meet name, so they run concurrently.
+    let (meet, schedule_rows, athletes, meet_results) = tokio::try_join!(
+        sqlx::query_as::<_, PackageMeet>(MEET_SQL)
+            .bind(&params.meet)
+            .fetch_one(&state.db),
+        sqlx::query_as::<_, ScheduleRow>(SCHEDULE_SQL)
+            .bind(&params.meet)
+            .fetch_all(&state.db),
+        sqlx::query_as::<_, AthletePackageRow>(ATHLETES_SQL)
+            .bind(&params.meet)
+            .fetch_all(&state.db),
+        sqlx::query_as::<_, PackageLiftingResult>(MEET_RESULTS_SQL)
+            .bind(&params.meet)
+            .fetch_all(&state.db),
+    )?;
 
     let athlete_names: Vec<String> = athletes
         .iter()
@@ -574,33 +796,59 @@ pub async fn get_meet_package(
         .map(|name| normalize_name(name))
         .collect();
 
-    let (recent_results_by_name, history_rows) = if let Some(cutoff_date) =
-        params.history_cutoff_date.as_ref()
-    {
-        let history_rows = if athlete_names.is_empty() {
-            Vec::new()
-        } else {
-            sqlx::query_as::<_, PackageLiftingResult>(ATHLETE_HISTORY_SQL)
-                .bind(&normalized_athlete_names)
-                .bind(cutoff_date)
-                .fetch_all(&state.db)
-                .await?
-        };
+    let cutoff_date = params.history_cutoff_date.as_deref();
+    let want_history =
+        cutoff_date.is_some() && include.needs_history() && !athlete_names.is_empty();
+    let want_bests = cutoff_date.is_some() && include.year_bests && !athlete_names.is_empty();
 
-        let recent_results_by_name = build_recent_results_by_name(&athlete_names, &history_rows);
-        (recent_results_by_name, history_rows)
-    } else {
-        (BTreeMap::new(), Vec::new())
-    };
-    let year_bests_by_name = if params.history_cutoff_date.is_some() && !athlete_names.is_empty() {
-        fetch_year_bests_by_name(&state, &athlete_names, &normalized_athlete_names).await?
-    } else {
-        BTreeMap::new()
-    };
+    // History rows (for recent results and estimates) and the year-bests
+    // aggregate are independent of each other; each is skipped when no
+    // requested section needs it.
+    let (history_rows, bests_rows) = tokio::try_join!(
+        async {
+            if want_history {
+                sqlx::query_as::<_, PackageLiftingResult>(ATHLETE_HISTORY_SQL)
+                    .bind(&normalized_athlete_names)
+                    .bind(cutoff_date)
+                    .fetch_all(&state.db)
+                    .await
+            } else {
+                Ok(Vec::new())
+            }
+        },
+        async {
+            if want_bests {
+                sqlx::query_as::<_, YearBestsByNameRow>(YEAR_BESTS_BY_NAME_SQL)
+                    .bind(&normalized_athlete_names)
+                    .bind(cutoff_date)
+                    .fetch_all(&state.db)
+                    .await
+            } else {
+                Ok(Vec::new())
+            }
+        },
+    )?;
+
+    let recent_results_by_name = include.recent_results.then(|| {
+        if cutoff_date.is_some() {
+            build_recent_results_by_name(&athlete_names, &history_rows)
+        } else {
+            BTreeMap::new()
+        }
+    });
+    let year_bests_by_name = include.year_bests.then(|| {
+        if want_bests {
+            year_bests_from_rows(&athlete_names, bests_rows)
+        } else {
+            BTreeMap::new()
+        }
+    });
 
     let package_athletes: Vec<PackageAthlete> =
         athletes.into_iter().map(PackageAthlete::from).collect();
-    let attempt_estimates = build_attempt_estimates(&package_athletes, &history_rows);
+    let attempt_estimates = include
+        .attempt_estimates
+        .then(|| build_attempt_estimates(&package_athletes, &history_rows));
 
     let package = MeetPackage {
         meet,
@@ -613,9 +861,8 @@ pub async fn get_meet_package(
     };
 
     let body = Bytes::from(serde_json::to_vec(&package).map_err(anyhow::Error::from)?);
-    let etag = package_etag(&body);
-    store_package(&cache_key, body.clone(), etag.clone());
-    Ok(package_response(body, etag, if_none_match))
+    let etag = strong_etag(&body);
+    Ok((body, etag))
 }
 
 fn build_schedule(rows: Vec<ScheduleRow>) -> Vec<PackageScheduleDay> {
@@ -1078,8 +1325,7 @@ fn max_successful(values: [f64; 4]) -> Option<f64> {
 }
 
 /// Groups history rows under each requested athlete name. Year bests come from
-/// [`fetch_year_bests_by_name`], which uses its own one-year window rather than
-/// the caller's history cutoff.
+/// [`year_bests_from_rows`] over a separate aggregate query.
 fn build_recent_results_by_name(
     athlete_names: &[String],
     rows: &[PackageLiftingResult],
@@ -1123,11 +1369,12 @@ fn requested_names_by_normalized(athlete_names: &[String]) -> HashMap<String, Ve
     by_normalized
 }
 
-async fn fetch_year_bests_by_name(
-    state: &AppState,
+/// Keys the year-bests aggregate rows by every requested athlete name that
+/// normalizes to the row's name, defaulting names with no rows to zeros.
+fn year_bests_from_rows(
     athlete_names: &[String],
-    normalized_athlete_names: &[String],
-) -> Result<BTreeMap<String, YearBests>, AppError> {
+    rows: Vec<YearBestsByNameRow>,
+) -> BTreeMap<String, YearBests> {
     let mut bests_by_name: BTreeMap<String, YearBests> = athlete_names
         .iter()
         .map(|name| {
@@ -1143,11 +1390,6 @@ async fn fetch_year_bests_by_name(
         .collect();
 
     let requested_by_normalized = requested_names_by_normalized(athlete_names);
-
-    let rows = sqlx::query_as::<_, YearBestsByNameRow>(YEAR_BESTS_BY_NAME_SQL)
-        .bind(normalized_athlete_names)
-        .fetch_all(&state.db)
-        .await?;
 
     for row in rows {
         let Some(requested_names) = requested_by_normalized.get(&row.name) else {
@@ -1165,7 +1407,7 @@ async fn fetch_year_bests_by_name(
         }
     }
 
-    Ok(bests_by_name)
+    bests_by_name
 }
 
 fn max_positive(values: [f64; 4]) -> f64 {
@@ -1615,52 +1857,5 @@ mod tests {
             serde_json::to_string(&reference::build_attempt_estimates_reference(&[], &history))
                 .unwrap(),
         );
-    }
-}
-
-#[cfg(test)]
-mod etag_tests {
-    use super::*;
-
-    #[test]
-    fn etag_is_a_quoted_sha256_of_the_exact_body() {
-        let tag = package_etag(b"{}");
-        let text = tag.to_str().unwrap();
-        assert!(text.starts_with('"') && text.ends_with('"'));
-        assert_eq!(text.len(), 66);
-        assert_eq!(package_etag(b"{}"), tag);
-        assert_ne!(package_etag(b"{ }"), tag);
-    }
-
-    #[test]
-    fn if_none_match_accepts_exact_weak_and_star_but_nothing_else() {
-        let tag = package_etag(b"body");
-        let hv = |value: &str| HeaderValue::from_str(value).unwrap();
-        assert!(etag_matches(Some(&tag), &tag));
-        assert!(etag_matches(
-            Some(&hv(&format!("W/{}", tag.to_str().unwrap()))),
-            &tag
-        ));
-        assert!(etag_matches(
-            Some(&hv(&format!("\"other\", {}", tag.to_str().unwrap()))),
-            &tag
-        ));
-        assert!(etag_matches(Some(&hv("*")), &tag));
-        assert!(!etag_matches(Some(&hv("\"other\"")), &tag));
-        assert!(!etag_matches(None, &tag));
-        assert!(!etag_matches(Some(&package_etag(b"other body")), &tag));
-    }
-
-    #[test]
-    fn matching_validator_short_circuits_to_304_without_a_body() {
-        let body = Bytes::from_static(b"{\"meet\":1}");
-        let tag = package_etag(&body);
-        let response = package_response(body.clone(), tag.clone(), Some(&tag));
-        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
-        assert_eq!(response.headers().get(header::ETAG), Some(&tag));
-
-        let response = package_response(body, tag.clone(), None);
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers().get(header::ETAG), Some(&tag));
     }
 }

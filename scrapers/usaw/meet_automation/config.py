@@ -128,7 +128,7 @@ class SlackConfig:
         default_factory=lambda: ["okay", "ok", "approve", "approved", "yes", "ship", "lgtm"]
     )
     reject_words: List[str] = field(
-        default_factory=lambda: ["reject", "no", "nope", "stop", "cancel"]
+        default_factory=lambda: ["reject", "no", "nope", "stop", "cancel", "don't", "dont"]
     )
     preview_base_url: Optional[str] = None
     """If set, preview links become ``{preview_base_url}/{run_id}/preview.html``.

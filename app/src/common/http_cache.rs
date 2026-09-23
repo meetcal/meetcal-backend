@@ -58,17 +58,21 @@ pub fn json_response(
     cache_control: Option<&'static str>,
     if_none_match: Option<&HeaderValue>,
 ) -> Response {
-    let mut headers = vec![(header::ETAG, etag.clone())];
+    let mut headers = HeaderMap::new();
+    headers.insert(header::ETAG, etag.clone());
     if let Some(cache_control) = cache_control {
-        headers.push((header::CACHE_CONTROL, HeaderValue::from_static(cache_control)));
+        headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(cache_control),
+        );
     }
     if etag_matches(if_none_match, &etag) {
         return (StatusCode::NOT_MODIFIED, headers).into_response();
     }
-    headers.push((
+    headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
-    ));
+    );
     (headers, body).into_response()
 }
 
