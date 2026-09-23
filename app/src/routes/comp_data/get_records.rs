@@ -1,7 +1,8 @@
 use crate::common::sort::sort_by_class;
-use crate::{AppError, AppState};
-use axum::Json;
+use crate::{AppError, AppState, common::http_cache::cacheable_json};
 use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
 
@@ -20,6 +21,9 @@ pub struct Record {
 ///
 /// curl 'https://api.meetcal.app/data/records' | jq .
 ///
+/// The body carries a strong `ETag` and `Cache-Control: public, max-age=300`; a matching
+/// `If-None-Match` is `304`.
+///
 /// This endpoint takes nothing and returns records
 ///
 /// [
@@ -33,7 +37,10 @@ pub struct Record {
 ///    "weight_class": "71kg"
 ///  },
 /// ]
-pub async fn get_records(State(state): State<AppState>) -> Result<Json<Vec<Record>>, AppError> {
+pub async fn get_records(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
     let rows = sqlx::query_as::<_, Record>(
         r#"
         SELECT age_category, cj_record, snatch_record, total_record, weight_class, gender, record_type
@@ -48,5 +55,5 @@ pub async fn get_records(State(state): State<AppState>) -> Result<Json<Vec<Recor
 
     let sorted = sort_by_class(rows, |r| r.weight_class.as_str());
 
-    Ok(Json(sorted))
+    cacheable_json(&sorted, &headers)
 }

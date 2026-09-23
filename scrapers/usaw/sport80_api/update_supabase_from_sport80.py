@@ -58,17 +58,26 @@ def add_meet_results_to_postgres(client: IngestClient, results_to_insert: list):
     inserted_count = 0
     updated_count = 0
     unchanged_count = 0
-    for result in results_to_insert:
-        try:
-            ingest_result = client.action("scraperIngestion:ingestLiftingResult", result)
-            if ingest_result.get("wasInsert"):
-                inserted_count += 1
-            elif ingest_result.get("wasChanged"):
-                updated_count += 1
-            else:
-                unchanged_count += 1
-        except Exception as e:
-            logging.error(f"Error upserting result for '{result.get('name')}' in Postgres: {e}")
+    # One connection, one transaction per meet: a failing row rolls back the
+    # meet's whole result set instead of leaving a partial one behind, and the
+    # error is logged once with the meet rather than once per row.
+    try:
+        ingest_results = client.actions("scraperIngestion:ingestLiftingResult", results_to_insert)
+    except Exception as e:
+        logging.error(
+            "Error upserting %s results for '%s' in Postgres (batch rolled back): %s",
+            len(results_to_insert),
+            results_to_insert[0].get("meet"),
+            e,
+        )
+        return {"inserted": 0, "updated": 0, "unchanged": 0, "failed": len(results_to_insert)}
+    for ingest_result in ingest_results:
+        if ingest_result.get("wasInsert"):
+            inserted_count += 1
+        elif ingest_result.get("wasChanged"):
+            updated_count += 1
+        else:
+            unchanged_count += 1
 
     logging.info(
         "Processed %s results via Postgres: %s inserted, %s updated, %s unchanged.",

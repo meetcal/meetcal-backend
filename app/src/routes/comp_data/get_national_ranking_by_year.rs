@@ -1,4 +1,4 @@
-use crate::{AppError, AppState};
+use crate::{AppError, AppState, common::client::ClientVersion};
 use axum::Json;
 use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,9 @@ pub struct NatRankingsYear {
 ///
 /// This endpoint takes federation, year, and age category and returns national rankings for a weight_class in a given year
 ///
+/// `year` must be four digits for a 6.2.0+ client (`400` otherwise); a legacy client's malformed
+/// year compares as text and returns `[]`, as it always has.
+///
 /// [
 ///  {
 ///    "name": "gabe chhum",
@@ -57,8 +60,10 @@ pub struct NatRankingsYear {
 /// ]
 pub async fn get_national_rankings_by_year(
     State(state): State<AppState>,
+    client: ClientVersion,
     Query(params): Query<NatRankingsParamsYear>,
 ) -> Result<Json<Vec<NatRankingsYear>>, AppError> {
+    client.require_year("year", &params.year)?;
     let year_start = format!("{}-01-01", params.year);
     let year_end = format!("{}-12-31", params.year);
     let rows = sqlx::query_as::<_, NatRankingsYear>(

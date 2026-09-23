@@ -5,6 +5,12 @@
 //! (meet watches or entry targets), and dispatches `list` / `add` / `delete`.
 //! The action is taken from the command name (e.g. `/meet-add`, `/entries-add`)
 //! or the first word of the command text. Replies are ephemeral.
+//!
+//! The `/meets-add-pdf` / `/meets-add-map` / `/meets-remove-*` venue-map
+//! commands are the one exception to the file handshake: they `UPDATE` the two
+//! `venue_map_*` columns of `meets` directly, which is the only Postgres write
+//! the API's `meetcal_api` role is granted (see the
+//! `meetcal_api_venue_map_update` migration).
 
 use axum::{
     Json,
@@ -15,6 +21,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use super::store::{JsonListStore, is_http_url, require_http_url, validate_slug};
 use super::{ListKind, now_unix_secs, signature, write_json_request};
@@ -49,7 +56,9 @@ const VENUE_MAP_USAGE: &str = "*Venue map links*\n\
     • `/meets-add-map \"MEET NAME\" <url>` — set the Apple Maps link\n\
     • `/meets-remove-pdf \"MEET NAME\"` — clear the venue map PDF link\n\
     • `/meets-remove-map \"MEET NAME\"` — clear the Apple Maps link\n\
-    Meet names contain spaces, so quote them; copy exact names from `/meets-list`.";
+    Meet names contain spaces, so quote them. The name must match the `name` \
+    in the meets table exactly: copy it from the app's meet list or from \
+    `GET /meets` / `GET /meets/completed` on the API.";
 
 /// Defaults stamped on a watch created from Slack. They must stay in step with
 /// the `MeetWatch` dataclass defaults in
@@ -65,6 +74,13 @@ const DEFAULT_MEET_YEAR: i64 = 2026;
 /// from queueing an unbounded download list for the scraper worker.
 const MAX_USAMW_PDF_URLS: usize = 32;
 
+/// Longest request key kept from a Slack `trigger_id` when naming a queued
+/// request file. Real ids are ~40 chars (`13345224609.738474920.8088930838…`).
+const MAX_REQUEST_KEY_LEN: usize = 64;
+/// Hex digits of the body hash used as the request key when Slack sent no
+/// `trigger_id` (16 hex = 64 bits: plenty to tell two commands apart).
+const REQUEST_KEY_HASH_LEN: usize = 16;
+
 #[derive(Deserialize, Default)]
 struct SlackCommand {
     #[serde(default)]
@@ -75,6 +91,10 @@ struct SlackCommand {
     channel_id: String,
     #[serde(default)]
     user_id: String,
+    /// Unique per slash-command invocation. A replay of a signed request
+    /// (inside the 5-minute signature window) carries the same one.
+    #[serde(default)]
+    trigger_id: String,
 }
 
 enum Action {
@@ -119,7 +139,8 @@ pub async fn slack_commands(
     }
 
     if is_usamw_results_command(&cmd.command) {
-        return ephemeral(&usamw_results_reply(cfg, &cmd.text, &cmd.user_id));
+        let key = request_key(&cmd.trigger_id, &body);
+        return ephemeral(&usamw_results_reply(cfg, &cmd.text, &cmd.user_id, &key));
     }
 
     // The command name decides which list (one channel can host both).
@@ -311,7 +332,8 @@ fn run_request_body(key: Option<&str>, user_id: &str) -> Value {
 
 // --- venue map links --------------------------------------------------------
 /// The `/meets-*` venue-map commands write straight to the `meets` table in
-/// Postgres (unlike the file-backed scraper lists above).
+/// Postgres (unlike the file-backed scraper lists above). Only the two
+/// `venue_map_*` columns are writable by the API's database role.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum VenueMapCommand {
     AddPdf,
@@ -360,25 +382,88 @@ fn venue_map_command(command: &str) -> Option<VenueMapCommand> {
     }
 }
 
+/// What happened to a venue-map write, separated from the wording so the
+/// wording can be unit-tested without a database.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum VenueMapOutcome {
+    /// No `meets` row carries that exact name.
+    NoSuchMeet,
+    /// The row exists but the UPDATE touched nothing: under row-level
+    /// security that means the API's database role lacks the UPDATE grant or
+    /// policy, not that the name was wrong.
+    NotPermitted,
+    Updated,
+    /// The driver failed; the message is already in the server log.
+    DatabaseError,
+}
+
 async fn venue_map_reply(db: &sqlx::PgPool, cmd: VenueMapCommand, text: &str) -> String {
     let (meet_name, value) = match parse_venue_map_args(cmd, text) {
         Ok(parsed) => parsed,
         Err(msg) => return format!(":warning: {msg}\n\n{VENUE_MAP_USAGE}"),
     };
+    let outcome = apply_venue_map_update(db, cmd, &meet_name, value.as_deref()).await;
+    venue_map_message(cmd, &meet_name, value.as_deref(), outcome)
+}
+
+/// Run the write. The existence check comes first so a `0 rows` UPDATE can be
+/// told apart from a typo in the name: with FORCE ROW LEVEL SECURITY a missing
+/// UPDATE policy silently filters every row instead of erroring.
+async fn apply_venue_map_update(
+    db: &sqlx::PgPool,
+    cmd: VenueMapCommand,
+    meet_name: &str,
+    value: Option<&str>,
+) -> VenueMapOutcome {
+    let exists = sqlx::query_scalar::<_, i64>("SELECT 1::BIGINT FROM meets WHERE name = $1")
+        .bind(meet_name)
+        .fetch_optional(db)
+        .await;
+    match exists {
+        Ok(None) => return VenueMapOutcome::NoSuchMeet,
+        Ok(Some(_)) => {}
+        // Same boundary rule as `AppError::Database`: the driver's message can
+        // name tables, columns, and constraints, so it goes to the server log,
+        // not into a Slack channel.
+        Err(error) => {
+            eprintln!("venue map lookup failed: {error}");
+            return VenueMapOutcome::DatabaseError;
+        }
+    }
 
     // Overwrites silently by design; the meet name must match exactly.
-    let result = sqlx::query(cmd.update_sql())
-        .bind(&meet_name)
-        .bind(&value)
+    match sqlx::query(cmd.update_sql())
+        .bind(meet_name)
+        .bind(value)
         .execute(db)
-        .await;
+        .await
+    {
+        Ok(done) if done.rows_affected() == 0 => VenueMapOutcome::NotPermitted,
+        Ok(_) => VenueMapOutcome::Updated,
+        Err(error) => {
+            eprintln!("venue map update failed: {error}");
+            VenueMapOutcome::DatabaseError
+        }
+    }
+}
 
-    match result {
-        Ok(done) if done.rows_affected() == 0 => format!(
-            ":mag: No meet named `{meet_name}`. Names must match exactly — \
-             copy the name from `/meets-list`."
+fn venue_map_message(
+    cmd: VenueMapCommand,
+    meet_name: &str,
+    value: Option<&str>,
+    outcome: VenueMapOutcome,
+) -> String {
+    match outcome {
+        VenueMapOutcome::NoSuchMeet => format!(
+            ":mag: No meet named `{meet_name}`. Names must match the meets table \
+             exactly — copy the `name` from the app's meet list or `GET /meets`."
         ),
-        Ok(_) => match value {
+        VenueMapOutcome::NotPermitted => format!(
+            ":no_entry: `{meet_name}` exists but the API's database role was not \
+             allowed to update it. Check the `meetcal_api` UPDATE grant and policy \
+             on `meets` (migration `meetcal_api_venue_map_update`)."
+        ),
+        VenueMapOutcome::Updated => match value {
             Some(url) => format!(
                 ":white_check_mark: Set the {} for `{meet_name}` to {url}.",
                 cmd.label()
@@ -388,11 +473,7 @@ async fn venue_map_reply(db: &sqlx::PgPool, cmd: VenueMapCommand, text: &str) ->
                 cmd.label()
             ),
         },
-        // Same boundary rule as `AppError::Database`: the driver's message can
-        // name tables, columns, and constraints, so it goes to the server log,
-        // not into a Slack channel.
-        Err(error) => {
-            eprintln!("venue map update failed: {error}");
+        VenueMapOutcome::DatabaseError => {
             ":warning: Database error updating the meet; check the server log.".to_string()
         }
     }
@@ -437,6 +518,9 @@ fn parse_venue_map_args(
         if url.is_empty() {
             return Err("missing <url> after the meet name".to_string());
         }
+        // The link is served to every app user, so only http(s) schemes are
+        // stored: no `javascript:` / `file:` links via a Slack command.
+        require_http_url("url", Some(&url))?;
         Ok((meet_name, Some(url)))
     } else {
         Ok((meet_name, None))
@@ -454,9 +538,14 @@ fn is_usamw_results_command(command: &str) -> bool {
     )
 }
 
-fn usamw_results_reply(cfg: &super::SlackConfig, text: &str, user_id: &str) -> String {
+fn usamw_results_reply(
+    cfg: &super::SlackConfig,
+    text: &str,
+    user_id: &str,
+    request_key: &str,
+) -> String {
     match build_usamw_results_request(text, user_id) {
-        Ok(body) => match queue_usamw_results(cfg, &body) {
+        Ok(body) => match queue_usamw_results(cfg, &body, request_key) {
             Ok(()) => {
                 let count = body["pdf_urls"].as_array().map(Vec::len).unwrap_or(0);
                 format!(
@@ -540,15 +629,39 @@ fn validate_date(date: &str) -> Result<(), String> {
     }
 }
 
-fn queue_usamw_results(cfg: &super::SlackConfig, body: &Value) -> Result<(), String> {
-    let file_name = format!(
-        "{}-{}.json",
-        slugify(&field(body, "meet")),
-        body["requested_at_unix"]
-            .as_u64()
-            .unwrap_or_else(now_unix_secs)
-    );
-    write_json_request(&cfg.usamw_results_requests_dir(), &file_name, body)
+/// Drop the request file. Its name is derived from the request (not from the
+/// clock at handling time), so a replayed Slack request inside the signature
+/// window overwrites its own file instead of queueing a second import.
+fn queue_usamw_results(
+    cfg: &super::SlackConfig,
+    body: &Value,
+    request_key: &str,
+) -> Result<(), String> {
+    write_json_request(
+        &cfg.usamw_results_requests_dir(),
+        &usamw_request_filename(&field(body, "meet"), request_key),
+        body,
+    )
+}
+
+fn usamw_request_filename(meet: &str, request_key: &str) -> String {
+    format!("{}-{request_key}.json", slugify(meet))
+}
+
+/// A filename-safe key that identifies one Slack request: the `trigger_id`
+/// Slack assigns per invocation, or, when absent, a hash of the raw signed
+/// body. Either is identical on a replay and different for a fresh command.
+fn request_key(trigger_id: &str, body: &[u8]) -> String {
+    let from_trigger: String = trigger_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .take(MAX_REQUEST_KEY_LEN)
+        .collect();
+    if !from_trigger.is_empty() {
+        return from_trigger;
+    }
+    let digest = Sha256::digest(body);
+    hex::encode(digest)[..REQUEST_KEY_HASH_LEN].to_string()
 }
 
 fn slugify(value: &str) -> String {
@@ -832,6 +945,83 @@ mod tests {
 
         assert!(build_watch("only-key").is_err());
         assert!(build_watch("bad key | n | https://e.com").is_err());
+    }
+
+    #[test]
+    fn request_key_is_stable_per_request_and_filename_safe() {
+        // Same trigger id (a replay) ⇒ same key ⇒ same file.
+        assert_eq!(
+            request_key("13345224609.738474920.8088930838d88f008e0", b"a"),
+            "13345224609.738474920.8088930838d88f008e0"
+        );
+        // Hostile characters never reach the filename.
+        assert_eq!(request_key("../x/y", b"a"), "..xy");
+        assert_eq!(request_key("a b", b"a"), "ab");
+        // Bounded even when Slack sends something absurd.
+        assert_eq!(
+            request_key(&"z".repeat(MAX_REQUEST_KEY_LEN * 2), b"a").len(),
+            MAX_REQUEST_KEY_LEN
+        );
+        // No trigger id: the body hash stands in, still stable and bounded.
+        let hashed = request_key("", b"command=%2Fusamw-results&text=x");
+        assert_eq!(hashed.len(), REQUEST_KEY_HASH_LEN);
+        assert!(hashed.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(hashed, request_key("", b"command=%2Fusamw-results&text=x"));
+        assert_ne!(hashed, request_key("", b"command=%2Fusamw-results&text=y"));
+        assert_eq!(
+            usamw_request_filename("2026 USA Masters Nationals", &hashed),
+            format!("2026-usa-masters-nationals-{hashed}.json")
+        );
+    }
+
+    #[test]
+    fn venue_map_messages_distinguish_missing_meet_from_denied_update() {
+        let no_such = venue_map_message(
+            VenueMapCommand::AddPdf,
+            "No Such Meet",
+            Some("https://e.com/x.pdf"),
+            VenueMapOutcome::NoSuchMeet,
+        );
+        assert!(no_such.contains("No meet named"), "{no_such}");
+        assert!(!no_such.contains("/meets-list"), "{no_such}");
+
+        let denied = venue_map_message(
+            VenueMapCommand::AddPdf,
+            "2026 Nationals",
+            Some("https://e.com/x.pdf"),
+            VenueMapOutcome::NotPermitted,
+        );
+        assert!(denied.contains("not"), "{denied}");
+        assert!(denied.contains("meetcal_api"), "{denied}");
+        assert!(!denied.contains("No meet named"), "{denied}");
+
+        assert!(
+            venue_map_message(
+                VenueMapCommand::RemoveMap,
+                "2026 Nationals",
+                None,
+                VenueMapOutcome::Updated
+            )
+            .contains("Removed the Apple Maps link")
+        );
+        assert!(!VENUE_MAP_USAGE.contains("/meets-list"));
+    }
+
+    #[test]
+    fn venue_map_rejects_non_http_urls() {
+        for bad in [
+            "\"2026 Nationals\" javascript:alert(1)",
+            "\"2026 Nationals\" file:///etc/passwd",
+            "\"2026 Nationals\" <ftp://e.com/map.pdf>",
+            "\"2026 Nationals\" e.com/map.pdf",
+        ] {
+            let error = parse_venue_map_args(VenueMapCommand::AddPdf, bad).unwrap_err();
+            assert!(error.contains("http(s)"), "{bad}: {error}");
+        }
+        assert!(
+            parse_venue_map_args(VenueMapCommand::AddMap, "\"2026 Nationals\" http://e.com/m")
+                .is_ok()
+        );
     }
 
     #[test]

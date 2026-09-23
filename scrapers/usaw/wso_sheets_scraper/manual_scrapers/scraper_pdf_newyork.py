@@ -253,21 +253,21 @@ class WSORecordsNewYorkScraper:
         inserted = []
         updated = []
 
-        for record in records:
-            try:
-                result = self.ingest_client.action(
-                    "scraperIngestion:ingestWSORecord", wso_record_ingest_args(record)
-                )
-                if result.get('wasInsert'):
-                    inserted.append(record)
-                    print(f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}")
-                elif result.get('wasChanged'):
-                    updated.append(record)
-                    print(f"  ✓ Updated: {record['age_category']} {record['gender']} {record['weight_class']}")
-                else:
-                    print(f"  - Unchanged: {record['age_category']} {record['gender']} {record['weight_class']}")
-            except Exception as e:
-                print(f"  ✗ Error: {record['age_category']} {record['gender']} {record['weight_class']}: {e}")
+        # One connection, one transaction: a failing row rolls back the whole
+        # batch instead of leaving a partial record set behind.
+        results = self.ingest_client.actions(
+            "scraperIngestion:ingestWSORecord",
+            [wso_record_ingest_args(record) for record in records],
+        )
+        for record, result in zip(records, results):
+            if result.get('wasInsert'):
+                inserted.append(record)
+                print(f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}")
+            elif result.get('wasChanged'):
+                updated.append(record)
+                print(f"  ✓ Updated: {record['age_category']} {record['gender']} {record['weight_class']}")
+            else:
+                print(f"  - Unchanged: {record['age_category']} {record['gender']} {record['weight_class']}")
 
         return {'inserted': inserted, 'updated': updated}
     

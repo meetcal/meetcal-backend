@@ -11,6 +11,13 @@ if [[ -z "${JOB}" ]]; then
   exit 2
 fi
 
+# The job name becomes a lock-file path below; refuse anything that is not a
+# plain job token before touching the filesystem.
+if [[ ! "${JOB}" =~ ^[a-z0-9-]+$ ]]; then
+  echo >&2 "Invalid scraper job name: ${JOB}"
+  exit 2
+fi
+
 set -a
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
@@ -156,20 +163,13 @@ complete_ended_meets() {
     exit 2
   fi
 
+  # Compares end_date against the meet-local date (meets.time_zone), so a meet
+  # that ends tonight in Los Angeles is not completed at 17:00 Pacific because
+  # the server's UTC date already rolled over.
   local updated_count
   updated_count="$(
-    psql "${DATABASE_URL}" -X -q -t -A -c "
-      WITH updated AS (
-        UPDATE meets
-        SET
-          status = 'completed',
-          updated_at = (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
-        WHERE status <> 'completed'
-          AND end_date < CURRENT_DATE
-        RETURNING id
-      )
-      SELECT COUNT(*) FROM updated;
-    "
+    psql "${DATABASE_URL}" -X -q -t -A -v ON_ERROR_STOP=1 \
+      -f "${SCRAPERS_DIR}/common/sql/complete_ended_meets.sql"
   )"
 
   echo "Marked ${updated_count:-0} ended meet(s) completed."

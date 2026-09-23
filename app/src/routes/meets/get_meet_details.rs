@@ -1,22 +1,40 @@
 use crate::{
     AppError, AppState,
-    routes::meets::types::{Meets, MeetsParams},
+    common::{client::ClientVersion, http_cache::cacheable_json},
+    routes::meets::{
+        get_all_meets::meet_columns,
+        types::{Meets, MeetsParams},
+    },
 };
 use axum::{
-    Json,
     extract::{Query, State},
+    http::HeaderMap,
+    response::Response,
 };
+
+const MEET_DETAILS_SQL: &str = concat!(
+    "SELECT ",
+    meet_columns!(),
+    r#"
+        FROM meets
+        WHERE name = $1
+        "#
+);
 
 /// /meets/details endpoint
 ///
 /// curl 'https://api.meetcal.app/meets/details?meet=2026%20Ohio%20WSO%20Championships' | jq .
 ///
 /// This endpoint takes the name of the meet exactly as it shows in BARS and returns the details of
-/// the meet
+/// the meet. The body carries a strong `ETag` and `Cache-Control: public, max-age=300`; a
+/// matching `If-None-Match` is `304`.
 ///
 /// Get meet names as they are listed by copying exact case-sensitive names from BARS
 ///
+/// A blank `meet` is `400` for a 6.2.0+ client and `404` (no such meet) for a legacy one.
+///
 /// {
+///   "id": "meet_ohio_2026",
 ///   "end_date": "2026-08-16",
 ///   "name": "2026 Ohio WSO Championships",
 ///   "start_date": "2026-08-15",
@@ -30,19 +48,15 @@ use axum::{
 /// }
 pub async fn get_meet_details(
     State(state): State<AppState>,
+    client: ClientVersion,
+    headers: HeaderMap,
     Query(params): Query<MeetsParams>,
-) -> Result<Json<Meets>, AppError> {
-    crate::common::query::require_non_empty("meet", &params.meet)?;
-    let rows = sqlx::query_as::<_, Meets>(
-        r#"
-        SELECT name, start_date::text as start_date, end_date::text as end_date, time_zone, venue_city, venue_state, venue_name, venue_street, venue_zip, federation, status, venue_map_pdf_url, venue_map_apple_url
-        FROM meets
-        WHERE name = $1
-        "#,
-    )
-    .bind(params.meet)
-    .fetch_one(&state.db)
-    .await?;
+) -> Result<Response, AppError> {
+    client.require_non_empty("meet", &params.meet)?;
+    let meet = sqlx::query_as::<_, Meets>(MEET_DETAILS_SQL)
+        .bind(params.meet)
+        .fetch_one(&state.db)
+        .await?;
 
-    Ok(Json(rows))
+    cacheable_json(&meet, &headers)
 }

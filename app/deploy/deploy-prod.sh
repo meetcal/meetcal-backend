@@ -28,9 +28,17 @@ MEET_AUTOMATION_WATCHES_PATH="${MEET_AUTOMATION_WATCHES_PATH:-${SCRAPERS_MOUNT}/
 ENTRIES_TARGETS_PATH="${ENTRIES_TARGETS_PATH:-${SCRAPERS_MOUNT}/usaw/entry_scraper/entries_targets.json}"
 MEET_AUTOMATION_STATE_DIR="${MEET_AUTOMATION_STATE_DIR:-${SCRAPERS_MOUNT}/usaw/meet_automation/state}"
 
+# The API connects as the least-privileged role, not the postgres superuser:
+# row-level security on saved_sessions / user_preferences only applies to
+# non-superusers. APP_DATABASE__PASSWORD is that role's password
+# (`ALTER ROLE meetcal_api WITH PASSWORD '...'`), not the postgres one.
+APP_DATABASE__USERNAME="${APP_DATABASE__USERNAME:-meetcal_api}"
+: "${APP_DATABASE__PASSWORD:?APP_DATABASE__PASSWORD (the ${APP_DATABASE__USERNAME} role password) must be set in the production env file}"
+
 env_args=(
   -e APP_APPLICATION_HOST=0.0.0.0
   -e APP_DATABASE__HOST=meetcal
+  -e "APP_DATABASE__USERNAME=${APP_DATABASE__USERNAME}"
   -e APP_DATABASE__PASSWORD
   -e CLERK_JWKS_URL
   -e CLERK_ISSUER

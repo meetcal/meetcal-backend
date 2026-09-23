@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any
+from typing import Any, Iterable
 
 from common import postgres_writer as pg
 
@@ -50,11 +50,31 @@ def dispatch(conn, path: str, args: dict[str, Any]) -> dict[str, Any]:
 
 
 class IngestClient:
+    """Thin dispatch wrapper: one connection + one transaction per call.
+
+    Prefer ``actions`` for anything that loops over records. ``action`` opens
+    a connection and commits per row, which is the wrong shape for a scraper
+    writing hundreds of records and leaves a partial write on failure.
+    """
+
     def action(self, path: str, args: dict[str, Any]) -> dict[str, Any]:
+        return self.actions(path, [args])[0]
+
+    def actions(self, path: str, rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Dispatch every row on one connection in one transaction.
+
+        All-or-nothing: a failing row raises and rolls back every earlier row
+        in the batch (``pg.connect`` rolls back when the block exits with an
+        exception), so a scraper never leaves half a record set behind.
+        Returns one result per input row, in order.
+        """
+        rows = list(rows)
+        if not rows:
+            return []
         with pg.connect() as conn:
-            result = dispatch(conn, path, args)
+            results = [dispatch(conn, path, row) for row in rows]
             conn.commit()
-            return result
+            return results
 
 
 def main() -> int:
@@ -66,9 +86,7 @@ def main() -> int:
     payload = json.load(sys.stdin)
     rows = payload if isinstance(payload, list) else [payload]
 
-    with pg.connect() as conn:
-        results = [dispatch(conn, path, row) for row in rows]
-        conn.commit()
+    results = IngestClient().actions(path, rows)
 
     print(json.dumps(results if isinstance(payload, list) else results[0]))
     return 0

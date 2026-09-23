@@ -1,5 +1,6 @@
 use crate::{
     AppError, AppState,
+    common::client::ClientVersion,
     routes::meets::types::{Athlete, MeetsParams},
 };
 use axum::{
@@ -15,6 +16,8 @@ use axum::{
 /// the meet
 ///
 /// Get meet names as they are listed by copying exact case-sensitive names from BARS
+///
+/// A blank `meet` is `400` for a 6.2.0+ client and `200 []` for a legacy one.
 ///
 /// [
 ///  {
@@ -34,9 +37,10 @@ use axum::{
 /// ]
 pub async fn get_athletes_by_meet(
     State(state): State<AppState>,
+    client: ClientVersion,
     Query(params): Query<MeetsParams>,
 ) -> Result<Json<Vec<Athlete>>, AppError> {
-    crate::common::query::require_non_empty("meet", &params.meet)?;
+    client.require_non_empty("meet", &params.meet)?;
     let mut rows = sqlx::query_as::<_, Athlete>(
         r#"
         SELECT member_id, adaptive, age, club, entry_total, gender, meet, name,

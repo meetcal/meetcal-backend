@@ -4,7 +4,11 @@
 //!
 //! These are the app's only mutating surfaces. They edit JSON list files on the
 //! server's filesystem (`watches.json`, `entries_targets.json`) and drop
-//! approval decision files for the Python pipeline; they touch no database. All
+//! approval / run / import request files for the Python pipeline. The one
+//! database write is the `/meets-add-pdf` / `/meets-add-map` / `/meets-remove-*`
+//! family, which updates the two `venue_map_*` columns of `meets` -- the only
+//! UPDATE the API's `meetcal_api` role is granted. Everything else (athletes,
+//! schedules, results) is written by the Python crons after approval. All
 //! requests are Slack-signature verified. Because the files live on disk next to
 //! the cron jobs that read them, edits take effect on the running server with no
 //! redeploy or git pull.

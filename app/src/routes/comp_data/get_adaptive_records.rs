@@ -1,4 +1,4 @@
-use crate::common::sort::sort_by_class;
+use crate::common::{query::require_year, sort::sort_by_class};
 use crate::routes::results::types::{LiftingResults, lifting_result_columns};
 use crate::{AppError, AppState};
 use axum::Json;
@@ -12,7 +12,14 @@ use std::sync::LazyLock;
 pub struct AdaptiveRecordsParams {
     pub exclude_federation: String,
     pub gender: String,
+    /// Four-digit year the record season starts on; defaults to
+    /// [`ADAPTIVE_RECORDS_SEASON_START`].
+    pub season: Option<String>,
 }
+
+/// USAW reset adaptive records with the 2026 weight classes, so results from
+/// earlier seasons are not eligible. Overridable per request with `season=`.
+pub const ADAPTIVE_RECORDS_SEASON_START: &str = "2026";
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 pub struct AdaptiveRecords {
@@ -27,6 +34,13 @@ static WOMEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bwomen\b").un
 static YEAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\d{4}\b").unwrap());
 static WEIGHT_CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(\d+\+?)kg").unwrap());
 
+/// Only the season's rows for the requested gender leave Postgres. `$2` is
+/// `YYYY-01-01`; `date` is text in ISO order so `>=` is the year filter. `$3`
+/// is `true` for men. `age` is the scraped division label, so a gender is a
+/// whole-word match (`\m` / `\M` are Postgres word boundaries, `~*` is
+/// case-insensitive): men's rows match "men" and not "women", women's rows
+/// match "women". [`extract_gender`] below is the same rule in Rust and
+/// re-checks each row.
 const ADAPTIVE_RESULTS_SQL: &str = concat!(
     r#"
         SELECT
@@ -36,6 +50,11 @@ const ADAPTIVE_RESULTS_SQL: &str = concat!(
         FROM lifting_results
         WHERE adaptive = true
             AND (federation IS NULL OR federation <> $1)
+            AND date >= $2
+            AND CASE WHEN $3::boolean
+                THEN COALESCE(age, '') ~* '\mmen\M' AND NOT COALESCE(age, '') ~* '\mwomen\M'
+                ELSE COALESCE(age, '') ~* '\mwomen\M'
+                END
         "#
 );
 
@@ -49,6 +68,9 @@ const ADAPTIVE_RESULTS_SQL: &str = concat!(
 ///
 /// This endpoint takes an excluded federation (the db has some results for BWL) and gender and returns records for all adaptive athletes as a gender, no age brackets
 ///
+/// Optional `season=YYYY` (default 2026, see [`ADAPTIVE_RECORDS_SEASON_START`]) is the first
+/// year whose results count; anything else for `season` is `400`.
+///
 /// [
 ///  {
 ///    "weight_class": "85",
@@ -61,12 +83,25 @@ pub async fn get_adaptive_records(
     State(state): State<AppState>,
     Query(params): Query<AdaptiveRecordsParams>,
 ) -> Result<Json<Vec<AdaptiveRecords>>, AppError> {
+    let season = params
+        .season
+        .as_deref()
+        .unwrap_or(ADAPTIVE_RECORDS_SEASON_START);
+    require_year("season", season)?;
+    let men = params.gender.eq_ignore_ascii_case("men");
     let rows = sqlx::query_as::<_, LiftingResults>(ADAPTIVE_RESULTS_SQL)
         .bind(&params.exclude_federation)
+        .bind(format!("{season}-01-01"))
+        .bind(men)
         .fetch_all(&state.db)
         .await?;
 
-    Ok(Json(best_by_weight_class(&rows, &params.gender)))
+    let season_start: u32 = season.parse().map_err(anyhow::Error::from)?;
+    Ok(Json(best_by_weight_class(
+        &rows,
+        &params.gender,
+        season_start,
+    )))
 }
 
 /// Collapses adaptive result rows to one record per weight class, keeping the
@@ -76,13 +111,17 @@ pub async fn get_adaptive_records(
 /// can carry no `NNkg` token at all (`"Adaptive Men"`, or an empty `age`
 /// column). Those rows have no class to file under and are skipped; reading the
 /// class was previously an `unwrap`, which panicked the request.
-fn best_by_weight_class(rows: &[LiftingResults], gender: &str) -> Vec<AdaptiveRecords> {
+fn best_by_weight_class(
+    rows: &[LiftingResults],
+    gender: &str,
+    season_start: u32,
+) -> Vec<AdaptiveRecords> {
     let mut records: HashMap<String, AdaptiveRecords> = HashMap::new();
 
     let filtered = rows
         .iter()
         .filter(|g| extract_gender(g.age.as_str(), gender))
-        .filter(|y| extract_year(y.date.as_str()) >= 2026);
+        .filter(|y| extract_year(y.date.as_str()) >= season_start);
 
     for row in filtered {
         let Some(class) = extract_class(row.age.as_str()) else {
@@ -157,6 +196,8 @@ mod tests {
 
     fn row(age: &str, date: &str, snatch: f64, cj: f64, total: f64) -> LiftingResults {
         LiftingResults {
+            id: 1,
+            event_id: "event_2026".to_string(),
             federation: "USAW".to_string(),
             meet: "2026 Adaptive Nationals".to_string(),
             date: date.to_string(),
@@ -189,7 +230,7 @@ mod tests {
         ];
 
         assert_eq!(
-            best_by_weight_class(&rows, "Men"),
+            best_by_weight_class(&rows, "Men", 2026),
             vec![AdaptiveRecords {
                 weight_class: "85".to_string(),
                 snatch: 40.0,
@@ -211,7 +252,7 @@ mod tests {
         ];
 
         assert_eq!(
-            best_by_weight_class(&rows, "Men"),
+            best_by_weight_class(&rows, "Men", 2026),
             vec![
                 AdaptiveRecords {
                     weight_class: "85".to_string(),

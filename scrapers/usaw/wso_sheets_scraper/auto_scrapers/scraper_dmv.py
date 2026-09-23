@@ -209,8 +209,12 @@ class WSORecordsDMVScraper:
         Args:
             records: List of records to upsert
         """
+        # One connection, one transaction: a failing row rolls back the batch.
+        self.ingest_client.actions(
+            "scraperIngestion:ingestWSORecord",
+            [wso_record_ingest_args(record, self.scraper_secret) for record in records],
+        )
         for record in records:
-            self.ingest_client.action("scraperIngestion:ingestWSORecord", wso_record_ingest_args(record, self.scraper_secret))
             print(f"  ✓ Upserted: {record['age_category']} {record['gender']} {record['weight_class']}")
     
     def send_slack_notification(self) -> None:

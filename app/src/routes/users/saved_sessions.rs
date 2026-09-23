@@ -6,10 +6,78 @@ use crate::{
 use axum::{
     Json,
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::FromRow;
+
+/// Longest `session_id` path segment. Ids are `<meet>-<session>-<platform>`
+/// built by the app, so a real one is well under this.
+pub const MAX_SAVED_SESSION_ID_LEN: usize = 256;
+/// Longest `meet` name. Sanctioned meet names run to ~80 characters.
+pub const MAX_SAVED_SESSION_MEET_LEN: usize = 256;
+/// Longest `platform`, `weight_class`, `start_time`, or `date` value; each is
+/// a short token such as `Red`, `+110`, `08:00:00`, `2026-06-20`.
+pub const MAX_SAVED_SESSION_FIELD_LEN: usize = 64;
+/// Longest free-text `notes` value.
+pub const MAX_SAVED_SESSION_NOTES_LEN: usize = 2000;
+/// Longest single `athlete_names` entry (the list itself is bounded by
+/// [`crate::common::query::MAX_SAVED_SESSION_ATHLETE_NAMES`]).
+pub const MAX_SAVED_SESSION_ATHLETE_NAME_LEN: usize = 128;
+/// Ceiling on saved sessions per user. A meet has tens of sessions and a user
+/// follows a few meets at a time; the cap keeps one account from growing the
+/// table without bound.
+pub const MAX_SAVED_SESSIONS_PER_USER: usize = 500;
+
+/// Errors from a saved-session write. A cap overrun is reported with the cap
+/// itself so the client can show it (`{"error": "...", "max": N}`); every
+/// other failure is an ordinary [`AppError`].
+#[derive(Debug)]
+pub enum SaveSessionError {
+    App(AppError),
+    OverLimit { what: &'static str, max: usize },
+}
+
+impl From<AppError> for SaveSessionError {
+    fn from(error: AppError) -> Self {
+        Self::App(error)
+    }
+}
+
+impl From<sqlx::Error> for SaveSessionError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::App(error.into())
+    }
+}
+
+impl IntoResponse for SaveSessionError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::App(error) => error.into_response(),
+            Self::OverLimit { what, max } => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": what, "max": max })),
+            )
+                .into_response(),
+        }
+    }
+}
+
+/// Reject a value longer than `max` characters with the cap in the body.
+fn require_max_len(
+    what: &'static str,
+    value: Option<&str>,
+    max: usize,
+) -> Result<(), SaveSessionError> {
+    match value {
+        Some(value) if value.chars().count() > max => {
+            Err(SaveSessionError::OverLimit { what, max })
+        }
+        _ => Ok(()),
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct DeleteSavedSessionsParams {
@@ -141,26 +209,90 @@ pub async fn put_saved_session(
     headers: HeaderMap,
     Path(session_id): Path<String>,
     Json(body): Json<SavedSessionRequest>,
-) -> Result<Json<SaveSessionResponse>, AppError> {
+) -> Result<Json<SaveSessionResponse>, SaveSessionError> {
     if session_id.trim().is_empty() {
-        return Err(AppError::Validation("session_id is required".to_string()));
+        return Err(AppError::Validation("session_id is required".to_string()).into());
     }
     crate::common::query::require_non_empty("meet", &body.meet)?;
     crate::common::query::require_non_empty("platform", &body.platform)?;
+    require_max_len(
+        "session_id too long",
+        Some(&session_id),
+        MAX_SAVED_SESSION_ID_LEN,
+    )?;
+    require_max_len(
+        "meet too long",
+        Some(&body.meet),
+        MAX_SAVED_SESSION_MEET_LEN,
+    )?;
+    require_max_len(
+        "platform too long",
+        Some(&body.platform),
+        MAX_SAVED_SESSION_FIELD_LEN,
+    )?;
+    require_max_len(
+        "weight_class too long",
+        body.weight_class.as_deref(),
+        MAX_SAVED_SESSION_FIELD_LEN,
+    )?;
+    require_max_len(
+        "start_time too long",
+        body.start_time.as_deref(),
+        MAX_SAVED_SESSION_FIELD_LEN,
+    )?;
+    require_max_len(
+        "date too long",
+        body.date.as_deref(),
+        MAX_SAVED_SESSION_FIELD_LEN,
+    )?;
+    require_max_len(
+        "notes too long",
+        body.notes.as_deref(),
+        MAX_SAVED_SESSION_NOTES_LEN,
+    )?;
+
+    let athlete_names = body.athlete_names.unwrap_or_default();
+    if athlete_names.len() > crate::common::query::MAX_SAVED_SESSION_ATHLETE_NAMES {
+        return Err(SaveSessionError::OverLimit {
+            what: "too many athlete_names",
+            max: crate::common::query::MAX_SAVED_SESSION_ATHLETE_NAMES,
+        });
+    }
+    for name in &athlete_names {
+        require_max_len(
+            "athlete_names entry too long",
+            Some(name),
+            MAX_SAVED_SESSION_ATHLETE_NAME_LEN,
+        )?;
+    }
 
     let user_id = user_id_from_headers(&headers, state.auth.as_deref()).await?;
     let updated_at = now_millis()?;
-    let athlete_names = body.athlete_names.unwrap_or_default();
-    if athlete_names.len() > crate::common::query::MAX_SAVED_SESSION_ATHLETE_NAMES {
-        return Err(AppError::Validation(format!(
-            "athlete_names exceeds the {}-name limit",
-            crate::common::query::MAX_SAVED_SESSION_ATHLETE_NAMES
-        )));
-    }
     let row_id = format!("saved_session:{user_id}:{session_id}");
 
     let mut tx = state.db.begin().await?;
     set_request_user(&mut tx, &user_id).await?;
+
+    // Bound rows per user. Updating an existing session never counts against
+    // the cap, so a full account can still edit what it has.
+    let existing_others = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM saved_sessions
+        WHERE user_id = $1
+            AND session_id <> $2
+        "#,
+    )
+    .bind(&user_id)
+    .bind(&session_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if usize::try_from(existing_others).unwrap_or(usize::MAX) >= MAX_SAVED_SESSIONS_PER_USER {
+        return Err(SaveSessionError::OverLimit {
+            what: "too many saved sessions",
+            max: MAX_SAVED_SESSIONS_PER_USER,
+        });
+    }
 
     let row: (String, i64) = sqlx::query_as(
         r#"

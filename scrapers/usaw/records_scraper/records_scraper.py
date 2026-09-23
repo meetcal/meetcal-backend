@@ -476,6 +476,7 @@ class RecordsScraper:
         inserted = []
         updated = []
 
+        batch = []
         for record in records:
             args = {
                 "scraperSecret": self.scraper_secret,
@@ -490,7 +491,10 @@ class RecordsScraper:
                 args["cjRecord"] = float(record['cj_record'])
             if record.get('total_record') is not None:
                 args["totalRecord"] = float(record['total_record'])
-            result = self.ingest.action("scraperIngestion:ingestRecord", args)
+            batch.append(args)
+        # One connection, one transaction: a failing row rolls back the batch.
+        results = self.ingest.actions("scraperIngestion:ingestRecord", batch)
+        for record, result in zip(records, results):
             if result.get('wasInsert'):
                 inserted.append(record)
                 print(f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}")

@@ -33,9 +33,13 @@ use crate::routes::{
 };
 use axum::{
     Router,
-    http::{HeaderValue, Method},
+    extract::Request,
+    http::{HeaderName, HeaderValue, Method, header},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, patch, post, put},
 };
+use common::client::CLIENT_VERSION_HEADER;
 pub use error::AppError;
 use routes::{
     clubs::get_all_clubs::get_all_clubs,
@@ -62,12 +66,31 @@ use std::{sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
-use tower_http::timeout::TimeoutLayer;
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
+use tracing::Level;
 
 /// Wall-clock ceiling on one HTTP request. A read that outruns it answers
-/// `408` instead of holding a pool connection for the client's lifetime.
-/// `AGENTS.md` pins this at 15s.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// `408 {"error":"timeout"}` instead of holding a pool connection for the
+/// client's lifetime. `AGENTS.md` pins this at 15s.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Drops the handler once `limit` elapses and answers [`AppError::Timeout`],
+/// so a timeout has the same JSON error body as every other failure. Dropping
+/// the handler future cancels its in-flight query and returns the connection
+/// to the pool.
+async fn with_timeout(limit: Duration, request: Request, next: Next) -> Response {
+    match tokio::time::timeout(limit, next.run(request)).await {
+        Ok(response) => response,
+        Err(_elapsed) => {
+            tracing::warn!(limit_ms = limit.as_millis() as u64, "request timed out");
+            AppError::Timeout.into_response()
+        }
+    }
+}
+
+async fn request_timeout(request: Request, next: Next) -> Response {
+    with_timeout(REQUEST_TIMEOUT, request, next).await
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -87,8 +110,8 @@ pub async fn run(listener: TcpListener, db: PgPool) {
     let auth = routes::users::auth::AuthVerifier::from_env()
         .unwrap_or_else(|error| panic!("invalid Clerk authentication configuration: {error}"));
     if auth.is_none() {
-        eprintln!(
-            "warning: Clerk authentication is not configured; protected user routes will reject all requests"
+        tracing::warn!(
+            "Clerk authentication is not configured; protected user routes will reject all requests"
         );
     }
     run_with_auth(listener, db, auth).await;
@@ -106,7 +129,40 @@ pub async fn run_with_auth(
             "http://localhost:3000".parse::<HeaderValue>().unwrap(),
             "http://127.0.0.1:3000".parse::<HeaderValue>().unwrap(),
         ])
-        .allow_methods([Method::GET]);
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::IF_NONE_MATCH,
+            HeaderName::from_static(CLIENT_VERSION_HEADER),
+        ])
+        .expose_headers([header::ETAG]);
+
+    // One span per request carrying method, path, and the declared app
+    // version (which decides strict-vs-legacy validation), closed with the
+    // status and latency at INFO. Failures (5xx) log at ERROR by default.
+    let trace = TraceLayer::new_for_http()
+        .make_span_with(|request: &Request| {
+            let client = request
+                .headers()
+                .get(CLIENT_VERSION_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("-");
+            tracing::info_span!(
+                "request",
+                method = %request.method(),
+                uri = %request.uri(),
+                client = client
+            )
+        })
+        .on_response(DefaultOnResponse::new().level(Level::INFO));
 
     let app = Router::new()
         .route("/health", get(health))
@@ -167,10 +223,8 @@ pub async fn run_with_auth(
         .route("/scrapers/slack/interactions", post(slack_interactions))
         .layer(CompressionLayer::new())
         .layer(cors)
-        .layer(TimeoutLayer::with_status_code(
-            axum::http::StatusCode::REQUEST_TIMEOUT,
-            REQUEST_TIMEOUT,
-        ))
+        .layer(middleware::from_fn(request_timeout))
+        .layer(trace)
         .with_state(AppState {
             db,
             slack: SlackConfig::from_env(),
@@ -178,4 +232,49 @@ pub async fn run_with_auth(
         });
 
     axum::serve(listener, app).await.unwrap();
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+    use axum::{body::to_bytes, http::StatusCode};
+    use tower::ServiceExt;
+
+    async fn slow() -> &'static str {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        "done"
+    }
+
+    async fn fast() -> &'static str {
+        "done"
+    }
+
+    #[tokio::test]
+    async fn a_slow_handler_answers_408_with_the_json_error_shape() {
+        let app = Router::new()
+            .route("/slow", get(slow))
+            .route("/fast", get(fast))
+            .layer(middleware::from_fn(|request, next| {
+                with_timeout(Duration::from_millis(20), request, next)
+            }));
+
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri("/slow").body(Default::default()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(body.as_ref(), br#"{"error":"timeout"}"#);
+
+        let response = app
+            .oneshot(Request::builder().uri("/fast").body(Default::default()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }

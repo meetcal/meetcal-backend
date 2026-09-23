@@ -44,6 +44,13 @@ pub struct NameListBody {
     pub names: Vec<String>,
     #[serde(default)]
     pub cutoff_date: Option<String>,
+    /// `/lifting-results/by-names` only: keep each athlete's most recent
+    /// meet rows. Ignored by endpoints that have no per-name bound.
+    #[serde(default)]
+    pub latest_only: Option<bool>,
+    /// `/lifting-results/by-names` only: at most this many rows per name.
+    #[serde(default)]
+    pub limit_per_name: Option<u32>,
 }
 
 /// Trims each name and drops blanks, matching what the CSV deserializer does
@@ -127,6 +134,26 @@ pub fn require_iso_date(field: &str, value: Option<&str>) -> Result<(), AppError
     }
 }
 
+/// True only for a four-digit calendar year, the form the `date` text columns
+/// start with. A `year` of `abc` would otherwise build `abc-01-01` and compare
+/// as a string against every row.
+pub fn is_valid_year(value: &str) -> bool {
+    value.len() == 4 && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+pub fn require_year(field: &str, value: &str) -> Result<(), AppError> {
+    if is_valid_year(value) {
+        Ok(())
+    } else {
+        Err(AppError::Validation(format!(
+            "{field} must be a four-digit year"
+        )))
+    }
+}
+
+/// Empty and oversized name lists fail closed for every client. This is not
+/// version-gated: an empty list was never a meaningful request, and the size
+/// cap bounds the `= ANY($1)` array so one call cannot pin a connection.
 pub fn require_name_list(names: &[String]) -> Result<(), AppError> {
     require_non_empty("names", names.first().map(String::as_str).unwrap_or(""))?;
     if names.len() > MAX_NAME_LIST_LEN {
@@ -187,6 +214,17 @@ mod tests {
         assert!(require_iso_date("cutoff_date", Some("2025-06-13")).is_ok());
         assert!(require_iso_date("cutoff_date", Some("2025-6-13")).is_err());
         assert!(require_iso_date("cutoff_date", Some("yesterday")).is_err());
+    }
+
+    #[test]
+    fn validates_four_digit_years() {
+        assert!(is_valid_year("2026"));
+        assert!(!is_valid_year("26"));
+        assert!(!is_valid_year("20260"));
+        assert!(!is_valid_year("abcd"));
+        assert!(!is_valid_year(""));
+        assert!(require_year("year", "1999").is_ok());
+        assert!(require_year("year", "next").is_err());
     }
 
     #[test]

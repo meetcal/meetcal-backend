@@ -1,4 +1,4 @@
-use crate::{AppError, AppState};
+use crate::{AppError, AppState, common::client::ClientVersion};
 use axum::extract::State;
 use axum::{Json, extract::Query};
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,8 @@ pub struct ClubsAthletes {
 ///
 /// This endpoint takes a club name and returns every known meet registration for that club.
 ///
+/// A blank `club` is `400` for a 6.2.0+ client and `200 []` for a legacy one.
+///
 /// Registrations must not be restricted by the current meet status. Historical reporting
 /// uses this endpoint to associate results with the club an athlete represented at each meet,
 /// and imported result meets are not guaranteed to have a matching `meets` status row.
@@ -45,9 +47,10 @@ pub struct ClubsAthletes {
 /// }
 pub async fn get_athletes_by_club(
     State(state): State<AppState>,
+    client: ClientVersion,
     Query(params): Query<ClubsAthletesParams>,
 ) -> Result<Json<Vec<ClubsAthletes>>, AppError> {
-    crate::common::query::require_non_empty("club", &params.club)?;
+    client.require_non_empty("club", &params.club)?;
     let names: Vec<ClubsAthletes> = sqlx::query_as(
         r#"
         SELECT name, meet, club, gender, weight_class, entry_total, member_id

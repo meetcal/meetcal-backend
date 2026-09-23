@@ -431,37 +431,37 @@ class USAMWMastersRecordsScraper:
         inserted = []
         updated = []
 
-        for record in records:
-            try:
-                result = self.ingest_client.action(
-                    "scraperIngestion:ingestRecord",
-                    {
-                        "recordType": record["record_type"],
-                        "ageCategory": record["age_category"],
-                        "gender": record["gender"],
-                        "weightClass": record["weight_class"],
-                        "snatchRecord": record.get("snatch_record") or None,
-                        "cjRecord": record.get("cj_record") or None,
-                        "totalRecord": record.get("total_record") or None,
-                    },
-                )
-                if result.get("wasInsert"):
-                    inserted.append(record)
-                    print(
-                        f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}"
-                    )
-                elif result.get("wasChanged"):
-                    updated.append(record)
-                    print(
-                        f"  ✓ Updated: {record['age_category']} {record['gender']} {record['weight_class']}"
-                    )
-                else:
-                    print(
-                        f"  - Unchanged: {record['age_category']} {record['gender']} {record['weight_class']}"
-                    )
-            except Exception as e:
+        # One connection, one transaction: a failing row rolls back the whole
+        # batch instead of leaving a partial record set behind.
+        results = self.ingest_client.actions(
+            "scraperIngestion:ingestRecord",
+            [
+                {
+                    "recordType": record["record_type"],
+                    "ageCategory": record["age_category"],
+                    "gender": record["gender"],
+                    "weightClass": record["weight_class"],
+                    "snatchRecord": record.get("snatch_record") or None,
+                    "cjRecord": record.get("cj_record") or None,
+                    "totalRecord": record.get("total_record") or None,
+                }
+                for record in records
+            ],
+        )
+        for record, result in zip(records, results):
+            if result.get("wasInsert"):
+                inserted.append(record)
                 print(
-                    f"  ✗ Error: {record['age_category']} {record['gender']} {record['weight_class']}: {e}"
+                    f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}"
+                )
+            elif result.get("wasChanged"):
+                updated.append(record)
+                print(
+                    f"  ✓ Updated: {record['age_category']} {record['gender']} {record['weight_class']}"
+                )
+            else:
+                print(
+                    f"  - Unchanged: {record['age_category']} {record['gender']} {record['weight_class']}"
                 )
 
         return {"inserted": inserted, "updated": updated}

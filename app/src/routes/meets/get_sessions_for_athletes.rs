@@ -1,4 +1,4 @@
-use crate::{AppError, AppState};
+use crate::{AppError, AppState, common::client::ClientVersion};
 use axum::extract::State;
 use axum::{Json, extract::Query};
 use serde::{Deserialize, Serialize};
@@ -87,6 +87,12 @@ const ALL_SESSIONS_SQL: &str = sessions_for_athletes_sql!("LEFT JOIN", "");
 /// This endpoint takes meet name and returns athletes and their session rows.
 /// Optional session_number and platform filters return one session/platform.
 ///
+/// A blank `meet` is `400` for a 6.2.0+ client and `200 []` for a legacy one.
+///
+/// `start_time` and `weigh_in_time` are the `session_schedule` free text as ingested
+/// (`"08:00:00"`, `"10:00"`, `"10:00 AM"` have all been seen); the app parses
+/// `h:mm[:ss][ AM/PM]`. They are `null` when the athlete's session has no schedule row.
+///
 /// [
 ///     {
 ///       "member_id": "12345",
@@ -107,9 +113,10 @@ const ALL_SESSIONS_SQL: &str = sessions_for_athletes_sql!("LEFT JOIN", "");
 /// ]
 pub async fn get_sessions_for_athletes(
     State(state): State<AppState>,
+    client: ClientVersion,
     Query(params): Query<SessionsAthletesParams>,
 ) -> Result<Json<Vec<SessionsAthletes>>, AppError> {
-    crate::common::query::require_non_empty("meet", &params.meet)?;
+    client.require_non_empty("meet", &params.meet)?;
     let rows: Vec<SessionsAthletes> = match (params.session_number, params.platform) {
         (Some(session_number), Some(platform)) => {
             sqlx::query_as(BY_SESSION_AND_PLATFORM_SQL)

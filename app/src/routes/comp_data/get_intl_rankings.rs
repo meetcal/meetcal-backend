@@ -1,6 +1,7 @@
-use crate::{AppError, AppState};
-use axum::Json;
+use crate::{AppError, AppState, common::http_cache::cacheable_json};
 use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
 
@@ -20,6 +21,9 @@ pub struct IntlRanking {
 ///
 /// curl 'https://api.meetcal.app/data/intl-rankings' | jq .
 ///
+/// The body carries a strong `ETag` and `Cache-Control: public, max-age=300`; a matching
+/// `If-None-Match` is `304`.
+///
 /// This endpoint takes nothing and returns international rankings
 ///
 /// [
@@ -36,7 +40,8 @@ pub struct IntlRanking {
 /// ]
 pub async fn get_intl_rankings(
     State(state): State<AppState>,
-) -> Result<Json<Vec<IntlRanking>>, AppError> {
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
     let rows = sqlx::query_as::<_, IntlRanking>(
         r#"
         SELECT meet, ranking, name, weight_class, total, percent_a, gender, age_category
@@ -55,5 +60,5 @@ pub async fn get_intl_rankings(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(rows))
+    cacheable_json(&rows, &headers)
 }

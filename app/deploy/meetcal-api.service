@@ -8,7 +8,8 @@ Type=simple
 User=YOUR_LINUX_USER
 WorkingDirectory=/home/YOUR_LINUX_USER/meetcal-backend/app
 EnvironmentFile=/home/YOUR_LINUX_USER/meetcal-backend/.env
-ExecStart=/home/YOUR_LINUX_USER/meetcal-backend/app/target/release/meetcal-backend
+# The crate is named `app` (app/Cargo.toml), so that is the release binary.
+ExecStart=/home/YOUR_LINUX_USER/meetcal-backend/app/target/release/app
 Restart=unless-stopped
 RestartSec=5
 

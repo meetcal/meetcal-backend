@@ -8,6 +8,8 @@ pub struct MeetsParams {
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct Meets {
+    /// `meets.convex_id`, the same `id` `/meets/package` sends for its meet.
+    pub id: String,
     pub federation: String,
     pub end_date: String,
     pub name: String,

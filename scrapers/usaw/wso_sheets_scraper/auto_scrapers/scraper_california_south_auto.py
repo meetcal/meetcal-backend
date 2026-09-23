@@ -156,11 +156,12 @@ class WSORecordsCaliforniaSouthScraper:
         return records
 
     def upsert_records(self, records: List[Dict]) -> None:
+        # One connection, one transaction: a failing row rolls back the batch.
+        self.ingest_client.actions(
+            "scraperIngestion:ingestWSORecord",
+            [wso_record_ingest_args(record) for record in records],
+        )
         for record in records:
-            self.ingest_client.action(
-                "scraperIngestion:ingestWSORecord",
-                wso_record_ingest_args(record),
-            )
             print(
                 f"  ✓ Upserted: {record['age_category']} "
                 f"{record['gender']} {record['weight_class']}"

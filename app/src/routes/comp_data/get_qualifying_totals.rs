@@ -1,7 +1,8 @@
 use crate::common::sort::sort_by_class;
-use crate::{AppError, AppState};
-use axum::Json;
+use crate::{AppError, AppState, common::http_cache::cacheable_json};
 use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
 
@@ -18,6 +19,9 @@ pub struct QualifyingTotal {
 ///
 /// curl 'https://api.meetcal.app/data/qualifying-totals' | jq .
 ///
+/// The body carries a strong `ETag` and `Cache-Control: public, max-age=300`; a matching
+/// `If-None-Match` is `304`.
+///
 /// This endpoint takes nothing and returns qualifying totals
 ///
 /// [
@@ -31,7 +35,8 @@ pub struct QualifyingTotal {
 /// ]
 pub async fn get_qualifying_totals(
     State(state): State<AppState>,
-) -> Result<Json<Vec<QualifyingTotal>>, AppError> {
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
     let rows = sqlx::query_as::<_, QualifyingTotal>(
         r#"
         SELECT event_name, gender, age_category, weight_class, qualifying_total
@@ -43,5 +48,5 @@ pub async fn get_qualifying_totals(
 
     let sorted = sort_by_class(rows, |r| r.weight_class.as_str());
 
-    Ok(Json(sorted))
+    cacheable_json(&sorted, &headers)
 }
