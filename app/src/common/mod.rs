@@ -1,3 +1,4 @@
+pub mod client;
 pub mod names;
 pub mod query;
 pub mod sort;

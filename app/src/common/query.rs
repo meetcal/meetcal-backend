@@ -33,6 +33,29 @@ where
         .collect())
 }
 
+/// JSON body for the `POST` name-list endpoints.
+///
+/// `GET` callers pass `names` as a comma-separated query param, which cannot
+/// carry a name that itself contains a comma and is bounded by URL length. The
+/// `POST` form takes a real array; `cutoff_date` is ignored by endpoints that
+/// have no date window.
+#[derive(Debug, Deserialize)]
+pub struct NameListBody {
+    pub names: Vec<String>,
+    #[serde(default)]
+    pub cutoff_date: Option<String>,
+}
+
+/// Trims each name and drops blanks, matching what the CSV deserializer does
+/// for `GET` so the two forms validate identically.
+pub fn clean_name_list(names: Vec<String>) -> Vec<String> {
+    names
+        .into_iter()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
 pub fn require_non_empty(field: &str, value: &str) -> Result<(), AppError> {
     if value.trim().is_empty() {
         return Err(AppError::Validation(format!("{field} is required")));
@@ -117,6 +140,17 @@ pub fn require_name_list(names: &[String]) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clean_name_list_trims_and_drops_blanks_but_keeps_commas() {
+        let cleaned = clean_name_list(vec![
+            "  Alexander Nordstrom ".to_string(),
+            "".to_string(),
+            "   ".to_string(),
+            "Nordstrom, Alexander".to_string(),
+        ]);
+        assert_eq!(cleaned, vec!["Alexander Nordstrom", "Nordstrom, Alexander"]);
+    }
 
     #[test]
     fn rejects_empty_and_oversized_name_lists() {

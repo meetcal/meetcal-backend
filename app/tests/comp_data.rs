@@ -243,3 +243,32 @@ async fn fail_get_adaptive_records() {
 
     assert_ne!(response.status(), 200);
 }
+
+// Client version gate: a blank `wso` is `200 []` for legacy callers (shipped
+// app builds) and `400` once the client declares 6.2.0+.
+
+#[tokio::test]
+async fn blank_wso_is_empty_for_legacy_and_400_for_strict_clients() {
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+    for path in ["/data/wso/records?wso=", "/data/wso/age-groups?wso=%20"] {
+        let legacy = client
+            .get(format!("{}{path}", app.address))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(legacy.status(), 200, "{path} legacy");
+        let body: Vec<serde_json::Value> = legacy.json().await.unwrap();
+        assert!(body.is_empty(), "{path} legacy body");
+
+        let strict = client
+            .get(format!("{}{path}", app.address))
+            .header("X-MeetCal-App", "6.2.0")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(strict.status(), 400, "{path} strict");
+        let body: serde_json::Value = strict.json().await.unwrap();
+        assert_eq!(body["error"], "wso is required");
+    }
+}

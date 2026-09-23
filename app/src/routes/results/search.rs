@@ -1,7 +1,10 @@
 use crate::{
     AppError, AppState,
     common::names::{normalize_name, normalized_name_sql},
-    common::query::{like_contains_pattern, require_non_empty},
+    common::{
+        client::ClientVersion,
+        query::{like_contains_pattern, require_non_empty},
+    },
     routes::results::types::{LiftingResults, lifting_result_columns},
 };
 use axum::{
@@ -99,9 +102,12 @@ pub struct SearchResponse {
 ///
 pub async fn search_wrapped(
     State(state): State<AppState>,
+    client: ClientVersion,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, AppError> {
     require_non_empty("query", &params.query)?;
+    client.require_iso_date("start_date", params.start_date.as_deref())?;
+    client.require_iso_date("end_date", params.end_date.as_deref())?;
     let suggestions = search_suggestions(&state, &params.query).await?;
 
     let (Some(start_date), Some(end_date)) = (params.start_date.as_ref(), params.end_date.as_ref())
