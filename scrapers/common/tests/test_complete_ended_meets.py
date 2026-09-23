@@ -16,6 +16,8 @@ from pathlib import Path
 try:
     import psycopg
     from psycopg.rows import dict_row
+
+    from common.tests.db_schema import apply_migrations
 except ImportError:  # pragma: no cover - optional local dep
     psycopg = None
     dict_row = None
@@ -32,6 +34,10 @@ FAR_EAST = "Pacific/Kiritimati"  # UTC+14
     "DATABASE_URL and psycopg are required",
 )
 class CompleteEndedMeetsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        apply_migrations(os.environ["DATABASE_URL"])
+
     def setUp(self) -> None:
         self.sql = SQL_PATH.read_text(encoding="utf-8")
         self.token = uuid.uuid4().hex[:8]

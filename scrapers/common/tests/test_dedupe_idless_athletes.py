@@ -11,6 +11,8 @@ try:
     import psycopg
     from psycopg.rows import dict_row
 
+    from common.tests.db_schema import apply_migrations
+
     from common import dedupe_idless_athletes as dedupe
 except ImportError:  # pragma: no cover - optional local dep
     psycopg = None
@@ -23,6 +25,10 @@ except ImportError:  # pragma: no cover - optional local dep
     "DATABASE_URL and psycopg are required",
 )
 class DedupeIdlessAthletesTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        apply_migrations(os.environ["DATABASE_URL"])
+
     def setUp(self) -> None:
         self.token = uuid.uuid4().hex[:8]
         self.meet = f"__test_dedupe_{self.token}__"
