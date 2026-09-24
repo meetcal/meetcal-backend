@@ -1,3 +1,4 @@
+use crate::common::names::{normalize_name, normalized_name_sql};
 use crate::{AppError, AppState, common::client::ClientVersion};
 use axum::extract::State;
 use axum::{Json, extract::Query};
@@ -35,10 +36,11 @@ pub struct SessionsAthletes {
 /// `$join` is `LEFT JOIN` only for the unfiltered variant, which must still
 /// list athletes whose session has no schedule row yet; the filtered variants
 /// match on a session/platform that by definition has one. `$filters` is
-/// appended to the `WHERE`. Both are literals written here, never caller input,
-/// and the expansion is a string literal so the query stays `&'static str`.
+/// appended to the `WHERE`. Both are literals written here (or `concat!`s of
+/// them), never caller input, and the expansion is a string literal so the
+/// query stays `&'static str`.
 macro_rules! sessions_for_athletes_sql {
-    ($join:literal, $filters:literal) => {
+    ($join:literal, $filters:expr) => {
         concat!(
             r#"
         SELECT
@@ -72,12 +74,27 @@ macro_rules! sessions_for_athletes_sql {
     };
 }
 
+/// `session_platform` is free text. Ingest canonicalises it now ("red " ->
+/// "Red", the app sends the same canonical form), but rows written before
+/// that, or by a source with its own casing, may still hold "RED" or "red ".
+/// The filter therefore compares by the case- and whitespace-insensitive rule
+/// names use, with the parameter normalized the same way (`normalize_name`),
+/// so the app's canonical value matches whatever spelling is stored. The
+/// `meet` predicate keeps the lookup on `idx_athletes_meet*`; the platform
+/// test then runs over one meet's roster.
 const BY_SESSION_AND_PLATFORM_SQL: &str = sessions_for_athletes_sql!(
     "JOIN",
-    "AND a.session_number = $2\n            AND a.session_platform = $3"
+    concat!(
+        "AND a.session_number = $2\n            AND ",
+        normalized_name_sql!("a.session_platform"),
+        " = $3"
+    )
 );
 const BY_SESSION_SQL: &str = sessions_for_athletes_sql!("JOIN", "AND a.session_number = $2");
-const BY_PLATFORM_SQL: &str = sessions_for_athletes_sql!("JOIN", "AND a.session_platform = $2");
+const BY_PLATFORM_SQL: &str = sessions_for_athletes_sql!(
+    "JOIN",
+    concat!("AND ", normalized_name_sql!("a.session_platform"), " = $2")
+);
 const ALL_SESSIONS_SQL: &str = sessions_for_athletes_sql!("LEFT JOIN", "");
 
 /// /meets/athletes-sessions endpoint
@@ -86,6 +103,8 @@ const ALL_SESSIONS_SQL: &str = sessions_for_athletes_sql!("LEFT JOIN", "");
 ///
 /// This endpoint takes meet name and returns athletes and their session rows.
 /// Optional session_number and platform filters return one session/platform.
+/// `platform` matches case- and whitespace-insensitively (`red`, `RED `, `Red`
+/// are one platform); the rows carry the stored spelling.
 ///
 /// A blank `meet` is `400` for a 6.2.0+ client and `200 []` for a legacy one.
 ///
@@ -122,7 +141,7 @@ pub async fn get_sessions_for_athletes(
             sqlx::query_as(BY_SESSION_AND_PLATFORM_SQL)
                 .bind(&params.meet)
                 .bind(session_number)
-                .bind(platform)
+                .bind(normalize_name(&platform))
                 .fetch_all(&state.db)
                 .await?
         }
@@ -136,7 +155,7 @@ pub async fn get_sessions_for_athletes(
         (None, Some(platform)) => {
             sqlx::query_as(BY_PLATFORM_SQL)
                 .bind(&params.meet)
-                .bind(platform)
+                .bind(normalize_name(&platform))
                 .fetch_all(&state.db)
                 .await?
         }
@@ -149,4 +168,19 @@ pub async fn get_sessions_for_athletes(
     };
 
     Ok(Json(rows))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn platform_filters_compare_case_and_whitespace_insensitively() {
+        let rule = "lower(btrim(regexp_replace(a.session_platform, '\\s+', ' ', 'g')))";
+        assert!(BY_PLATFORM_SQL.contains(&format!("AND {rule} = $2")));
+        assert!(BY_SESSION_AND_PLATFORM_SQL.contains(&format!("AND {rule} = $3")));
+        assert!(BY_SESSION_AND_PLATFORM_SQL.contains("AND a.session_number = $2"));
+        // The schedule join itself stays exact: both sides are written by ingest.
+        assert!(BY_PLATFORM_SQL.contains("AND s.platform = a.session_platform"));
+    }
 }

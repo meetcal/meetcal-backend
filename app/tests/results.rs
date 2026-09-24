@@ -742,3 +742,102 @@ async fn names_longer_than_the_per_name_cap_are_rejected() {
         .unwrap();
     assert_eq!(get.status(), 400);
 }
+
+// ---------------------------------------------------------------------------
+// Non-ASCII names. The app normalizes with Unicode rules (`to_lowercase`,
+// `split_whitespace`, which folds É and treats a no-break space as space);
+// Postgres does the same only when the database ctype is not C/POSIX, which
+// the API checks at startup (tests/schema.rs). These rows prove the two rules
+// agree end to end on the test database.
+// ---------------------------------------------------------------------------
+
+const NON_ASCII_MEET: &str = "Locale Test Meet";
+/// The requested spelling: upper-case with a no-break space (U+00A0) between
+/// the words. (Outer whitespace is trimmed by `clean_name_list`, so a padded
+/// name would come back keyed by its trimmed form.)
+const NON_ASCII_QUERY_NAME: &str = "JOSÉ\u{a0}ÁLVAREZ";
+
+async fn seed_non_ascii_results(db: &sqlx::PgPool) {
+    sqlx::query(
+        r#"
+        INSERT INTO lifting_results (
+            convex_id, event_id, meet, date, name, age, body_weight,
+            snatch1, snatch2, snatch3, snatch_best, cj1, cj2, cj3, cj_best, total,
+            adaptive, federation
+        ) VALUES
+            ('locale_jose_1', 'locale_event', $1, '2025-03-01', 'José  Álvarez',
+             'Open Men''s 73kg', 72.5, 90, 95, -100, 95, 110, 115, 0, 115, 210, false, 'USAW'),
+            ('locale_jose_2', 'locale_event', $1, '2025-04-01', 'JOSÉ ÁLVAREZ',
+             'Open Men''s 73kg', 72.8, 92, 96, 100, 100, 112, 118, 120, 120, 220, false, 'USAW')
+        ON CONFLICT (convex_id) DO NOTHING
+        "#,
+    )
+    .bind(NON_ASCII_MEET)
+    .execute(db)
+    .await
+    .unwrap();
+}
+
+async fn delete_non_ascii_results(db: &sqlx::PgPool) {
+    sqlx::query("DELETE FROM lifting_results WHERE meet = $1")
+        .bind(NON_ASCII_MEET)
+        .execute(db)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn non_ascii_names_match_across_case_and_no_break_space() {
+    let app = support::spawn_test_app().await;
+    let db = support::db_pool().await;
+    seed_non_ascii_results(&db).await;
+
+    // POST carries the name verbatim, no-break space and all.
+    let bests_response = client()
+        .post(format!("{}/lifting-results/bests", app.address))
+        .json(&serde_json::json!({
+            "names": [NON_ASCII_QUERY_NAME, "josé álvarez"],
+            "cutoff_date": "2025-01-01"
+        }))
+        .send()
+        .await
+        .unwrap();
+    let bests_status = bests_response.status();
+    let bests: BTreeMap<String, YearBests> = bests_response.json().await.unwrap();
+
+    let by_names_response = client()
+        .post(format!("{}/lifting-results/by-names", app.address))
+        .json(&serde_json::json!({ "names": ["josé álvarez"] }))
+        .send()
+        .await
+        .unwrap();
+    let by_names: Vec<LiftingResults> = by_names_response.json().await.unwrap();
+
+    let search_response = reqwest::get(format!(
+        "{}/search?query=jos%C3%A9%20%C3%A1lvarez&start_date=2025-01-01&end_date=2026-01-01",
+        app.address
+    ))
+    .await
+    .unwrap();
+    let search_status = search_response.status();
+    let search: SearchResponse = search_response.json().await.unwrap();
+
+    delete_non_ascii_results(&db).await;
+
+    assert_eq!(bests_status, 200);
+    let requested = bests
+        .get(NON_ASCII_QUERY_NAME)
+        .expect("keyed by the requested spelling");
+    assert_eq!(requested.best_total, 220.0, "{bests:?}");
+    assert_eq!(bests["josé álvarez"].best_total, 220.0, "{bests:?}");
+
+    assert_eq!(
+        by_names.len(),
+        2,
+        "both spellings are one lifter: {by_names:?}"
+    );
+
+    assert_eq!(search_status, 200);
+    assert_eq!(search.matched_name.as_deref(), Some("josé álvarez"));
+    assert_eq!(search.results.len(), 2, "{search:?}");
+}

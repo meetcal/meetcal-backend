@@ -66,7 +66,7 @@ cd app/scripts
 ./init_db.sh
 ```
 
-This creates a Docker container named `meetcal` (Postgres 16), creates the `meetcal` database, and runs all SQLx migrations. Set `SKIP_DOCKER=1` if you already have Postgres running locally.
+This creates a Docker container named `meetcal` (Postgres 16, `--encoding=UTF8 --locale=C.UTF-8`), creates the `meetcal` database, and runs all SQLx migrations. Set `SKIP_DOCKER=1` if you already have Postgres running locally. The database must be UTF-8 with a ctype that folds Unicode (`C.UTF-8`, `en_US.UTF-8`, or ICU), never `C`/`POSIX`: the script and the API both refuse otherwise, because Postgres-side name matching (`lower()`, `\s`) would then miss every non-ASCII name. `LC_CTYPE` cannot be changed after `CREATE DATABASE`.
 
 ### 3. Run the API
 

@@ -60,6 +60,30 @@ The port is published on `127.0.0.1` only, so only host processes can connect fr
 5. **Enforce.** Set `APP_RATE_LIMIT__ENFORCE="true"` in `.env` and redeploy. The startup line then shows `enforce=true`. The same warnings keep coming, now with `enforced=true`, and those requests get `429`.
 6. **Roll back** by setting `APP_RATE_LIMIT__ENFORCE="false"` and redeploying. No code change is needed.
 
+## Venue math: why the anonymous burst must grow before enforcing
+
+The defaults (`DEFAULT_IP_TOKENS_PER_SECOND` 40, `DEFAULT_IP_BURST` 1,200) were sized for the app's background sync: `/meets` + a `/meets/package` revalidation every five minutes. The compile-time checks in `app/src/common/rate_limit.rs` pin that, and since the two-step package charge a `304` revalidation costs `PACKAGE_REVALIDATE_COST` (1), not the build's 4. But the first open of a downloaded meet is a different shape:
+
+| Constant | Value | What it is |
+| --- | --- | --- |
+| `VENUE_ROSTER_ATHLETES` | 1,500 | Lifters on the largest roster the app downloads |
+| `APP_NAME_LIST_CHUNK` | 40 | Names per `/lifting-results/by-names` request the app sends; each request costs `NAME_LIST_ROUTE_COST` (5) whatever its size |
+| `HISTORY_REFRESH_COST` | 194 | One phone refreshing that meet's history: 4 (package) + ceil(1,500 / 40) x 5 |
+| Sort-by-best on the roster | 75-150 | Same order of cost, same moment |
+| `VENUE_DEVICES` | 500 | Phones behind one venue NAT the defaults must carry |
+| `VENUE_FIRST_MINUTE_DEVICES` | 200 | Phones opening the app in the same minute (doors open, a session starts) |
+
+- **First hour:** 500 x 194 = 97,000 tokens against 1,200 burst + 40 x 3,600 = 145,200 refill. Fits; the `const` assertion fails the build if a cost change breaks it.
+- **First minute:** 200 x 194 = 38,800 tokens against 1,200 + 2,400 = 3,600. Short by 35,200 (`venue_first_minute_shortfall`). With `ENFORCE=true` and these defaults, a venue would see `429`s on first open, and the app's history refresh would fall back to whatever it has cached.
+
+The gap is the burst, not the rate: the refill carries the hour, the bucket does not carry the minute. So, before enforcing:
+
+1. Raise `APP_RATE_LIMIT__IP_BURST` toward the keyed bucket's `DEFAULT_KEY_BURST` (6,000) or beyond; 6,000 still covers only ~30 phones' first-open refreshes, so treat it as the floor and let the shadow logs on a meet weekend set the number. `APP_RATE_LIMIT__IP_TOKENS_PER_SECOND` can stay at 40.
+2. Watch `rate limit exceeded` warnings for `path=/lifting-results/by-names` from one `client_tag` on a meet day. That is the first-open burst, and its count per minute is the burst you need.
+3. Only then flip `APP_RATE_LIMIT__ENFORCE`.
+
+Enforcement stays off by default; nothing in this section changes what a deploy does today.
+
 ## Client behaviour
 
 - meetcal-cli retries `429`/`503` twice, honouring `Retry-After` (clamped to 1–30s).

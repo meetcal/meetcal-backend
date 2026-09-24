@@ -23,8 +23,9 @@ from common.normalize import KNOWN_PLATFORMS as _KNOWN_PLATFORMS  # noqa: E402
 from common.normalize import normalize_platform, parse_time  # noqa: E402
 
 # The writer canonicalises casing at ingest ("red" -> "Red"), so the check
-# here runs on the normalised value. A platform still unknown after that is
-# an error: the app silently remaps anything it does not know to Red.
+# here runs on the normalised value. A platform still unknown after that is a
+# warning, not an error: the app renders any platform name ("Gold" is real),
+# and the list only catches a likely typo ("Rde") before approval.
 KNOWN_PLATFORMS = set(_KNOWN_PLATFORMS)
 ALLOWED_GENDERS = {"Male", "Female", "Men", "Women"}
 WEIGHT_CLASS_RE = re.compile(r"^\+?\d{2,3}\+?$")
@@ -147,7 +148,12 @@ def validate(
         if session_number in (None, "", 0) or not session_platform:
             f.add(ERROR, "session_unassigned", "Athlete missing session number/platform", name)
         elif session_platform not in KNOWN_PLATFORMS:
-            f.add(ERROR, "platform_unknown", "Unknown session platform", f"{name} -> {session_platform}")
+            f.add(
+                WARNING,
+                "platform_unknown",
+                "Session platform is not one of the usual names (typo?)",
+                f"{name} -> {session_platform}",
+            )
 
     for member_id, count in seen_member_ids.items():
         if count > 1:
@@ -183,7 +189,12 @@ def validate(
         if not platform:
             f.add(ERROR, "schedule_platform_missing", "Schedule row missing platform", str(session_id))
         elif platform not in KNOWN_PLATFORMS:
-            f.add(ERROR, "schedule_platform_unknown", "Unknown schedule platform", platform)
+            f.add(
+                WARNING,
+                "schedule_platform_unknown",
+                "Schedule platform is not one of the usual names (typo?)",
+                platform,
+            )
         if not start_time:
             f.add(WARNING, "schedule_no_start_time", "Schedule row missing start time", f"{session_id} {platform}")
         elif parse_time(start_time) is None:

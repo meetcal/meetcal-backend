@@ -15,6 +15,8 @@ cargo test --locked
 
 CI (`.github/workflows/ci.yml`) starts Postgres 16, runs that setup, then fmt, clippy, `cargo test --locked`, shellcheck, and a production container build.
 
+The database must be `UTF8` with a ctype that folds Unicode (`C.UTF-8`, `en_US.UTF-8`, or the ICU provider; the `postgres:16` image defaults to `en_US.utf8`). Name matching runs `lower()` and a `\s` regex inside Postgres against a parameter the app normalizes with Unicode rules, and under `LC_CTYPE=C`/`POSIX` Postgres folds only ASCII, so `JOSÉ ÁLVAREZ` would match nothing. `setup_test_db.sh` checks this before migrating, the API refuses to start otherwise (`ensure_database_locale` in `app/src/common/schema.rs`), and `tests/schema.rs` proves the refusal against a database created with `LC_CTYPE 'C'` (it needs `CREATEDB`, which the CI superuser has). `LC_CTYPE` cannot be changed on an existing database; recreate it from `template0`.
+
 Put HTTP tests in `app/tests/` next to the surface they cover (`users.rs`, `scrapers.rs`, `clubs.rs`, `wsos.rs`). Unit tests for pure helpers live in the same `.rs` file under `#[cfg(test)]`.
 
 Risk cases that belong in Rust tests:
@@ -22,10 +24,12 @@ Risk cases that belong in Rust tests:
 - Clerk JWT (missing, empty, forged, expired, wrong `azp`)
 - Slack HMAC (bad signature, stale timestamp, path-unsafe run id)
 - Empty / oversized `names` on `/lifting-results/by-names`, `/recent`, `/bests`
+- Non-ASCII names (`JOSÉ ÁLVAREZ`, a no-break space between words) match on `/lifting-results/bests`, `/by-names` and `/search` (`tests/results.rs`)
 - Empty `club` / `wso` on history endpoints
 - Missing meet → 404 (`sqlx::Error::RowNotFound`), not 500
+- `/meets/athletes-sessions` `platform` filter matches a stored `gold ` / `RED` (rows written before ingest canonicalised platforms) case- and whitespace-insensitively (`tests/meets.rs`)
 - Saved-session validation (empty meet/platform, oversized `athlete_names`)
-- Rate limits and load shedding (`tests/rate_limits.rs`): `429` + `Retry-After` past the burst, key vs anonymous budgets, bad key is anonymous, `X-Forwarded-For` trust and rightmost entry, IPv6 `/64` grouping, `/health` exempt, shadow mode, `503` at the in-flight cap, CORS on both. Tests build servers with `spawn_app_with_limits`; every other test runs in shadow mode.
+- Rate limits and load shedding (`tests/rate_limits.rs`): `429` + `Retry-After` past the burst, key vs anonymous budgets, bad key is anonymous, `X-Forwarded-For` trust and rightmost entry, IPv6 `/64` grouping, `/health` exempt, shadow mode, `503` at the in-flight cap, CORS on both, a `/meets/package` `304` costing one token while a build (even with a stale `If-None-Match`) costs the full route cost. Tests build servers with `spawn_app_with_limits`; every other test runs in shadow mode.
 
 ## Python ingest (`scrapers/`)
 
@@ -52,7 +56,7 @@ Risk cases that belong in Python tests:
 - `upsert_lifting_result` lookup precedence: `convex_id`, then `legacy_id`, then the natural key
 - Id-less athletes (blank or `noid:` member id) update one row across re-ingests; platform casing and `h:mm AM/PM` times are canonicalised at ingest
 - `complete-ended-meets` compares `end_date` against the meet-local date and tolerates unknown `time_zone` values
-- Meet automation: empty parse is not staged; approval decision files; a failing approved ingest is parked as `failed` and its decision consumed; reply classification ("no issues, ship it" approves); ingest refuses empty `meet_name`; replace+insert rolls back if a later write fails
+- Meet automation: an unknown platform ("Gold") is a warning, never an error (the app renders any platform name); empty parse is not staged; approval decision files; a failing approved ingest is parked as `failed` and its decision consumed; reply classification ("no issues, ship it" approves); ingest refuses empty `meet_name`; replace+insert rolls back if a later write fails
 
 ## Coverage inventory
 

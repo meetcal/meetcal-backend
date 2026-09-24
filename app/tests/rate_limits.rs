@@ -5,7 +5,10 @@
 //! request per anonymous bucket (two per keyed bucket). A spent bucket then
 //! needs five seconds to take another, so the assertions hold however slowly
 //! a loaded CI machine sends the requests in between.
-use app::common::rate_limit::{MAX_ROUTE_COST, RateLimitSettings, SEARCH_ROUTE_COST};
+use app::common::rate_limit::{
+    MAX_ROUTE_COST, PACKAGE_REVALIDATE_COST, PACKAGE_ROUTE_COST, RateLimitSettings,
+    SEARCH_ROUTE_COST,
+};
 use app::common::spawn_server::{TestApp, spawn_app_with_limits};
 use reqwest::{Response, StatusCode};
 use std::time::Duration;
@@ -24,6 +27,13 @@ const CHEAP: &str = "/data/wso";
 const BURST: u32 = MAX_ROUTE_COST;
 
 const _: () = assert!(COSTLY_COST == BURST);
+/// A seeded meet's package. A build spends [`PACKAGE_ROUTE_COST`]; a `304`
+/// revalidation only [`PACKAGE_REVALIDATE_COST`].
+const PACKAGE: &str = "/meets/package?meet=2026%20USA%20Weightlifting%20National%20Championships%2C%20Powered%20by%20Rogue%20Fitness&history_cutoff_date=2024-01-01";
+// The sequences below rely on one build plus one revalidation fitting the
+// bucket exactly, and a second build not.
+const _: () = assert!(PACKAGE_ROUTE_COST + PACKAGE_REVALIDATE_COST == BURST);
+const _: () = assert!(2 * PACKAGE_ROUTE_COST > BURST);
 
 fn limits(enforce: bool) -> RateLimitSettings {
     RateLimitSettings {
@@ -294,4 +304,69 @@ async fn the_load_shedder_answers_503_when_the_in_flight_cap_is_full() {
     // Closing the stalled request frees its slot.
     drop(stalled);
     wait_for_status(&app, CHEAP, &[], StatusCode::OK).await;
+}
+
+// ---------------------------------------------------------------------------
+// `/meets/package` is charged in two steps: PACKAGE_REVALIDATE_COST before the
+// handler, the rest only when the answer carries a body. A venue of phones
+// revalidating an unchanged package therefore spends one token each.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_package_revalidation_costs_one_token_and_a_build_the_full_cost() {
+    let app = spawn_app_with_limits(limits(true), "").await;
+    let client = reqwest::Client::new();
+
+    // The build spends PACKAGE_ROUTE_COST of the BURST tokens.
+    let built = client
+        .get(format!("{}{PACKAGE}", app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(built.status(), StatusCode::OK);
+    let etag = built.headers()[reqwest::header::ETAG]
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // The revalidation fits in what is left (it would not at the build cost).
+    let revalidated = client
+        .get(format!("{}{PACKAGE}", app.address))
+        .header(reqwest::header::IF_NONE_MATCH, &etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revalidated.status(), StatusCode::NOT_MODIFIED);
+
+    // The bucket is now empty: the costliest route needs the whole refill.
+    let retry_after = assert_limited(&app, &[]).await;
+    assert!(retry_after >= u64::from(COSTLY_COST) - 2, "{retry_after}");
+}
+
+#[tokio::test]
+async fn a_second_package_build_is_limited_even_though_the_upfront_token_fits() {
+    let app = spawn_app_with_limits(limits(true), "").await;
+    let client = reqwest::Client::new();
+
+    let built = client
+        .get(format!("{}{PACKAGE}", app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(built.status(), StatusCode::OK);
+
+    // A stale validator is not a discount: the response has a body, so the
+    // rest of the build cost is settled, and this client cannot afford it.
+    let again = client
+        .get(format!("{}{PACKAGE}", app.address))
+        .header(reqwest::header::IF_NONE_MATCH, "\"not-the-etag\"")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(again.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(again.headers().get(reqwest::header::RETRY_AFTER).is_some());
+    assert_eq!(
+        again.json::<serde_json::Value>().await.unwrap(),
+        serde_json::json!({"error": "rate limited"})
+    );
 }

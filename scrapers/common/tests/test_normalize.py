@@ -43,6 +43,11 @@ class PlatformTests(unittest.TestCase):
     def test_unknown_platforms_are_title_cased_not_dropped(self):
         self.assertEqual(normalize_platform("gold"), "Gold")
         self.assertEqual(normalize_platform("PLATFORM  a"), "Platform A")
+        # Same rule as the app's client-side canonicalisation: trim, collapse
+        # whitespace, title-case each word.
+        self.assertEqual(normalize_platform("  RED "), "Red")
+        self.assertEqual(normalize_platform("\tgold\n platform  2 "), "Gold Platform 2")
+        self.assertEqual(normalize_platform("   "), "")
 
     def test_non_strings_and_blanks_pass_through(self):
         self.assertIsNone(normalize_platform(None))
