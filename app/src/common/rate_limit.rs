@@ -19,6 +19,9 @@
 //! are grouped by `/64`, the smallest block one subscriber is normally given.
 //!
 //! Routes cost tokens by how much database work they do ([`route_cost`]).
+//! `/meets/package` is charged in two steps: [`PACKAGE_REVALIDATE_COST`]
+//! before the handler runs, and the rest only when the answer is not a `304`
+//! ([`route_settlement_cost`]), since a revalidation builds nothing.
 //! Over the limit, an enforcing server answers `429 {"error":"rate limited"}`
 //! with `Retry-After` in whole seconds until the bucket holds enough tokens
 //! again. In shadow mode ([`RateLimitSettings::enforce`] off, the default) the
@@ -28,7 +31,7 @@
 use crate::AppError;
 use axum::{
     extract::{ConnectInfo, Request, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -71,6 +74,14 @@ pub const DEFAULT_ROUTE_COST: u32 = 1;
 /// are cheap, but a miss is the most expensive build the API does. The app
 /// calls it once per sync, in place of a dozen smaller requests.
 pub const PACKAGE_ROUTE_COST: u32 = 4;
+/// What a `/meets/package` request spends before its handler runs, and all a
+/// `304 Not Modified` ever costs: the freshness stamp lookup and an ETag
+/// compare, the same indexed work as any default route. A response with a
+/// body settles the remaining `PACKAGE_ROUTE_COST - PACKAGE_REVALIDATE_COST`
+/// afterwards ([`route_settlement_cost`]).
+pub const PACKAGE_REVALIDATE_COST: u32 = DEFAULT_ROUTE_COST;
+/// The package path, matched exactly like every other route cost.
+pub const PACKAGE_PATH: &str = "/meets/package";
 /// `/search` scans `lifting_results` by name and date range.
 pub const SEARCH_ROUTE_COST: u32 = 5;
 /// `/lifting-results/by-names`, `/recent` and `/bests`: up to
@@ -94,17 +105,46 @@ const fn max_u32(a: u32, b: u32) -> u32 {
     if a > b { a } else { b }
 }
 
-/// Tokens one request to `path` spends. Matched on the exact path (axum routes
-/// are exact), so an unknown path, a 404, costs [`DEFAULT_ROUTE_COST`].
+const _: () = assert!(
+    PACKAGE_REVALIDATE_COST >= 1 && PACKAGE_REVALIDATE_COST <= PACKAGE_ROUTE_COST,
+    "a package revalidation spends something, and never more than a build"
+);
+
+/// Tokens one request to `path` spends in total. Matched on the exact path
+/// (axum routes are exact), so an unknown path, a 404, costs
+/// [`DEFAULT_ROUTE_COST`]. `/meets/package` spends this much only when it
+/// answers with a body; see [`route_upfront_cost`] / [`route_settlement_cost`].
 pub fn route_cost(path: &str) -> u32 {
     match path {
-        "/meets/package" => PACKAGE_ROUTE_COST,
+        PACKAGE_PATH => PACKAGE_ROUTE_COST,
         "/search" => SEARCH_ROUTE_COST,
         "/lifting-results/by-names" | "/lifting-results/recent" | "/lifting-results/bests" => {
             NAME_LIST_ROUTE_COST
         }
         "/clubs/meet-stats" => MEET_STATS_ROUTE_COST,
         _ => DEFAULT_ROUTE_COST,
+    }
+}
+
+/// Tokens spent before the handler runs. The whole [`route_cost`] for every
+/// route but `/meets/package`, which pays [`PACKAGE_REVALIDATE_COST`] now and
+/// the rest once the middleware can see whether it built anything.
+pub fn route_upfront_cost(path: &str) -> u32 {
+    if path == PACKAGE_PATH {
+        PACKAGE_REVALIDATE_COST
+    } else {
+        route_cost(path)
+    }
+}
+
+/// Tokens spent after the handler answered with `status`: the rest of the
+/// package cost for anything but a `304`, which built nothing. Zero for
+/// every other route, whose whole cost was spent up front.
+pub fn route_settlement_cost(path: &str, status: StatusCode) -> u32 {
+    if path == PACKAGE_PATH && status != StatusCode::NOT_MODIFIED {
+        PACKAGE_ROUTE_COST - PACKAGE_REVALIDATE_COST
+    } else {
+        0
     }
 }
 
@@ -153,6 +193,51 @@ const _: () = assert!(
         <= DEFAULT_IP_TOKENS_PER_SECOND * APP_SYNC_INTERVAL_SECS,
     "the default anonymous rate must carry a venue of app devices with headroom"
 );
+
+// The background sync above is the steady state. The expensive moment is the
+// first open of a downloaded meet: the app revalidates the package and then
+// refreshes every rostered lifter's history through `/lifting-results/by-names`
+// in chunks of `APP_NAME_LIST_CHUNK`, each chunk costing the full
+// `NAME_LIST_ROUTE_COST` whatever its size, so one phone spends
+// `HISTORY_REFRESH_COST` (194 tokens for a 1,500-lifter roster) in a burst.
+// Sorting a roster by best is the same order of cost (75 to 150 tokens).
+//
+// Spread over the first hour of a meet day that fits the defaults, which the
+// assertion below pins. It does NOT fit the first minute: 200 phones opening
+// the app as doors open need 38,800 tokens against 1,200 burst + 2,400 of
+// refill, so enforcing the current `DEFAULT_IP_BURST` would 429 a venue on
+// first open. `venue_first_minute_shortfall` keeps that number honest for
+// docs/rate-limits.md, which says to raise the anonymous burst toward the
+// keyed one before flipping `APP_RATE_LIMIT__ENFORCE`.
+
+/// Lifters on the largest roster the app downloads (a national championship).
+pub const VENUE_ROSTER_ATHLETES: u32 = 1_500;
+/// Names the app puts in one `/lifting-results/by-names` request (its chunk
+/// size; the server accepts up to `MAX_NAME_LIST_LEN`).
+pub const APP_NAME_LIST_CHUNK: u32 = 40;
+/// Tokens one phone spends refreshing a downloaded meet's history: the
+/// package revalidation plus one name-list request per roster chunk.
+pub const HISTORY_REFRESH_COST: u32 =
+    PACKAGE_ROUTE_COST + VENUE_ROSTER_ATHLETES.div_ceil(APP_NAME_LIST_CHUNK) * NAME_LIST_ROUTE_COST;
+/// Window over which a venue's first-open refreshes are spread for sizing.
+pub const VENUE_FIRST_HOUR_SECS: u32 = 60 * 60;
+/// Phones that open the app in the same minute as a session starts.
+pub const VENUE_FIRST_MINUTE_DEVICES: u32 = 200;
+
+const _: () = assert!(
+    VENUE_DEVICES * HISTORY_REFRESH_COST
+        <= DEFAULT_IP_BURST + DEFAULT_IP_TOKENS_PER_SECOND * VENUE_FIRST_HOUR_SECS,
+    "the default anonymous budget must carry every venue device refreshing a downloaded \
+     meet's history within the first hour"
+);
+
+/// Tokens `devices` phones refreshing history in the same minute would need
+/// beyond what one anonymous bucket holds plus a minute of refill; zero when
+/// the defaults already cover them. The first-open gap the docs quote.
+pub const fn venue_first_minute_shortfall(devices: u32) -> u32 {
+    (devices * HISTORY_REFRESH_COST)
+        .saturating_sub(DEFAULT_IP_BURST + DEFAULT_IP_TOKENS_PER_SECOND * 60)
+}
 const _: () = assert!(
     CLI_BURST_REQUESTS * MAX_ROUTE_COST <= DEFAULT_IP_BURST,
     "the default anonymous burst must fit a meetcal-cli run of the costliest route"
@@ -825,17 +910,31 @@ pub async fn rate_limit(
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ConnectInfo(addr)| *addr);
     let client = limits.charged_client(limits.identify(peer, request.headers()));
-    match limits.check(&client, route_cost(path)) {
-        Decision::Allow => next.run(request).await,
-        Decision::Limited { retry_after_secs } => {
-            limits.log_limited(&client, path, retry_after_secs);
-            if limits.enforce() {
-                AppError::RateLimited { retry_after_secs }.into_response()
-            } else {
-                next.run(request).await
-            }
+    let is_package = path == PACKAGE_PATH;
+    if let Decision::Limited { retry_after_secs } = limits.check(&client, route_upfront_cost(path))
+    {
+        limits.log_limited(&client, path, retry_after_secs);
+        if limits.enforce() {
+            return AppError::RateLimited { retry_after_secs }.into_response();
         }
     }
+    let response = next.run(request).await;
+    if !is_package {
+        return response;
+    }
+    // The package's build cost is settled once its status is known: a `304`
+    // built nothing and owes nothing more. A client that cannot afford the
+    // rest gets the `429` instead of the body it was already answered with
+    // (the build was a cache hit or is now cached), so a stale `If-None-Match`
+    // is never a discount on a full package.
+    let settlement = route_settlement_cost(PACKAGE_PATH, response.status());
+    if let Decision::Limited { retry_after_secs } = limits.check(&client, settlement) {
+        limits.log_limited(&client, PACKAGE_PATH, retry_after_secs);
+        if limits.enforce() {
+            return AppError::RateLimited { retry_after_secs }.into_response();
+        }
+    }
+    response
 }
 
 #[cfg(test)]
@@ -889,6 +988,161 @@ mod tests {
         assert_eq!(route_cost("/lifting-results/recent"), NAME_LIST_ROUTE_COST);
         assert_eq!(route_cost("/lifting-results/bests"), NAME_LIST_ROUTE_COST);
         assert_eq!(route_cost("/clubs/meet-stats"), MEET_STATS_ROUTE_COST);
+    }
+
+    #[test]
+    fn a_package_revalidation_costs_one_token_and_a_body_the_full_route_cost() {
+        assert_eq!(route_upfront_cost(PACKAGE_PATH), PACKAGE_REVALIDATE_COST);
+        assert_eq!(PACKAGE_REVALIDATE_COST, 1);
+        assert_eq!(
+            route_settlement_cost(PACKAGE_PATH, StatusCode::NOT_MODIFIED),
+            0
+        );
+        for status in [
+            StatusCode::OK,
+            StatusCode::NOT_FOUND,
+            StatusCode::BAD_REQUEST,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            assert_eq!(
+                route_upfront_cost(PACKAGE_PATH) + route_settlement_cost(PACKAGE_PATH, status),
+                PACKAGE_ROUTE_COST,
+                "{status}"
+            );
+        }
+        // Every other route is paid in full before the handler runs.
+        for path in ["/meets", "/search", "/lifting-results/by-names", "/nope"] {
+            assert_eq!(route_upfront_cost(path), route_cost(path), "{path}");
+            assert_eq!(route_settlement_cost(path, StatusCode::OK), 0, "{path}");
+            assert_eq!(
+                route_settlement_cost(path, StatusCode::NOT_MODIFIED),
+                0,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_venue_history_refresh_model_matches_the_docs() {
+        // 4 + ceil(1500 / 40) x 5 = 4 + 38 x 5.
+        assert_eq!(HISTORY_REFRESH_COST, 194);
+        // First hour of a meet day: 500 phones x 194 = 97,000 against
+        // 1,200 + 40 x 3,600 = 145,200 (the compile-time assertion).
+        assert_eq!(VENUE_DEVICES * HISTORY_REFRESH_COST, 97_000);
+        assert_eq!(
+            DEFAULT_IP_BURST + DEFAULT_IP_TOKENS_PER_SECOND * VENUE_FIRST_HOUR_SECS,
+            145_200
+        );
+        // First minute: 200 phones x 194 = 38,800 against 1,200 + 2,400.
+        assert_eq!(
+            venue_first_minute_shortfall(VENUE_FIRST_MINUTE_DEVICES),
+            38_800 - 3_600
+        );
+        assert_eq!(venue_first_minute_shortfall(0), 0);
+        // The keyed burst is what docs/rate-limits.md says to raise toward;
+        // even that covers only ~30 phones' first-open refreshes, so the
+        // recommendation is the burst plus watching the shadow logs.
+        assert_eq!(DEFAULT_KEY_BURST / HISTORY_REFRESH_COST, 30);
+    }
+
+    /// A package handler that answers `304` to any `If-None-Match`, else `200`.
+    fn package_router(limits: Arc<RateLimit>) -> Router {
+        async fn package(headers: HeaderMap) -> Response {
+            if headers.contains_key(header::IF_NONE_MATCH) {
+                StatusCode::NOT_MODIFIED.into_response()
+            } else {
+                "package".into_response()
+            }
+        }
+        Router::new()
+            .route(PACKAGE_PATH, get(package))
+            .layer(middleware::from_fn_with_state(limits, rate_limit))
+            .layer(MockConnectInfo(SocketAddr::from((
+                [203, 0, 113, 9],
+                40_000,
+            ))))
+    }
+
+    async fn package_status(app: &Router, revalidate: bool) -> StatusCode {
+        let mut request = Request::builder().uri("/meets/package?meet=Test");
+        if revalidate {
+            request = request.header(header::IF_NONE_MATCH, "\"etag\"");
+        }
+        app.clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn package_revalidations_spend_one_token_and_bodies_settle_the_rest() {
+        // Capture this test's own warnings. Every test that reaches
+        // `log_limited` installs a scoped subscriber before its first request:
+        // hitting that callsite with no subscriber at all races the interest
+        // cache the shadow-mode test relies on.
+        let logs = CapturedLogs::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        // Bucket of PACKAGE_ROUTE_COST + 1 tokens, refilled 1/s, enforcing.
+        let burst = PACKAGE_ROUTE_COST + 1;
+        let limits = || {
+            let enforcing = RateLimitSettings {
+                enforce: true,
+                ..settings(burst)
+            };
+            Arc::new(RateLimit::new(&enforcing, ApiKeys::none()).unwrap())
+        };
+
+        // `burst` revalidations fit; a fourth would not if a 304 cost 4.
+        let app = package_router(limits());
+        for _ in 0..burst {
+            assert_eq!(package_status(&app, true).await, StatusCode::NOT_MODIFIED);
+        }
+        assert_eq!(
+            package_status(&app, true).await,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+
+        // A build (4) then a revalidation (1) fit exactly; the next 304 is over.
+        let app = package_router(limits());
+        assert_eq!(package_status(&app, false).await, StatusCode::OK);
+        assert_eq!(package_status(&app, true).await, StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            package_status(&app, true).await,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+
+        // Two builds need 8: the second passes the up-front token but cannot
+        // settle the rest, so it is answered 429, not with a discounted body.
+        let app = package_router(limits());
+        assert_eq!(package_status(&app, false).await, StatusCode::OK);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/meets/package?meet=Test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().get(header::RETRY_AFTER).is_some());
+
+        let logged = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        assert!(logged.contains("path=/meets/package"), "{logged}");
+        assert!(logged.contains("enforced=true"), "{logged}");
+        assert!(
+            !logged.contains("meet=Test"),
+            "the query is never logged: {logged}"
+        );
     }
 
     #[test]

@@ -29,7 +29,7 @@ Risk cases that belong in Rust tests:
 - Missing meet → 404 (`sqlx::Error::RowNotFound`), not 500
 - `/meets/athletes-sessions` `platform` filter matches a stored `gold ` / `RED` (rows written before ingest canonicalised platforms) case- and whitespace-insensitively (`tests/meets.rs`)
 - Saved-session validation (empty meet/platform, oversized `athlete_names`)
-- Rate limits and load shedding (`tests/rate_limits.rs`): `429` + `Retry-After` past the burst, key vs anonymous budgets, bad key is anonymous, `X-Forwarded-For` trust and rightmost entry, IPv6 `/64` grouping, `/health` exempt, shadow mode, `503` at the in-flight cap, CORS on both. Tests build servers with `spawn_app_with_limits`; every other test runs in shadow mode.
+- Rate limits and load shedding (`tests/rate_limits.rs`): `429` + `Retry-After` past the burst, key vs anonymous budgets, bad key is anonymous, `X-Forwarded-For` trust and rightmost entry, IPv6 `/64` grouping, `/health` exempt, shadow mode, `503` at the in-flight cap, CORS on both, a `/meets/package` `304` costing one token while a build (even with a stale `If-None-Match`) costs the full route cost. Tests build servers with `spawn_app_with_limits`; every other test runs in shadow mode.
 
 ## Python ingest (`scrapers/`)
 
