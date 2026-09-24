@@ -27,6 +27,7 @@ Risk cases that belong in Rust tests:
 - Non-ASCII names (`JOSÉ ÁLVAREZ`, a no-break space between words) match on `/lifting-results/bests`, `/by-names` and `/search` (`tests/results.rs`)
 - Empty `club` / `wso` on history endpoints
 - Missing meet → 404 (`sqlx::Error::RowNotFound`), not 500
+- `/meets/athletes-sessions` `platform` filter matches a stored `gold ` / `RED` (rows written before ingest canonicalised platforms) case- and whitespace-insensitively (`tests/meets.rs`)
 - Saved-session validation (empty meet/platform, oversized `athlete_names`)
 - Rate limits and load shedding (`tests/rate_limits.rs`): `429` + `Retry-After` past the burst, key vs anonymous budgets, bad key is anonymous, `X-Forwarded-For` trust and rightmost entry, IPv6 `/64` grouping, `/health` exempt, shadow mode, `503` at the in-flight cap, CORS on both. Tests build servers with `spawn_app_with_limits`; every other test runs in shadow mode.
 
@@ -55,7 +56,7 @@ Risk cases that belong in Python tests:
 - `upsert_lifting_result` lookup precedence: `convex_id`, then `legacy_id`, then the natural key
 - Id-less athletes (blank or `noid:` member id) update one row across re-ingests; platform casing and `h:mm AM/PM` times are canonicalised at ingest
 - `complete-ended-meets` compares `end_date` against the meet-local date and tolerates unknown `time_zone` values
-- Meet automation: empty parse is not staged; approval decision files; a failing approved ingest is parked as `failed` and its decision consumed; reply classification ("no issues, ship it" approves); ingest refuses empty `meet_name`; replace+insert rolls back if a later write fails
+- Meet automation: an unknown platform ("Gold") is a warning, never an error (the app renders any platform name); empty parse is not staged; approval decision files; a failing approved ingest is parked as `failed` and its decision consumed; reply classification ("no issues, ship it" approves); ingest refuses empty `meet_name`; replace+insert rolls back if a later write fails
 
 ## Coverage inventory
 

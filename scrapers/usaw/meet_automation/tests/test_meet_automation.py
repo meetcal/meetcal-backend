@@ -599,14 +599,22 @@ class PlatformAndTimeValidationTests(unittest.TestCase):
         self.assertNotIn("athlete_session_not_in_schedule", codes)
         self.assertEqual(report["counts"]["platforms"], ["Red"])
 
-    def test_unknown_platform_is_an_error(self):
+    def test_unknown_platform_is_a_warning_not_an_error(self):
+        # "Gold" is a real platform the app renders; the list only flags a
+        # probable typo, so it must not block approval.
         report = validate(
-            [_athlete(sessionPlatform="Gold")], [_session(platform="Gold")], MEET
+            [_athlete(sessionPlatform="gold")], [_session(platform="GOLD ")], MEET
         )
         by_code = {f["code"]: f for f in report["findings"]}
-        self.assertFalse(report["ok"])
-        self.assertEqual(by_code["platform_unknown"]["severity"], "error")
-        self.assertEqual(by_code["schedule_platform_unknown"]["severity"], "error")
+        self.assertTrue(report["ok"], report["findings"])
+        self.assertEqual(report["errors"], 0)
+        self.assertEqual(by_code["platform_unknown"]["severity"], "warning")
+        self.assertEqual(by_code["schedule_platform_unknown"]["severity"], "warning")
+        self.assertEqual(by_code["platform_unknown"]["examples"], ["Jane Doe -> Gold"])
+        self.assertEqual(by_code["schedule_platform_unknown"]["examples"], ["Gold"])
+        # The athlete's canonicalised platform still pairs with the schedule row.
+        self.assertNotIn("athlete_session_not_in_schedule", by_code)
+        self.assertEqual(report["counts"]["platforms"], ["Gold"])
 
     def test_accepted_time_formats_do_not_warn(self):
         for start in ("09:00:00", "9:00", "9:00 AM", "14:30"):

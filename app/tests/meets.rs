@@ -121,7 +121,19 @@ async fn success_get_sessions_for_athletes() {
     let body: Vec<SessionsAthletes> = response.json().await.unwrap();
 
     assert!(!body.is_empty());
-    assert!(body.iter().all(|row| row.session_number == Some(45.0)));
+    // `success_get_sessions_for_athletes_without_schedule` runs in parallel
+    // and briefly adds a session-less athlete to this meet, so only rows
+    // with a session are held to the seeded session number.
+    assert!(
+        body.iter()
+            .filter(|row| row.session_number.is_some())
+            .all(|row| row.session_number == Some(45.0)),
+        "{body:?}"
+    );
+    assert!(
+        body.iter().any(|row| row.name == "Kyle Schulman"),
+        "{body:?}"
+    );
 }
 
 #[tokio::test]
@@ -185,6 +197,95 @@ async fn success_get_sessions_for_athletes_without_schedule() {
         .expect("athlete without a session must be returned");
     assert_eq!(unassigned.session_number, None);
     assert_eq!(unassigned.date, None);
+}
+
+/// A meet of its own, so the rows never collide with the seeded nationals
+/// assertions that run in parallel.
+const LEGACY_PLATFORM_MEET: &str = "Legacy Platform Casing Test Meet";
+
+#[tokio::test]
+async fn platform_filter_matches_legacy_casing_and_whitespace() {
+    let app = support::spawn_test_app().await;
+    let db = support::db_pool().await;
+
+    // Rows written before ingest canonicalised platforms: "gold " on both the
+    // roster and the schedule (they were written by one run, so they agree
+    // with each other but not with the app's "Gold").
+    sqlx::query(
+        r#"
+        INSERT INTO session_schedule (convex_id, date, session_id, start_time, weigh_in_time, platform, weight_class, meet)
+        VALUES ('legacy-platform-schedule', '2026-07-04', 3, '10:00 AM', '8:00 AM', 'gold ', '81', $1)
+        ON CONFLICT (convex_id) DO NOTHING
+        "#,
+    )
+    .bind(LEGACY_PLATFORM_MEET)
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO athletes (convex_id, member_id, name, age, club, gender, weight_class, entry_total, session_number, session_platform, meet)
+        VALUES ('legacy-platform-athlete', '9', 'Legacy Platform Lifter', 30, 'Test Club', 'Male', '81', 250, 3, 'gold ', $1)
+        ON CONFLICT (convex_id) DO NOTHING
+        "#,
+    )
+    .bind(LEGACY_PLATFORM_MEET)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let meet = LEGACY_PLATFORM_MEET.replace(' ', "%20");
+    let mut bodies = Vec::new();
+    for query in [
+        "&platform=Gold",
+        "&platform=GOLD",
+        "&platform=%20gold%20%20",
+        "&session_number=3&platform=Gold",
+        "&session_number=3&platform=gold",
+    ] {
+        let url = format!("{}/meets/athletes-sessions?meet={meet}{query}", app.address);
+        let response = reqwest::get(&url).await.unwrap();
+        assert_eq!(response.status(), 200, "{query}");
+        let body: Vec<SessionsAthletes> = response.json().await.unwrap();
+        bodies.push((query, body));
+    }
+    let other_url = format!(
+        "{}/meets/athletes-sessions?meet={meet}&platform=Red",
+        app.address
+    );
+    let other: Vec<SessionsAthletes> = reqwest::get(&other_url)
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    sqlx::query("DELETE FROM athletes WHERE meet = $1")
+        .bind(LEGACY_PLATFORM_MEET)
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM session_schedule WHERE meet = $1")
+        .bind(LEGACY_PLATFORM_MEET)
+        .execute(&db)
+        .await
+        .unwrap();
+
+    for (query, body) in bodies {
+        assert_eq!(body.len(), 1, "{query}: {body:?}");
+        assert_eq!(body[0].name, "Legacy Platform Lifter", "{query}");
+        // The stored spelling is returned; the app canonicalises it.
+        assert_eq!(
+            body[0].session_platform.as_deref(),
+            Some("gold "),
+            "{query}"
+        );
+        assert_eq!(body[0].start_time.as_deref(), Some("10:00 AM"), "{query}");
+    }
+    assert!(
+        other.is_empty(),
+        "a different platform must not match: {other:?}"
+    );
 }
 
 #[tokio::test]

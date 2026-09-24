@@ -10,9 +10,12 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-# Session platforms the app knows how to render. Anything else is remapped
-# client-side (to Red), so an unknown platform is a data error, not a style
-# choice. Casing is normalised at ingest so "red" and "RED" never leak through.
+# Session platforms with a known house style. The app accepts any platform
+# name and canonicalises it the same way `normalize_platform` does (trim,
+# collapse whitespace, title-case each word; blank -> "Unknown" on the app
+# side), so an unknown platform such as "Gold" is legitimate data. The list
+# only lets the validator warn about a likely typo ("Rde"). Casing is
+# normalised at ingest so "red" and "RED " never leak through.
 KNOWN_PLATFORMS = ("Red", "White", "Blue", "Stars", "Stripes", "Rogue")
 _PLATFORM_BY_LOWER = {platform.lower(): platform for platform in KNOWN_PLATFORMS}
 
@@ -64,8 +67,12 @@ def placeholder_member_id(name: Any) -> str:
 def normalize_platform(value: Any) -> Any:
     """Canonical casing for a session platform ("red" -> "Red").
 
-    Unknown platforms are title-cased so the validator's membership check and
-    the stored value agree; None and non-strings pass through untouched.
+    This is the one spelling of the rule every writer path goes through
+    (`upsert_athlete` / `upsert_session_schedule` in postgres_writer.py, which
+    every scraper and the meet-automation approve step call), and the app's
+    client-side canonicalisation matches it: trim, collapse whitespace,
+    title-case each word. Unknown platforms are kept ("gold" -> "Gold"); None
+    and non-strings pass through untouched.
     """
     if not isinstance(value, str):
         return value
