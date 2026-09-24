@@ -3,8 +3,9 @@
 No database: each scraper's write step runs against a fake client that
 records the calls, so these check the shape of the write (one batch call, not
 one ``action`` per row) and that each scraper kept its old per-row error
-semantics. Third-party modules the scrapers import only for scraping (PDF,
-HTML, dotenv, the Sport80 client) are stubbed while the module is imported.
+semantics. Third-party modules the scrapers import only for scraping (HTTP,
+PDF, HTML, dotenv, the Sport80 client) are stubbed while the module is
+imported, since CI installs only ``requirements.txt``.
 
 A static check also walks every scraper source for ``.action(`` inside a loop.
 """
@@ -40,7 +41,13 @@ def _stub_modules() -> dict[str, types.ModuleType]:
     bs4.BeautifulSoup = object
     pandas = types.ModuleType("pandas")
     pandas.DataFrame = object  # used in annotations at import time
+    requests = types.ModuleType("requests")
+    requests.RequestException = type("RequestException", (Exception,), {})
+    requests.exceptions = types.SimpleNamespace(
+        RequestException=requests.RequestException
+    )
     return {
+        "requests": requests,
         "dotenv": dotenv,
         "pdfplumber": types.ModuleType("pdfplumber"),
         "pandas": pandas,
