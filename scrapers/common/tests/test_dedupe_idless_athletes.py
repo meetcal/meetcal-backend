@@ -104,7 +104,8 @@ class DedupeIdlessAthletesTests(unittest.TestCase):
             set(rows),
             {assigned, seen_elsewhere, chris_dup, mixed_real, mixed_random, other},
         )
-        self.assertEqual(rows[assigned]["member_id"], "noid:jane-doe")
+        # The kept row's number is left alone: it may be a real one.
+        self.assertEqual(rows[assigned]["member_id"], "612345678")
         self.assertEqual(float(rows[assigned]["session_number"]), 4.0)
         self.assertEqual(rows[seen_elsewhere]["member_id"], "912345678")
         self.assertEqual(rows[mixed_real]["member_id"], "1234567")
@@ -113,6 +114,14 @@ class DedupeIdlessAthletesTests(unittest.TestCase):
         again = dedupe.dedupe_meet(self.conn, self.meet, apply=True)
         self.assertEqual(again["groups"], [])
         self.assertEqual(again["deleted"], 0)
+
+    def test_same_name_and_gender_with_different_ages_are_two_people(self) -> None:
+        self._insert("Sam Lifter", "512345679", age=19)
+        self._insert("Sam Lifter", "612345679", age=41)
+
+        plan = dedupe.dedupe_meet(self.conn, self.meet, apply=False)
+
+        self.assertEqual(plan["groups"], [])
 
     def test_keeps_newest_when_no_row_has_a_session(self) -> None:
         self._insert("Pat Lee", "")

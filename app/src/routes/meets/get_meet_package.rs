@@ -359,6 +359,19 @@ fn store_package(key: &str, stamp: String, body: Bytes, etag: HeaderValue) {
 static IN_FLIGHT: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Package builds that may run at once, across every cache key. The route is
+/// public and each `history_cutoff_date` is its own key, so the per-key lock
+/// alone does not bound the work; a build also outlives its request (it runs
+/// in its own task), so without this cap a burst of distinct keys would pile
+/// up detached builds on the database pool.
+const MAX_CONCURRENT_PACKAGE_BUILDS: usize = 4;
+/// How long a request waits for a build slot before answering `503`. Under
+/// the 15s request ceiling, so the wait is cancelled with the request and
+/// never leaves work behind.
+const PACKAGE_BUILD_SLOT_WAIT: Duration = Duration::from_secs(10);
+static BUILD_SLOTS: LazyLock<Arc<tokio::sync::Semaphore>> =
+    LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PACKAGE_BUILDS)));
+
 struct BuildSlot {
     key: String,
     lock: Arc<tokio::sync::Mutex<()>>,
@@ -776,10 +789,18 @@ pub async fn get_meet_package(
         return Ok(json_response(body, etag, None, if_none_match));
     }
 
-    // The build runs in its own task, which owns the slot. A requester that
-    // disconnects or hits the request timeout no longer cancels it: the build
-    // finishes and caches, and the requests queued on the slot read that
-    // entry instead of each starting from zero.
+    // A bounded number of builds run at once. Waiting here happens inside the
+    // request, so it is cancelled with it; only a build that holds a slot is
+    // ever detached.
+    let permit = tokio::time::timeout(PACKAGE_BUILD_SLOT_WAIT, BUILD_SLOTS.clone().acquire_owned())
+        .await
+        .map_err(|_| AppError::Busy)?
+        .map_err(|error| anyhow::anyhow!("package build slots closed: {error}"))?;
+
+    // The build runs in its own task, which owns the key's slot and the build
+    // permit. A requester that disconnects or hits the request timeout no
+    // longer cancels it: the build finishes and caches, and the requests
+    // queued on the key read that entry instead of each starting from zero.
     let task_state = state.clone();
     let task_params = params.clone();
     let task_key = cache_key.clone();
@@ -788,6 +809,7 @@ pub async fn get_meet_package(
         // checks whether it was the last holder of the map entry.
         let _slot = slot;
         let _building = building;
+        let _permit = permit;
         let built = build_package(&task_state, &task_params, include).await;
         if let Ok((body, etag)) = &built {
             store_package(&task_key, stamp, body.clone(), etag.clone());

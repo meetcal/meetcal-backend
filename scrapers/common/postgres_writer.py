@@ -673,9 +673,12 @@ def upsert_athlete(
     # from the entry scraper) is identified by (meet, normalized name) so every
     # nightly re-scrape updates the same row instead of minting a new one.
     idless = is_placeholder_member_id(member_id)
+    gender = normalize_gender(first(row, "gender", default=""))
     if idless:
+        # Gender is part of an id-less identity: a man and a woman with the
+        # same name at one meet are two registrations, not one.
         convex_id = first(row, "convexId", "convex_id") or stable_id(
-            "athlete", meet, "noid", normalize_name(name)
+            "athlete", meet, "noid", normalize_name(name), gender or ""
         )
     else:
         convex_id = first(row, "convexId", "convex_id") or stable_id("athlete", meet, member_id, name)
@@ -685,7 +688,7 @@ def upsert_athlete(
         "age": first(row, "age", default=0),
         "club": first(row, "club", default=""),
         "wso": first(row, "wso"),
-        "gender": normalize_gender(first(row, "gender", default="")),
+        "gender": gender,
         "weight_class": first(row, "weightClass", "weight_class", default=""),
         "entry_total": first(row, "entryTotal", "entry_total", default=0),
         "session_number": first(row, "sessionNumber", "session_number"),
@@ -697,8 +700,10 @@ def upsert_athlete(
         # Rows from before placeholder ids carry a random nine-digit id the
         # entry scraper minted per run. One that never appears at another meet
         # (a real membership number recurs; a random one does not, the same
-        # guard `dedupe_idless_athletes` uses) is this athlete too; matching it
-        # rewrites it to the placeholder instead of inserting a duplicate.
+        # guard `dedupe_idless_athletes` uses) with the same gender and age is
+        # this athlete too. Matching it updates that row instead of inserting
+        # a duplicate; its member id is kept (below), so a real first-meet
+        # membership number that happens to look like this is never lost.
         lookup_sql = f"""
             SELECT id, convex_id, member_id, name, age, club, wso, gender, weight_class,
                 entry_total, session_number, session_platform, meet, adaptive
@@ -707,11 +712,13 @@ def upsert_athlete(
                 OR (
                     meet = %s
                     AND {NORMALIZED_NAME_SQL} = %s
+                    AND gender IS NOT DISTINCT FROM %s
                     AND (
                         member_id = ''
                         OR member_id LIKE 'noid:%%'
                         OR (
                             member_id ~ '^[1-9][0-9]{{8}}$'
+                            AND age IS NOT DISTINCT FROM %s
                             AND NOT EXISTS (
                                 SELECT 1 FROM athletes other
                                 WHERE other.member_id = athletes.member_id
@@ -728,7 +735,14 @@ def upsert_athlete(
                 END
             LIMIT 1
         """
-        lookup_params = (convex_id, meet, normalize_name(name), convex_id)
+        lookup_params = (
+            convex_id,
+            meet,
+            normalize_name(name),
+            gender,
+            values["age"],
+            convex_id,
+        )
     else:
         lookup_sql = """
             SELECT id, convex_id, member_id, name, age, club, wso, gender, weight_class,
@@ -744,6 +758,11 @@ def upsert_athlete(
     existing = conn.execute(lookup_sql, lookup_params).fetchone()
     if existing:
         convex_id = existing["convex_id"]
+        existing_member_id = existing.get("member_id") or ""
+        if idless and not is_placeholder_member_id(existing_member_id):
+            # Adopted a pre-placeholder row: keep its number rather than
+            # overwrite what may be a real membership id with a placeholder.
+            values["member_id"] = existing_member_id
         if preserve_assigned_session and athlete_has_session_assignment(existing):
             logger.warning(
                 "skipped athlete upsert because session already set meet=%s id=%s convex_id=%s",

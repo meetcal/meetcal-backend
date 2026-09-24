@@ -16,6 +16,9 @@ pub enum AppError {
     /// same `{"error": ...}` shape as every other failure so clients parse one
     /// error body.
     Timeout,
+    /// The server is at a work limit it enforces (e.g. concurrent package
+    /// builds). Answered `503`; clients treat it like any 5xx and retry.
+    Busy,
 }
 
 impl From<anyhow::Error> for AppError {
@@ -55,6 +58,7 @@ impl IntoResponse for AppError {
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()),
             AppError::Validation(message) => (StatusCode::BAD_REQUEST, message),
             AppError::Timeout => (StatusCode::REQUEST_TIMEOUT, "timeout".to_string()),
+            AppError::Busy => (StatusCode::SERVICE_UNAVAILABLE, "busy".to_string()),
         };
 
         (status, Json(json!({ "error": message }))).into_response()
@@ -85,6 +89,14 @@ mod tests {
         assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         assert_eq!(body.as_ref(), br#"{"error":"timeout"}"#);
+    }
+
+    #[tokio::test]
+    async fn busy_is_a_503_with_the_error_body_shape() {
+        let response = AppError::Busy.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(body.as_ref(), br#"{"error":"busy"}"#);
     }
 
     #[tokio::test]

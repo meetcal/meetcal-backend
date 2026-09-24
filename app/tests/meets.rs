@@ -748,6 +748,7 @@ async fn package_is_rebuilt_as_soon_as_an_ingest_changes_the_meet() {
              'Open Men''s 89kg', 88, 90, 95, 0, 95, 110, 0, 0, 110, 205, false, 'USAW'),
             ('test-result-freshness-2024', 'e2', 'Old Test Meet B', '2024-06-01', 'Package Test Lifter',
              'Open Men''s 89kg', 88, 100, 105, 110, 110, 130, 135, 140, 140, 250, false, 'USAW')
+        ON CONFLICT (convex_id) DO NOTHING
         "#,
     )
     .execute(&db)

@@ -454,7 +454,7 @@ class ApproveFailurePathTests(unittest.TestCase):
     """A failing ingest must park the run as failed and consume the decision
     file; otherwise the approve cron retries it (and spams Slack) forever."""
 
-    def _run(self, tmp_path, ingest_side_effect):
+    def _run(self, tmp_path, ingest_side_effect, write_fails_for=None):
         config_original = config.STATE_DIR
         config.STATE_DIR = tmp_path
         decisions = tmp_path / "decisions"
@@ -477,12 +477,17 @@ class ApproveFailurePathTests(unittest.TestCase):
             bundle.status = "ingested"
             return bundle
 
+        def write_run(bundle):
+            if bundle.run_id == write_fails_for and bundle.status == "ingested":
+                raise OSError("read-only state dir")
+            saved.append((bundle.run_id, bundle.status))
+
         args = pipeline.build_parser().parse_args(["approve", "--all-pending"])
         try:
             with mock.patch.object(pipeline.stage, "list_runs", return_value=["boom", "fine"]), \
                     mock.patch.object(pipeline.stage, "load_run", side_effect=lambda r: bundles[r]), \
-                    mock.patch.object(pipeline.stage, "write_run", side_effect=lambda b: saved.append((b.run_id, b.status))), \
-                    mock.patch.object(pipeline, "_do_ingest", side_effect=do_ingest), \
+                    mock.patch.object(pipeline.stage, "write_run", side_effect=write_run), \
+                    mock.patch.object(pipeline, "_publish", side_effect=do_ingest), \
                     mock.patch.object(pipeline.slack, "post_thread_reply", side_effect=lambda cfg, b, t: notified.append((b.run_id, t))), \
                     mock.patch.object(pipeline.SlackConfig, "from_env", return_value=SlackConfig()):
                 code = pipeline.cmd_approve(args)
@@ -508,6 +513,20 @@ class ApproveFailurePathTests(unittest.TestCase):
             self.assertNotIn("db down", failure_notes[0])
             self.assertIn("RuntimeError", failure_notes[0])
 
+    def test_published_run_whose_state_cannot_be_saved_is_not_reported_as_unwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, bundles, _, notified, decisions = self._run(
+                Path(tmp), RuntimeError("db down"), write_fails_for="fine"
+            )
+            self.assertEqual(code, 1)
+            # The data is live: the run is not parked as failed.
+            self.assertEqual(bundles["fine"].status, "ingested")
+            self.assertFalse((decisions / "fine.json").exists())
+            fine_notes = [t for r, t in notified if r == "fine"]
+            self.assertTrue(any("was published to Postgres" in t for t in fine_notes))
+            self.assertFalse(any("nothing was written" in t for t in fine_notes))
+            self.assertFalse(any("read-only state dir" in t for t in fine_notes))
+
     def test_failed_run_is_skipped_on_the_next_tick(self):
         with tempfile.TemporaryDirectory() as tmp:
             _, bundles, _, _, _ = self._run(Path(tmp), RuntimeError("db down"))
@@ -515,7 +534,7 @@ class ApproveFailurePathTests(unittest.TestCase):
         args = pipeline.build_parser().parse_args(["approve", "--all-pending"])
         with mock.patch.object(pipeline.stage, "list_runs", return_value=["boom"]), \
                 mock.patch.object(pipeline.stage, "load_run", return_value=bundles["boom"]), \
-                mock.patch.object(pipeline, "_do_ingest") as ingest, \
+                mock.patch.object(pipeline, "_publish") as ingest, \
                 mock.patch.object(pipeline.SlackConfig, "from_env", return_value=SlackConfig()):
             self.assertEqual(pipeline.cmd_approve(args), 0)
         ingest.assert_not_called()

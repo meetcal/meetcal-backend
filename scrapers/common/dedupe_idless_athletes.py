@@ -8,7 +8,9 @@ athlete without a membership number got a fresh random nine-digit
 
 A group is collapsed only when it is unambiguous:
 
-* same meet, same normalised name, same gender;
+* same meet, same normalised name, same gender, same age (the nightly
+  copies came from one entry row; two different people who share a name
+  almost never share an age as well);
 * more than one row;
 * every ``member_id`` in the group is blank, a ``noid:`` placeholder, or a
   nine-digit number in the range ``Math.random()`` used to mint them; and
@@ -16,10 +18,11 @@ A group is collapsed only when it is unambiguous:
   recurs across meets; a random one never does).
 
 Within a group the row that already carries a session assignment is kept
-(it is the one the schedule pipeline wrote); otherwise the newest row. The
-kept row's ``member_id`` is rewritten to the ``noid:`` placeholder so the
-writer's id-less lookup matches it from now on. Re-running finds nothing to
-do, which is what makes it safe to run twice.
+(it is the one the schedule pipeline wrote); otherwise the newest row. A
+blank kept ``member_id`` becomes the ``noid:`` placeholder; a nine-digit one
+is left as it is (the writer's id-less lookup matches it, and it may be a
+real first-meet membership number). Re-running finds nothing to do, which is
+what makes it safe to run twice.
 
 Dry run by default. Usage:
 
@@ -64,7 +67,7 @@ def plan_meet(conn, meet: str) -> list[dict[str, Any]]:
     meet = pg.require_text(meet, "meet")
     rows = conn.execute(
         """
-        SELECT id, member_id, name, gender, session_number, session_platform
+        SELECT id, member_id, name, gender, age, session_number, session_platform
         FROM athletes
         WHERE meet = %s
         ORDER BY id
@@ -72,12 +75,12 @@ def plan_meet(conn, meet: str) -> list[dict[str, Any]]:
         (meet,),
     ).fetchall()
 
-    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    groups: dict[tuple[str, str, Any], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        groups[(normalize_name(row["name"]), row["gender"] or "")].append(row)
+        groups[(normalize_name(row["name"]), row["gender"] or "", row["age"])].append(row)
 
     plans = []
-    for (normalized, gender), members in groups.items():
+    for (normalized, gender, _age), members in groups.items():
         if len(members) < 2:
             continue
         if not all(_is_collapsible_member_id(row["member_id"]) for row in members):
@@ -103,7 +106,8 @@ def plan_meet(conn, meet: str) -> list[dict[str, Any]]:
                 "gender": gender,
                 "keep_id": keeper["id"],
                 "delete_ids": [row["id"] for row in members if row["id"] != keeper["id"]],
-                "member_id": placeholder_member_id(keeper["name"]),
+                "member_id": (keeper["member_id"] or "").strip()
+                or placeholder_member_id(keeper["name"]),
             }
         )
     return plans

@@ -559,10 +559,36 @@ class PostgresIngestTests(unittest.TestCase):
             "SELECT member_id FROM athletes WHERE meet = %s ORDER BY member_id",
             (meet,),
         ).fetchall()
+        # Jane's row was adopted and keeps its number (it may be real);
+        # Sam's recurring number is a real one, so he got his own row.
         self.assertEqual(
             [r["member_id"] for r in rows],
-            ["123456789", "noid:jane-doe", "noid:sam-lifter"],
+            ["123456789", "482913377", "noid:sam-lifter"],
         )
+
+    def test_idless_same_name_different_gender_stay_separate(self) -> None:
+        meet = f"__test_idless_gender_{self.token}__"
+        base = {
+            "memberId": "",
+            "name": "Alex Lifter",
+            "age": 30,
+            "club": "Club",
+            "weightClass": "71",
+            "entryTotal": 200,
+            "meet": meet,
+        }
+        woman = dispatch(self.conn, "scraperIngestion:ingestEntryAthlete", {**base, "gender": "Female"})
+        man = dispatch(self.conn, "scraperIngestion:ingestEntryAthlete", {**base, "gender": "Male"})
+        again = dispatch(
+            self.conn,
+            "scraperIngestion:ingestEntryAthlete",
+            {**base, "gender": "Female", "club": "Moved"},
+        )
+
+        self.assertTrue(woman["wasInsert"])
+        self.assertTrue(man["wasInsert"])
+        self.assertNotEqual(woman["id"], man["id"])
+        self.assertEqual(again["id"], woman["id"])
 
     def test_idless_entry_keeps_assigned_session(self) -> None:
         meet = f"__test_idless_session_{self.token}__"
