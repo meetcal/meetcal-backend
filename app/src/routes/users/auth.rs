@@ -1,6 +1,6 @@
 use crate::AppError;
 use axum::http::HeaderMap;
-use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::Deserialize;
 use sqlx::{Postgres, Transaction};
 use std::{
@@ -346,8 +346,9 @@ impl AuthVerifier {
     }
 
     async fn check(&self, token: &str) -> Result<String, Rejection> {
-        let header = decode_header(token).map_err(|_| Rejection::MalformedHeader)?;
-        if header.alg != Algorithm::RS256 {
+        let parts = TokenParts::split(token).ok_or(Rejection::MalformedHeader)?;
+        let header = parts.header().ok_or(Rejection::MalformedHeader)?;
+        if header.alg != "RS256" {
             return Err(Rejection::Algorithm);
         }
         let kid = header.kid.ok_or(Rejection::MissingKid)?;
@@ -387,7 +388,31 @@ impl AuthVerifier {
             validation.validate_aud = false;
         }
 
-        let claims = decode::<JwtClaims>(token, &key, &validation)
+        // The signature is checked here, over the token's own header and
+        // payload bytes, rather than by `decode`: `jsonwebtoken` parses every
+        // extra header field as a string, and Clerk's header carries a numeric
+        // `oiat`, so `decode` refused every Clerk token before looking at it.
+        let signed = jsonwebtoken::crypto::verify(
+            parts.signature,
+            parts.signed_message().as_bytes(),
+            &key,
+            Algorithm::RS256,
+        )
+        .map_err(|error| Rejection::Invalid(error.into_kind()))?;
+        if !signed {
+            return Err(Rejection::Invalid(
+                jsonwebtoken::errors::ErrorKind::InvalidSignature,
+            ));
+        }
+        // Only now, with the signature verified over the original bytes, the
+        // same payload goes through `jsonwebtoken`'s claim checks (exp, nbf,
+        // iss, aud) under a plain header it can parse.
+        // Deprecated in favour of `dangerous::insecure_decode`, which skips the
+        // claim checks too; here only the signature check is skipped, because
+        // it already passed just above.
+        #[allow(deprecated)]
+        validation.insecure_disable_signature_validation();
+        let claims = decode::<JwtClaims>(parts.with_plain_header(), &key, &validation)
             .map_err(|error| Rejection::Invalid(error.into_kind()))?
             .claims;
 
@@ -434,6 +459,52 @@ fn dev_instance(issuer: &str) -> anyhow::Result<ClerkInstance> {
         None,
         HashMap::new(),
     ))
+}
+
+/// A compact JWS split into its three base64url segments.
+struct TokenParts<'a> {
+    header: &'a str,
+    payload: &'a str,
+    signature: &'a str,
+}
+
+/// The two header fields this verifier reads. Every other field is ignored,
+/// whatever its type: Clerk adds its own (`cat`, a numeric `oiat`).
+#[derive(Deserialize)]
+struct TokenHeader {
+    alg: String,
+    kid: Option<String>,
+}
+
+impl<'a> TokenParts<'a> {
+    fn split(token: &'a str) -> Option<Self> {
+        let mut segments = token.split('.');
+        let parts = Self {
+            header: segments.next()?,
+            payload: segments.next()?,
+            signature: segments.next()?,
+        };
+        segments.next().is_none().then_some(parts)
+    }
+
+    fn header(&self) -> Option<TokenHeader> {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let bytes = URL_SAFE_NO_PAD.decode(self.header).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    /// The bytes the signature covers: `header.payload`, as sent.
+    fn signed_message(&self) -> String {
+        format!("{}.{}", self.header, self.payload)
+    }
+
+    /// The same payload and signature under a header holding only `alg`, for
+    /// `jsonwebtoken`'s claim validation once the signature is verified.
+    fn with_plain_header(&self) -> String {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        format!("{header}.{}.{}", self.payload, self.signature)
+    }
 }
 
 /// The `iss` claim of a token, read without verifying anything. Used only to
@@ -1088,6 +1159,107 @@ mod tests {
         ));
         assert!(matches!(
             verifier().check("not-a-jwt").await,
+            Err(Rejection::MalformedHeader)
+        ));
+    }
+
+    /// Clerk's real header shape: extra fields, one of them numeric. Before
+    /// the verifier parsed only `alg` and `kid` itself, `jsonwebtoken` failed
+    /// on `oiat` and every production token got a 401.
+    fn clerk_shaped_token(keys: &TestKeys, payload: &str) -> String {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let header = URL_SAFE_NO_PAD.encode(format!(
+            r#"{{"alg":"RS256","cat":"cl_B7d4PD111AAA","kid":"{KID}","oiat":1790293848,"typ":"JWT"}}"#
+        ));
+        let payload = URL_SAFE_NO_PAD.encode(payload);
+        let message = format!("{header}.{payload}");
+        let signature = jsonwebtoken::crypto::sign(
+            message.as_bytes(),
+            &EncodingKey::from_rsa_pem(keys.private_pem.as_bytes()).unwrap(),
+            Algorithm::RS256,
+        )
+        .unwrap();
+        format!("{message}.{signature}")
+    }
+
+    fn native_payload(aud: &str, exp_offset: i64) -> String {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        format!(
+            r#"{{"sub":"user_123","iss":"{ISSUER}","aud":"{aud}","exp":{},"nbf":{},"iat":{}}}"#,
+            now + exp_offset,
+            now - 10,
+            now - 10
+        )
+    }
+
+    #[tokio::test]
+    async fn accepts_clerks_header_with_a_numeric_extra_field() {
+        let verifier = verifier_with_audience(Some("convex"));
+        assert_eq!(
+            verifier
+                .verify(&clerk_shaped_token(
+                    &TEST_KEYS,
+                    &native_payload("convex", 60)
+                ))
+                .await
+                .unwrap(),
+            "user_123"
+        );
+    }
+
+    /// Checking the signature outside `decode` must not weaken anything: a
+    /// wrong key, a tampered payload, an expired token and a wrong audience
+    /// are all still refused.
+    #[tokio::test]
+    async fn clerk_shaped_tokens_still_get_every_check() {
+        use jsonwebtoken::errors::ErrorKind;
+        let verifier = verifier_with_audience(Some("convex"));
+
+        let wrong_key = clerk_shaped_token(&DEV_KEYS, &native_payload("convex", 60));
+        assert!(matches!(
+            verifier.check(&wrong_key).await,
+            Err(Rejection::Invalid(ErrorKind::InvalidSignature))
+        ));
+
+        let good = clerk_shaped_token(&TEST_KEYS, &native_payload("convex", 60));
+        let mut parts: Vec<&str> = good.split('.').collect();
+        let forged_payload = {
+            use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+            URL_SAFE_NO_PAD.encode(native_payload("convex", 600).replace("user_123", "user_999"))
+        };
+        parts[1] = &forged_payload;
+        assert!(matches!(
+            verifier.check(&parts.join(".")).await,
+            Err(Rejection::Invalid(ErrorKind::InvalidSignature))
+        ));
+
+        assert!(matches!(
+            verifier
+                .check(&clerk_shaped_token(
+                    &TEST_KEYS,
+                    &native_payload("convex", -300)
+                ))
+                .await,
+            Err(Rejection::Invalid(ErrorKind::ExpiredSignature))
+        ));
+        assert!(matches!(
+            verifier
+                .check(&clerk_shaped_token(
+                    &TEST_KEYS,
+                    &native_payload("other", 60)
+                ))
+                .await,
+            Err(Rejection::Invalid(ErrorKind::InvalidAudience))
+        ));
+        assert!(matches!(
+            verifier.check("a.b").await,
+            Err(Rejection::MalformedHeader)
+        ));
+        assert!(matches!(
+            verifier.check(&format!("{good}.extra")).await,
             Err(Rejection::MalformedHeader)
         ));
     }
