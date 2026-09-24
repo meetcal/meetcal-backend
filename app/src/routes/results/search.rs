@@ -1,10 +1,7 @@
 use crate::{
     AppError, AppState,
     common::names::{normalize_name, normalized_name_sql},
-    common::{
-        client::ClientVersion,
-        query::{like_contains_pattern, require_non_empty},
-    },
+    common::{client::ClientVersion, query::like_contains_pattern},
     routes::results::types::{LiftingResults, lifting_result_columns},
 };
 use axum::{
@@ -21,6 +18,11 @@ const MAX_SEARCH_RESULT_ROWS: i64 = 600;
 /// Ceiling on name suggestions offered for a partial query.
 const MAX_SEARCH_SUGGESTIONS: i64 = 8;
 
+/// Both range queries are half-open, `[start_date, end_date)`: every app
+/// version asks for a year as `YYYY-01-01` .. `YYYY+1-01-01`, so an inclusive
+/// end would pull New Year's Day meets of the next year into it.
+/// (`/data/nat-rankings-year` takes a `year`, not dates, so it is unaffected.)
+/// `date` is ISO text, so string comparison is date order.
 const EXACT_NAME_IN_RANGE_SQL: &str = concat!(
     r#"
         SELECT
@@ -66,20 +68,26 @@ pub struct SearchResponse {
 /// /search endpoint
 ///
 /// Exact wrapped search:
-/// curl 'https://api.meetcal.app/search?query=Alexander%20Nordstrom&start_date=2025-01-01&end_date=2025-12-31' | jq .
+/// curl 'https://api.meetcal.app/search?query=Alexander%20Nordstrom&start_date=2025-01-01&end_date=2026-01-01' | jq .
 ///
 /// Name suggestions:
 /// curl 'https://api.meetcal.app/search?query=Alexan' | jq .
 ///
 /// This endpoint takes an athlete search query and returns a completed search payload. With
-/// start_date and end_date it returns exact name results for the range when available, otherwise
-/// fallback rows and suggestions. Without dates it returns name suggestions only.
+/// start_date (inclusive) and end_date (exclusive) it returns exact name results for the range when
+/// available, otherwise fallback rows and suggestions. Without dates it returns name suggestions
+/// only. Suggestions are only computed when they will be returned: an exact match answers with
+/// one query, not two.
+///
+/// A blank `query` is `400` for a 6.2.0+ client and the empty payload for a legacy one.
 ///
 /// {
 ///   "matched_name": "Alexander Nordstrom",
 ///   "suggestions": [],
 ///   "results": [
 ///     {
+///       "id": 1,
+///       "event_id": "event_2025",
 ///       "federation": "USAW",
 ///       "meet": "2025 Test Meet",
 ///       "date": "2025-06-01",
@@ -105,16 +113,24 @@ pub async fn search_wrapped(
     client: ClientVersion,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, AppError> {
-    require_non_empty("query", &params.query)?;
+    client.require_non_empty("query", &params.query)?;
     client.require_iso_date("start_date", params.start_date.as_deref())?;
     client.require_iso_date("end_date", params.end_date.as_deref())?;
-    let suggestions = search_suggestions(&state, &params.query).await?;
+    if params.query.trim().is_empty() {
+        // Legacy client, blank query: there is nothing to look for, and a
+        // `%%` pattern would otherwise match every name in the table.
+        return Ok(Json(SearchResponse {
+            matched_name: None,
+            suggestions: Vec::new(),
+            results: Vec::new(),
+        }));
+    }
 
     let (Some(start_date), Some(end_date)) = (params.start_date.as_ref(), params.end_date.as_ref())
     else {
         return Ok(Json(SearchResponse {
             matched_name: None,
-            suggestions,
+            suggestions: search_suggestions(&state, &params.query).await?,
             results: Vec::new(),
         }));
     };
@@ -137,13 +153,21 @@ pub async fn search_wrapped(
 
     let pattern = like_contains_pattern(&params.query);
 
-    let fallback = sqlx::query_as::<_, LiftingResults>(NAME_LIKE_IN_RANGE_SQL)
-        .bind(&pattern)
-        .bind(start_date)
-        .bind(end_date)
-        .bind(MAX_SEARCH_RESULT_ROWS)
-        .fetch_all(&state.db)
-        .await?;
+    // No exact match: the fallback rows and the suggestions are independent
+    // queries, so they run concurrently.
+    let (fallback, suggestions) = tokio::try_join!(
+        async {
+            sqlx::query_as::<_, LiftingResults>(NAME_LIKE_IN_RANGE_SQL)
+                .bind(&pattern)
+                .bind(start_date)
+                .bind(end_date)
+                .bind(MAX_SEARCH_RESULT_ROWS)
+                .fetch_all(&state.db)
+                .await
+                .map_err(AppError::from)
+        },
+        search_suggestions(&state, &params.query),
+    )?;
 
     Ok(Json(SearchResponse {
         matched_name: None,

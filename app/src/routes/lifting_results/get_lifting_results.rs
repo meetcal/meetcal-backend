@@ -1,5 +1,6 @@
 use crate::{
     AppError, AppState,
+    common::client::ClientVersion,
     routes::meets::types::MeetsParams,
     routes::results::types::{LiftingResults, lifting_result_columns},
 };
@@ -24,8 +25,12 @@ const RESULTS_BY_MEET_SQL: &str = concat!(
 ///
 /// This endpoint takes meet and returns the results
 ///
+/// A blank `meet` is `400` for a 6.2.0+ client and `200 []` for a legacy one.
+///
 /// [
 ///   {
+///     "id": 1,
+///     "event_id": "event_2025",
 ///     "federation": "USAW",
 ///     "meet": "2025 Test Meet",
 ///     "date": "2025-06-01",
@@ -47,9 +52,14 @@ const RESULTS_BY_MEET_SQL: &str = concat!(
 ///
 pub async fn get_lifting_results(
     State(state): State<AppState>,
+    client: ClientVersion,
     Query(params): Query<MeetsParams>,
 ) -> Result<Json<Vec<LiftingResults>>, AppError> {
-    crate::common::query::require_non_empty("meet", &params.meet)?;
+    client.require_non_empty("meet", &params.meet)?;
+    // Legacy clients keep their `200 []` for a blank meet without the query.
+    if params.meet.trim().is_empty() {
+        return Ok(Json(Vec::new()));
+    }
     let rows = sqlx::query_as::<_, LiftingResults>(RESULTS_BY_MEET_SQL)
         .bind(params.meet)
         .fetch_all(&state.db)

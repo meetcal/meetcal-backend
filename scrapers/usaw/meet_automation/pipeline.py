@@ -28,6 +28,7 @@ from . import config, detect, ingest, scrape, slack, stage
 from .config import MeetWatch, SlackConfig
 from .models import (
     STATUS_APPROVED,
+    STATUS_FAILED,
     STATUS_INGESTED,
     STATUS_PENDING_APPROVAL,
     STATUS_REJECTED,
@@ -267,9 +268,12 @@ def _slack_target_reporter(slack_cfg: SlackConfig, bundle: StagedBundle):
     return report
 
 
-def _do_ingest(
+def _publish(
     bundle: StagedBundle, replace: bool, slack_cfg: Optional[SlackConfig] = None
 ) -> StagedBundle:
+    """Write the bundle to Postgres (one transaction) and mark it ingested in
+    memory. Raises before commit on a database failure; nothing is saved to
+    the run directory here, so a caller can tell the two failures apart."""
     on_target_done = (
         _slack_target_reporter(slack_cfg, bundle)
         if slack_cfg is not None and bundle.slack.ts
@@ -281,6 +285,13 @@ def _do_ingest(
     )
     bundle.ingest_result = result
     bundle.status = STATUS_INGESTED
+    return bundle
+
+
+def _do_ingest(
+    bundle: StagedBundle, replace: bool, slack_cfg: Optional[SlackConfig] = None
+) -> StagedBundle:
+    bundle = _publish(bundle, replace=replace, slack_cfg=slack_cfg)
     stage.write_run(bundle)
     return bundle
 
@@ -336,6 +347,7 @@ def cmd_approve(args) -> int:
     slack_cfg = SlackConfig.from_env()
     run_ids = [args.run_id] if args.run_id else stage.list_runs()
     acted = False
+    failures = 0
     for run_id in run_ids:
         try:
             bundle = stage.load_run(run_id)
@@ -353,7 +365,47 @@ def cmd_approve(args) -> int:
             print(f"[{run_id}] approved in Slack -> ingesting")
             bundle.status = STATUS_APPROVED
             _notify(slack_cfg, bundle, f":rocket: Approved — publishing `{run_id}`…")
-            bundle = _do_ingest(bundle, replace=not args.no_replace, slack_cfg=slack_cfg)
+            try:
+                bundle = _publish(bundle, replace=not args.no_replace, slack_cfg=slack_cfg)
+            except Exception as exc:  # noqa: BLE001
+                # Without this the run stays pending_approval with its decision
+                # file intact, so every 5-minute tick retries the same failing
+                # ingest and posts the same Slack messages forever. Park it as
+                # failed (the transaction rolled back, nothing was written),
+                # consume the decision, and keep going with the other runs.
+                failures += 1
+                print(f"[{run_id}] ingest FAILED: {exc}", file=sys.stderr)
+                _mark_failed(bundle, exc)
+                _notify(
+                    slack_cfg,
+                    bundle,
+                    # The exception text (constraint and table names from
+                    # psycopg) stays in the server log above, not the channel.
+                    f":x: `{run_id}` failed to publish; nothing was written "
+                    f"({type(exc).__name__}; details in the scraper log).\n"
+                    f"Re-run the pipeline with `--force` to stage it again.",
+                )
+                _consume_decision(decision_path)
+                acted = True
+                continue
+            # The Postgres transaction has committed. A failure to record that
+            # in the run directory is reported as what it is, not as a failed
+            # publish: the data is live.
+            try:
+                stage.write_run(bundle)
+            except Exception as exc:  # noqa: BLE001
+                failures += 1
+                print(f"[{run_id}] published, but saving run state FAILED: {exc}", file=sys.stderr)
+                _notify(
+                    slack_cfg,
+                    bundle,
+                    f":warning: `{run_id}` was published to Postgres, but its run state could "
+                    f"not be saved ({type(exc).__name__}; details in the scraper log). Until "
+                    f"the state directory is writable it may be re-published on a later tick.",
+                )
+                _consume_decision(decision_path)
+                acted = True
+                continue
             _notify(slack_cfg, bundle, f":checkered_flag: `{run_id}` published to Postgres.")
             _consume_decision(decision_path)
             acted = True
@@ -368,7 +420,18 @@ def cmd_approve(args) -> int:
             print(f"[{run_id}] still pending")
     if not acted:
         print("no runs acted on")
-    return 0
+    return 1 if failures else 0
+
+
+def _mark_failed(bundle: StagedBundle, exc: Exception) -> None:
+    """Persist the failure so the run leaves the pending set. A save failure
+    here is reported but not raised: the caller still consumes the decision
+    file, which on its own stops the retry loop."""
+    bundle.status = STATUS_FAILED
+    try:
+        stage.write_run(bundle)
+    except Exception as save_exc:  # noqa: BLE001
+        print(f"[{bundle.run_id}] could not record failed status: {save_exc}", file=sys.stderr)
 
 
 def cmd_list(args) -> int:

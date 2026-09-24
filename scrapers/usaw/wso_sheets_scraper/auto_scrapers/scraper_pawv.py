@@ -302,8 +302,12 @@ class WSORecordsPAWVScraper:
         inserted = []
         updated = []
 
-        for record in records:
-            result = self.ingest_client.action("scraperIngestion:ingestWSORecord", wso_record_ingest_args(record, self.scraper_secret))
+        # One connection, one transaction: a failing row rolls back the batch.
+        results = self.ingest_client.actions(
+            "scraperIngestion:ingestWSORecord",
+            [wso_record_ingest_args(record, self.scraper_secret) for record in records],
+        )
+        for record, result in zip(records, results):
             if result.get('wasInsert'):
                 inserted.append(record)
                 print(f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}")

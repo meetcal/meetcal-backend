@@ -19,8 +19,10 @@ dotenvy = "0.15.7"
 tower-http = { version = "0.6", features = [
   "compression-gzip",
   "cors",
-  "timeout",
+  "trace",
 ] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 regex = "1.12.3"
 hmac = "0.12.1"
 sha2 = "0.10.9"
@@ -44,7 +46,15 @@ features = [
   "migrate",
 ]
 
+[features]
+# Compiles the in-process server harness (`common::spawn_server`) that the
+# integration tests use. Off in the production binary.
+test-support = []
+
 [dev-dependencies]
+# Turns `test-support` on for `cargo test` / `--all-targets` only.
+app = { path = ".", features = ["test-support"] }
 reqwest = { version = "0.13.4", features = ["json"] }
+tower = { version = "0.5", features = ["util"] }
 rand = "0.8.5"
 rsa = { version = "0.9.10", features = ["pem"] }

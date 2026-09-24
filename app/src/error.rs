@@ -12,6 +12,13 @@ pub enum AppError {
     NotFound,
     Unauthorized,
     Validation(String),
+    /// The request outran [`crate::REQUEST_TIMEOUT`]. Answered `408` with the
+    /// same `{"error": ...}` shape as every other failure so clients parse one
+    /// error body.
+    Timeout,
+    /// The server is at a work limit it enforces (e.g. concurrent package
+    /// builds). Answered `503`; clients treat it like any 5xx and retry.
+    Busy,
 }
 
 impl From<anyhow::Error> for AppError {
@@ -34,14 +41,14 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             AppError::Internal(err) => {
-                eprintln!("internal error: {err:#}");
+                tracing::error!(error = format!("{err:#}"), "internal error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal server error".to_string(),
                 )
             }
             AppError::Database(err) => {
-                eprintln!("database error: {err}");
+                tracing::error!(error = %err, "database error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal server error".to_string(),
@@ -50,6 +57,8 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "Not found".to_string()),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()),
             AppError::Validation(message) => (StatusCode::BAD_REQUEST, message),
+            AppError::Timeout => (StatusCode::REQUEST_TIMEOUT, "timeout".to_string()),
+            AppError::Busy => (StatusCode::SERVICE_UNAVAILABLE, "busy".to_string()),
         };
 
         (status, Json(json!({ "error": message }))).into_response()
@@ -72,6 +81,22 @@ mod tests {
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert_eq!(body, r#"{"error":"Internal server error"}"#);
         assert!(!body.contains("sensitive database detail"));
+    }
+
+    #[tokio::test]
+    async fn timeouts_share_the_error_body_shape() {
+        let response = AppError::Timeout.into_response();
+        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(body.as_ref(), br#"{"error":"timeout"}"#);
+    }
+
+    #[tokio::test]
+    async fn busy_is_a_503_with_the_error_body_shape() {
+        let response = AppError::Busy.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(body.as_ref(), br#"{"error":"busy"}"#);
     }
 
     #[tokio::test]

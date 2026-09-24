@@ -220,12 +220,24 @@ async fn oversized_name_lists_are_rejected() {
 }
 
 #[tokio::test]
-async fn empty_search_query_is_rejected() {
+async fn empty_search_query_is_rejected_for_strict_clients() {
     let app = support::spawn_test_app().await;
-    let response = reqwest::get(format!("{}/search?query=%20", app.address))
+    let strict = client()
+        .get(format!("{}/search?query=%20", app.address))
+        .header("X-MeetCal-App", STRICT_CLIENT)
+        .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), 400);
+    assert_eq!(strict.status(), 400);
+
+    // A legacy client gets the empty payload, never a whole-table `%%` scan.
+    let legacy = reqwest::get(format!("{}/search?query=%20", app.address))
+        .await
+        .unwrap();
+    assert_eq!(legacy.status(), 200);
+    let body: SearchResponse = legacy.json().await.unwrap();
+    assert!(body.suggestions.is_empty());
+    assert!(body.results.is_empty());
 }
 
 #[tokio::test]
@@ -480,4 +492,171 @@ async fn post_name_lists_fail_closed_on_empty_and_oversized() {
         .await
         .unwrap();
     assert_eq!(oversized.status(), 400);
+}
+
+// ---------------------------------------------------------------------------
+// Search date window is inclusive on both ends; rows carry their identity.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn search_end_date_is_exclusive() {
+    let app = support::spawn_test_app().await;
+    // Seed row is dated exactly 2025-06-01. Ranges are half-open, as every
+    // app version sends a year: `YYYY-01-01` .. `YYYY+1-01-01`.
+    let on_the_day: SearchResponse = reqwest::get(format!(
+        "{}/search?query=Alexander%20Nordstrom&start_date=2025-06-01&end_date=2025-06-02",
+        app.address
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(
+        on_the_day.matched_name.as_deref(),
+        Some("Alexander Nordstrom")
+    );
+    assert_eq!(on_the_day.results.len(), 1);
+    assert_eq!(on_the_day.results[0].date, "2025-06-01");
+    assert!(on_the_day.results[0].id > 0);
+    assert_eq!(on_the_day.results[0].event_id, "event_2025");
+    assert!(
+        on_the_day.suggestions.is_empty(),
+        "an exact match does not carry suggestions"
+    );
+
+    // An end date equal to the result's date excludes it.
+    let day_before: SearchResponse = reqwest::get(format!(
+        "{}/search?query=Alexander%20Nordstrom&start_date=2025-01-01&end_date=2025-06-01",
+        app.address
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert!(day_before.results.is_empty());
+    assert!(
+        day_before
+            .suggestions
+            .contains(&"Alexander Nordstrom".to_string()),
+        "no rows in range: suggestions are offered, {day_before:?}"
+    );
+}
+
+#[tokio::test]
+async fn result_rows_carry_id_and_event_id_everywhere() {
+    let app = support::spawn_test_app().await;
+    for path in [
+        "/lifting-results/by-names?names=Alexander%20Nordstrom",
+        "/lifting-results/recent?names=Alexander%20Nordstrom&cutoff_date=2025-01-01",
+        "/lifting-results?meet=2025%20Test%20Meet",
+    ] {
+        let rows: Vec<serde_json::Value> = reqwest::get(format!("{}{path}", app.address))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(!rows.is_empty(), "{path}");
+        assert!(rows[0]["id"].is_i64(), "{path}: {}", rows[0]);
+        assert_eq!(rows[0]["event_id"], "event_2025", "{path}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `/lifting-results/by-names` bounds: latest_only and limit_per_name.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn by_names_can_be_bounded_per_name() {
+    let app = support::spawn_test_app().await;
+    let db = support::db_pool().await;
+    let name = "Bounded History Lifter";
+    sqlx::query("DELETE FROM lifting_results WHERE name = $1")
+        .bind(name)
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO lifting_results (convex_id, event_id, meet, date, name, age, body_weight,
+                                     snatch1, snatch2, snatch3, snatch_best, cj1, cj2, cj3, cj_best,
+                                     total, adaptive, federation)
+        VALUES
+            ('test-bounded-1', 'b1', 'Bounded Meet A', '2024-01-10', $1, 'Open Men''s 89kg',
+             88, 90, 0, 0, 90, 110, 0, 0, 110, 200, false, 'USAW'),
+            ('test-bounded-2', 'b2', 'Bounded Meet B', '2024-03-10', $1, 'Open Men''s 89kg',
+             88, 92, 0, 0, 92, 112, 0, 0, 112, 204, false, 'USAW'),
+            ('test-bounded-3', 'b3', 'Bounded Meet C', '2024-05-10', $1, 'Open Men''s 89kg',
+             88, 94, 0, 0, 94, 114, 0, 0, 114, 208, false, 'USAW')
+        "#,
+    )
+    .bind(name)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let fetch = |query: &str| {
+        let url = format!(
+            "{}/lifting-results/by-names?names=bounded%20history%20lifter{query}",
+            app.address
+        );
+        async move {
+            let response = reqwest::get(&url).await.unwrap();
+            assert_eq!(response.status(), 200, "{url}");
+            response.json::<Vec<LiftingResults>>().await.unwrap()
+        }
+    };
+
+    let all = fetch("").await;
+    let latest = fetch("&latest_only=true").await;
+    let two = fetch("&limit_per_name=2").await;
+    let posted = client()
+        .post(format!("{}/lifting-results/by-names", app.address))
+        .json(&serde_json::json!({ "names": [name], "limit_per_name": 1 }))
+        .send()
+        .await
+        .unwrap();
+    let posted_status = posted.status();
+    let posted: Vec<LiftingResults> = posted.json().await.unwrap();
+
+    sqlx::query("DELETE FROM lifting_results WHERE name = $1")
+        .bind(name)
+        .execute(&db)
+        .await
+        .unwrap();
+
+    assert_eq!(all.len(), 3, "default is unbounded");
+    assert_eq!(all[0].date, "2024-05-10", "newest first");
+    assert_eq!(latest.len(), 1);
+    assert_eq!(latest[0].meet, "Bounded Meet C");
+    assert_eq!(
+        two.iter().map(|row| row.date.as_str()).collect::<Vec<_>>(),
+        vec!["2024-05-10", "2024-03-10"]
+    );
+    assert_eq!(posted_status, 200);
+    assert_eq!(posted.len(), 1);
+    assert_eq!(posted[0].total, 208.0);
+}
+
+#[tokio::test]
+async fn by_names_limit_per_name_is_bounded() {
+    let app = support::spawn_test_app().await;
+    for query in ["limit_per_name=0", "limit_per_name=201"] {
+        let response = reqwest::get(format!(
+            "{}/lifting-results/by-names?names=Alexander%20Nordstrom&{query}",
+            app.address
+        ))
+        .await
+        .unwrap();
+        assert_eq!(response.status(), 400, "{query}");
+    }
+    let posted = client()
+        .post(format!("{}/lifting-results/by-names", app.address))
+        .json(&serde_json::json!({ "names": ["Alexander Nordstrom"], "limit_per_name": 0 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(posted.status(), 400);
 }

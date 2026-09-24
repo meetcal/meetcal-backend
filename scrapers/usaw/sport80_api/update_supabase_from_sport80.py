@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 
 from sport80 import SportEighty
-from common.postgres_ingest import IngestClient
+from common.postgres_ingest import IngestClient, RowFailure
 
 SCRAPER_SECRET = os.environ.get("SCRAPER_SECRET")
 USAW_DOMAIN = "https://usaweightlifting.sport80.com"
@@ -58,17 +58,36 @@ def add_meet_results_to_postgres(client: IngestClient, results_to_insert: list):
     inserted_count = 0
     updated_count = 0
     unchanged_count = 0
-    for result in results_to_insert:
-        try:
-            ingest_result = client.action("scraperIngestion:ingestLiftingResult", result)
-            if ingest_result.get("wasInsert"):
-                inserted_count += 1
-            elif ingest_result.get("wasChanged"):
-                updated_count += 1
-            else:
-                unchanged_count += 1
-        except Exception as e:
-            logging.error(f"Error upserting result for '{result.get('name')}' in Postgres: {e}")
+    failed_count = 0
+    # One connection per meet. Each lifter's result is independent, so a
+    # malformed row is logged and skipped (its own savepoint) rather than
+    # costing the meet's whole result set.
+    try:
+        ingest_results = client.actions_skipping_errors(
+            "scraperIngestion:ingestLiftingResult", results_to_insert
+        )
+    except Exception as e:
+        logging.error(
+            "Error upserting %s results for '%s' in Postgres: %s",
+            len(results_to_insert),
+            results_to_insert[0].get("meet"),
+            e,
+        )
+        return {"inserted": 0, "updated": 0, "unchanged": 0, "failed": len(results_to_insert)}
+    for result, ingest_result in zip(results_to_insert, ingest_results):
+        if isinstance(ingest_result, RowFailure):
+            failed_count += 1
+            logging.error(
+                "Error upserting result for '%s' in Postgres: %s",
+                result.get("name"),
+                ingest_result.error,
+            )
+        elif ingest_result.get("wasInsert"):
+            inserted_count += 1
+        elif ingest_result.get("wasChanged"):
+            updated_count += 1
+        else:
+            unchanged_count += 1
 
     logging.info(
         "Processed %s results via Postgres: %s inserted, %s updated, %s unchanged.",
@@ -81,6 +100,7 @@ def add_meet_results_to_postgres(client: IngestClient, results_to_insert: list):
         "inserted": inserted_count,
         "updated": updated_count,
         "unchanged": unchanged_count,
+        "failed": failed_count,
     }
 
 

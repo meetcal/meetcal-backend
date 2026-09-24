@@ -14,7 +14,8 @@ Two transports:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, Iterable, List, Optional
 
 from .config import SlackConfig
 from .models import StagedBundle, SlackRef
@@ -28,6 +29,38 @@ MAX_FINDINGS_SHOWN = 8  # the rest stay in the HTML preview
 # Ceiling on thread replies scanned for an approve/reject word. Also sent to
 # Slack as `limit`, so the response itself is bounded rather than trusted.
 MAX_THREAD_REPLIES = 200
+# Reject words that are also ordinary negations inside an approval ("no
+# issues, ship it"). They only count as a rejection when they open the reply.
+LEADING_ONLY_REJECT_WORDS = frozenset({"no"})
+_WORD_SPLIT_RE = re.compile(r"[^\w']+")
+
+
+def classify_reply(
+    text: str, approve_words: Iterable[str], reject_words: Iterable[str]
+) -> Optional[str]:
+    """Decide 'approved' / 'rejected' / None for one thread reply.
+
+    1. An explicit reject word anywhere ("reject", "stop", "cancel", "don't")
+       rejects, whatever else the message says: the safe failure mode is to
+       not publish.
+    2. Otherwise an approve word anywhere approves, so "no issues, ship it"
+       is an approval.
+    3. Otherwise a leading-only reject word that opens the reply ("no",
+       "no, redo it") rejects.
+    """
+    words = [w for w in _WORD_SPLIT_RE.split((text or "").strip().lower()) if w]
+    if not words:
+        return None
+    approve = {w.lower() for w in approve_words}
+    reject = {w.lower() for w in reject_words}
+    bag = set(words)
+    if bag & (reject - LEADING_ONLY_REJECT_WORDS):
+        return "rejected"
+    if bag & approve:
+        return "approved"
+    if words[0] in reject:
+        return "rejected"
+    return None
 
 
 def _preview_link(cfg: SlackConfig, bundle: StagedBundle) -> Optional[str]:
@@ -194,12 +227,9 @@ def poll_approval(cfg: SlackConfig, bundle: StagedBundle) -> Optional[str]:
         # can approve/reject by reply.
         if cfg.allowed_users and msg.get("user") not in cfg.allowed_users:
             continue
-        text = (msg.get("text") or "").strip().lower()
-        words = set(text.replace(".", " ").replace("!", " ").split())
-        if words & set(cfg.reject_words):
-            return "rejected"
-        if words & set(cfg.approve_words):
-            return "approved"
+        decision = classify_reply(msg.get("text") or "", cfg.approve_words, cfg.reject_words)
+        if decision is not None:
+            return decision
     return None
 
 

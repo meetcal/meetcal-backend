@@ -11,7 +11,7 @@ Sister repos (do not implement them here): `meetcal-app` (Expo / React Native), 
 | `app/` | Axum HTTP API (read path + Slack control surfaces) |
 | `app/src/routes/` | Route handlers. Keep SQL and validation in the handler or a nearby helper; do not hide policy in comments |
 | `app/src/routes/users/` | Clerk JWT auth, saved sessions, preferences. Fail closed when Clerk is unset |
-| `app/src/routes/scrapers/` | Slack slash commands + Approve/Reject. File handshake only; no DB writes |
+| `app/src/routes/scrapers/` | Slack slash commands + Approve/Reject. File handshake only; the one DB write is the venue-map `UPDATE` on `meets.venue_map_pdf_url` / `venue_map_apple_url` (the sole `UPDATE` granted to `meetcal_api`) |
 | `app/migrations/` | SQLx migrations, indexes, RLS |
 | `app/tests/` | HTTP integration tests against a spawned server + seed DB |
 | `scrapers/common/` | Postgres writer + ingest dispatch (`postgres_writer.py`, `postgres_ingest.py`) |
@@ -36,7 +36,7 @@ Package manager for JS helpers is **bun**. Do not use npm. Rust uses cargo. Pyth
 | Rust tests | `cd app && cargo test --locked` |
 | Python compile | `cd scrapers && python -m compileall -q common iwf usaw usamw bwl` |
 | Meet automation tests | `cd scrapers && PYTHONPATH=. python -m unittest discover -s usaw/meet_automation/tests -p 'test_*.py'` |
-| Postgres ingest tests | `cd scrapers && PYTHONPATH=. python -m unittest discover -s common/tests -p 'test_*.py'` |
+| Postgres ingest tests | `cd scrapers && PYTHONPATH=. python -m unittest discover -s common/tests -p 'test_*.py'` (includes `test_normalize`, `test_dedupe_idless_athletes`, `test_complete_ended_meets`) |
 | WSO writer tests | `cd scrapers && PYTHONPATH=. python -m unittest common.test_postgres_writer` |
 | Coverage gaps | `bun .codex/skills/review-code-performance-tests/scripts/report-coverage-gaps.ts` |
 | Shellcheck | `shellcheck -x -P app/scripts app/deploy/*.sh app/scripts/*.sh` |
@@ -62,7 +62,11 @@ CI (`.github/workflows/ci.yml`) runs the Rust job (fmt, clippy, `cargo test --lo
 
 - Validate untrusted input at the HTTP and ingest boundaries before SQL or filesystem writes.
 - Bound name-list query params. Empty and oversized lists fail closed.
-- Slack mutating surfaces verify HMAC signatures and write files, not Postgres. Approval → ingest is a Python single transaction.
+- Slack mutating surfaces verify HMAC signatures and write files, not Postgres, except `/meets-add-*` / `/meets-remove-*`, which `UPDATE` only the two venue-map columns on `meets`. Approval → ingest is a Python single transaction.
+- Blank required params (`meet`, `club`, `wso`, `name`, `query`, `year`) fail with `400` only for strict clients via `ClientVersion`; legacy clients keep the pre-2026-09-08 answers (list endpoints short-circuit to `[]` rather than query `= ''`). Name lists stay always-strict. The `/meets/package` cache is invalidated by a per-meet freshness stamp (row counts + max `xmin` of the meet's rows and the meet row), with the TTL as a backstop for history from other meets.
+- Changing what an existing parameter means (a date range's end, a default window) is a contract change like a status code: keep what shipped apps send working. `/search` ranges are half-open because every app sends `YYYY+1-01-01` as the end.
+- Migrations: apply before merging (deploys are automatic; the API exits when the database is behind it). Never edit an applied migration file. Reference-data responses send `Cache-Control: no-cache` with a strong `ETag`, never a `max-age` that shipped apps cannot bypass.
+- Ingest loops go through `IngestClient.actions(path, rows)` (one connection, one transaction), never per-row `action()` in a loop. The Python DB tests apply `app/migrations` themselves, so a fresh CI database works.
 - `convex_id` is the upsert identity in Postgres. Do not add a Convex client, dual-write, or `convex_compat`.
 - Destructive ingest (`DELETE FROM … WHERE meet = $1`, intl ranking prune) must refuse empty keys.
 - Prefer indexes (`meet`, `club`, `wso`, normalized name) over `filter()`-style scans. Name match uses `normalize_name` / `normalized_name_sql!` (`app/src/common/names.rs`), the one spelling of the rule; `concat!` it into a query rather than retyping it.

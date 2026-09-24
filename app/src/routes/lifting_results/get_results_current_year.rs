@@ -85,6 +85,8 @@ const BATCH_BESTS_SINCE_CUTOFF_SQL: &str = concat!(
 /// This endpoint takes a name and optional cutoff_date and returns best lifts since that date. If
 /// cutoff_date is omitted it defaults to the past year.
 ///
+/// A blank `name` is `400` for a 6.2.0+ client and an all-zero answer for a legacy one.
+///
 /// {
 ///   "best_snatch": 40.0,
 ///   "best_cj": 50.0,
@@ -96,7 +98,7 @@ pub async fn get_results_current_year(
     client: ClientVersion,
     Query(params): Query<ResultsCurrentYearParams>,
 ) -> Result<Json<YearBests>, AppError> {
-    crate::common::query::require_non_empty("name", &params.name)?;
+    client.require_non_empty("name", &params.name)?;
     client.require_present_iso_date("cutoff_date", params.cutoff_date.as_deref())?;
     let rows = sqlx::query_as::<_, YearBests>(BESTS_SINCE_CUTOFF_SQL)
         .bind(normalize_name(&params.name))

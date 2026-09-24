@@ -91,6 +91,16 @@ impl ClientVersion {
         }
     }
 
+    /// Strict clients get `400` on a `year` that is not four digits; legacy
+    /// clients keep the historical string comparison against `YYYY-01-01`.
+    pub fn require_year(&self, field: &str, value: &str) -> Result<(), AppError> {
+        if self.strict() {
+            query::require_year(field, value)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Strict clients must send the date and it must be valid; legacy clients
     /// may omit it and fall back to the server-side default window.
     pub fn require_present_iso_date(
@@ -170,6 +180,7 @@ mod tests {
         assert!(legacy.require_non_empty("wso", "").is_ok());
         assert!(legacy.require_iso_date("cutoff_date", Some("nope")).is_ok());
         assert!(legacy.require_present_iso_date("cutoff_date", None).is_ok());
+        assert!(legacy.require_year("year", "abc").is_ok());
     }
 
     #[test]
@@ -177,6 +188,8 @@ mod tests {
         let strict = ClientVersion(Some(MIN_STRICT_CLIENT_VERSION));
         assert!(strict.require_non_empty("wso", "  ").is_err());
         assert!(strict.require_non_empty("wso", "Carolina").is_ok());
+        assert!(strict.require_year("year", "abc").is_err());
+        assert!(strict.require_year("year", "2026").is_ok());
         assert!(strict.require_iso_date("cutoff_date", None).is_ok());
         assert!(
             strict

@@ -11,6 +11,14 @@ from typing import Any, Iterable
 import psycopg
 from psycopg.rows import dict_row
 
+from common.normalize import (
+    NORMALIZED_NAME_SQL,
+    is_placeholder_member_id,
+    normalize_name,
+    normalize_platform,
+    normalize_time,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -188,6 +196,10 @@ def upsert_lifting_result(conn, row: dict[str, Any]) -> dict[str, Any]:
     date = first(row, "date", default="")
     name = first(row, "name", default="")
     convex_id = first(row, "convexId", "convex_id") or stable_id("lifting_result", event_id, meet, name)
+    # Lookup precedence when several rows could match: the explicit identity
+    # (convex_id) wins over the Convex-era legacy_id, which wins over the
+    # natural key. The ORDER BY below makes that deterministic; without it
+    # `LIMIT 1` picks whichever row the planner reaches first.
     values = {
         "legacy_id": legacy_id,
         "event_id": event_id,
@@ -217,9 +229,15 @@ def upsert_lifting_result(conn, row: dict[str, Any]) -> dict[str, Any]:
         WHERE convex_id = %s
             OR (legacy_id IS NOT DISTINCT FROM %s AND legacy_id IS NOT NULL)
             OR (event_id = %s AND meet = %s AND name = %s)
+        ORDER BY
+            CASE
+                WHEN convex_id = %s THEN 0
+                WHEN legacy_id IS NOT DISTINCT FROM %s AND legacy_id IS NOT NULL THEN 1
+                ELSE 2
+            END
         LIMIT 1
         """,
-        (convex_id, legacy_id, event_id, meet, name),
+        (convex_id, legacy_id, event_id, meet, name, convex_id, legacy_id),
     ).fetchone()
     if existing:
         convex_id = existing["convex_id"]
@@ -651,34 +669,100 @@ def upsert_athlete(
     member_id = first(row, "memberId", "member_id", default="")
     name = first(row, "name", default="")
     meet = first(row, "meet", default="")
-    convex_id = first(row, "convexId", "convex_id") or stable_id("athlete", meet, member_id, name)
+    # An athlete without a membership number (blank or a `noid:` placeholder
+    # from the entry scraper) is identified by (meet, normalized name) so every
+    # nightly re-scrape updates the same row instead of minting a new one.
+    idless = is_placeholder_member_id(member_id)
+    gender = normalize_gender(first(row, "gender", default=""))
+    if idless:
+        # Gender is part of an id-less identity: a man and a woman with the
+        # same name at one meet are two registrations, not one.
+        convex_id = first(row, "convexId", "convex_id") or stable_id(
+            "athlete", meet, "noid", normalize_name(name), gender or ""
+        )
+    else:
+        convex_id = first(row, "convexId", "convex_id") or stable_id("athlete", meet, member_id, name)
     values = {
         "member_id": member_id,
         "name": name,
         "age": first(row, "age", default=0),
         "club": first(row, "club", default=""),
         "wso": first(row, "wso"),
-        "gender": normalize_gender(first(row, "gender", default="")),
+        "gender": gender,
         "weight_class": first(row, "weightClass", "weight_class", default=""),
         "entry_total": first(row, "entryTotal", "entry_total", default=0),
         "session_number": first(row, "sessionNumber", "session_number"),
-        "session_platform": first(row, "sessionPlatform", "session_platform"),
+        "session_platform": normalize_platform(first(row, "sessionPlatform", "session_platform")),
         "meet": meet,
         "adaptive": bool(first(row, "adaptive", default=False)),
     }
-    lookup_sql = """
-        SELECT id, convex_id, member_id, name, age, club, wso, gender, weight_class,
-            entry_total, session_number, session_platform, meet, adaptive
-        FROM athletes
-        WHERE convex_id = %s
-            OR (meet = %s AND member_id = %s AND name = %s)
-        LIMIT 1
-    """
+    if idless:
+        # Rows from before placeholder ids carry a random nine-digit id the
+        # entry scraper minted per run. One that never appears at another meet
+        # (a real membership number recurs; a random one does not, the same
+        # guard `dedupe_idless_athletes` uses) with the same gender and age is
+        # this athlete too. Matching it updates that row instead of inserting
+        # a duplicate; its member id is kept (below), so a real first-meet
+        # membership number that happens to look like this is never lost.
+        lookup_sql = f"""
+            SELECT id, convex_id, member_id, name, age, club, wso, gender, weight_class,
+                entry_total, session_number, session_platform, meet, adaptive
+            FROM athletes
+            WHERE convex_id = %s
+                OR (
+                    meet = %s
+                    AND {NORMALIZED_NAME_SQL} = %s
+                    AND gender IS NOT DISTINCT FROM %s
+                    AND (
+                        member_id = ''
+                        OR member_id LIKE 'noid:%%'
+                        OR (
+                            member_id ~ '^[1-9][0-9]{{8}}$'
+                            AND age IS NOT DISTINCT FROM %s
+                            AND NOT EXISTS (
+                                SELECT 1 FROM athletes other
+                                WHERE other.member_id = athletes.member_id
+                                    AND other.meet <> athletes.meet
+                            )
+                        )
+                    )
+                )
+            ORDER BY
+                CASE
+                    WHEN convex_id = %s THEN 0
+                    WHEN member_id = '' OR member_id LIKE 'noid:%%' THEN 1
+                    ELSE 2
+                END
+            LIMIT 1
+        """
+        lookup_params = (
+            convex_id,
+            meet,
+            normalize_name(name),
+            gender,
+            values["age"],
+            convex_id,
+        )
+    else:
+        lookup_sql = """
+            SELECT id, convex_id, member_id, name, age, club, wso, gender, weight_class,
+                entry_total, session_number, session_platform, meet, adaptive
+            FROM athletes
+            WHERE convex_id = %s
+                OR (meet = %s AND member_id = %s AND name = %s)
+            LIMIT 1
+        """
+        lookup_params = (convex_id, meet, member_id, name)
     if preserve_assigned_session:
         lookup_sql += " FOR UPDATE"
-    existing = conn.execute(lookup_sql, (convex_id, meet, member_id, name)).fetchone()
+    existing = conn.execute(lookup_sql, lookup_params).fetchone()
     if existing:
         convex_id = existing["convex_id"]
+        existing_member_id = existing.get("member_id") or ""
+        if idless and not is_placeholder_member_id(existing_member_id):
+            # Adopted a pre-placeholder row: keep its number rather than
+            # overwrite what may be a real membership id with a placeholder.
+            values["member_id"] = existing_member_id
         if preserve_assigned_session and athlete_has_session_assignment(existing):
             logger.warning(
                 "skipped athlete upsert because session already set meet=%s id=%s convex_id=%s",
@@ -726,7 +810,10 @@ def upsert_session_schedule(conn, row: dict[str, Any]) -> dict[str, Any]:
     row = clean(row)
     meet = first(row, "meet", default="")
     session_id = first(row, "sessionId", "session_id", default=0)
-    platform = first(row, "platform", default="")
+    # Platform casing and time format are canonicalised here, at the ingest
+    # boundary, so the app never sees "red" or "09:00:00" next to "Red" and
+    # "9:00 AM". Unparseable times are kept verbatim (the validator warns).
+    platform = normalize_platform(first(row, "platform", default=""))
     weight_class = first(row, "weightClass", "weight_class", default="")
     convex_id = first(row, "convexId", "convex_id") or stable_id(
         "session_schedule", meet, session_id, platform, weight_class
@@ -734,8 +821,8 @@ def upsert_session_schedule(conn, row: dict[str, Any]) -> dict[str, Any]:
     values = {
         "date": first(row, "date", default=""),
         "session_id": session_id,
-        "start_time": first(row, "startTime", "start_time", default=""),
-        "weigh_in_time": first(row, "weighInTime", "weigh_in_time", default=""),
+        "start_time": normalize_time(first(row, "startTime", "start_time", default="")),
+        "weigh_in_time": normalize_time(first(row, "weighInTime", "weigh_in_time", default="")),
         "platform": platform,
         "weight_class": weight_class,
         "meet": meet,
@@ -745,7 +832,7 @@ def upsert_session_schedule(conn, row: dict[str, Any]) -> dict[str, Any]:
         SELECT id, convex_id, date, session_id, start_time, weigh_in_time, platform, weight_class, meet
         FROM session_schedule
         WHERE convex_id = %s
-            OR (meet = %s AND session_id = %s AND platform = %s AND weight_class = %s)
+            OR (meet = %s AND session_id = %s AND lower(platform) = lower(%s) AND weight_class = %s)
         LIMIT 1
         """,
         (convex_id, meet, session_id, platform, weight_class),

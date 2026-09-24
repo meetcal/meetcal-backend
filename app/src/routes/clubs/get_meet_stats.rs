@@ -1,4 +1,4 @@
-use crate::common::names::normalized_name_sql;
+use crate::common::{client::ClientVersion, names::normalized_name_sql};
 use crate::{AppError, AppState};
 use axum::Json;
 use axum::extract::{Query, State};
@@ -53,12 +53,20 @@ const CLUB_MEET_ATHLETE_COUNT_SQL: &str = concat!(
         "#
 );
 
-/// Results for one club at one meet, with per-weight-class placings and each
+/// Results for one club at one meet, with per-division placings and each
 /// lifter's previous best total.
 ///
 /// Every name comparison goes through the shared normalization rule, because
 /// `athletes.name` and `lifting_results.name` are scraped from different
 /// sources and differ in case and spacing.
+///
+/// Medals are ranked within a division, not a bare weight class: a 71kg woman
+/// and a 71kg man do not share a podium, nor do Open and Masters 60kg. The
+/// division key is the roster's `gender` and `weight_class` (what the athlete
+/// registered as, always present) plus the result row's `age`, which is the
+/// scraped division label (`"Open Men's 60kg"`, `"Men's Masters (40-44) 60kg"`)
+/// and so separates age groups; it can be empty for older imports, in which
+/// case gender + class still keeps men and women apart.
 const CLUB_MEET_RESULTS_SQL: &str = concat!(
     r#"
         WITH roster AS (
@@ -71,6 +79,7 @@ const CLUB_MEET_RESULTS_SQL: &str = concat!(
     normalized_name_sql!(),
     r#" AS normalized_name,
                 name,
+                gender,
                 weight_class,
                 club
             FROM athletes
@@ -110,15 +119,15 @@ const CLUB_MEET_RESULTS_SQL: &str = concat!(
                 lr.*,
                 a.weight_class,
                 RANK() OVER (
-                    PARTITION BY a.weight_class
+                    PARTITION BY a.gender, a.weight_class, COALESCE(lr.age, '')
                     ORDER BY COALESCE(lr.snatch_best, 0) DESC
                 ) AS snatch_placing,
                 RANK() OVER (
-                    PARTITION BY a.weight_class
+                    PARTITION BY a.gender, a.weight_class, COALESCE(lr.age, '')
                     ORDER BY COALESCE(lr.cj_best, 0) DESC
                 ) AS cj_placing,
                 RANK() OVER (
-                    PARTITION BY a.weight_class
+                    PARTITION BY a.gender, a.weight_class, COALESCE(lr.age, '')
                     ORDER BY COALESCE(lr.total, 0) DESC
                 ) AS total_placing
             FROM result_rows lr
@@ -192,6 +201,8 @@ struct ClubResultRow {
 ///
 /// This endpoint takes meet and club name and returns a full report of how the club did at the meet
 ///
+/// A blank `club` or `meet` is `400` for a 6.2.0+ client and an all-zero report for a legacy one.
+///
 /// {
 ///   "total_athletes": 1,
 ///   "gold_medals": 0,
@@ -207,10 +218,11 @@ struct ClubResultRow {
 /// }
 pub async fn get_meet_stats(
     State(state): State<AppState>,
+    client: ClientVersion,
     Query(params): Query<ClubMeetStatsParams>,
 ) -> Result<Json<MeetStats>, AppError> {
-    crate::common::query::require_non_empty("club", &params.club)?;
-    crate::common::query::require_non_empty("meet", &params.meet)?;
+    client.require_non_empty("club", &params.club)?;
+    client.require_non_empty("meet", &params.meet)?;
     let total_athletes: (i64,) = sqlx::query_as(CLUB_MEET_ATHLETE_COUNT_SQL)
         .bind(&params.club)
         .bind(&params.meet)

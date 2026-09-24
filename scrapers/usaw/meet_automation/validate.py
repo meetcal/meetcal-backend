@@ -10,10 +10,22 @@ the report drives what that human sees.
 from __future__ import annotations
 
 import re
+import sys
 from collections import Counter, defaultdict
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-KNOWN_PLATFORMS = {"Red", "White", "Blue", "Stars", "Stripes", "Rogue"}
+_SCRAPERS_DIR = Path(__file__).resolve().parents[2]
+if str(_SCRAPERS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRAPERS_DIR))
+
+from common.normalize import KNOWN_PLATFORMS as _KNOWN_PLATFORMS  # noqa: E402
+from common.normalize import normalize_platform, parse_time  # noqa: E402
+
+# The writer canonicalises casing at ingest ("red" -> "Red"), so the check
+# here runs on the normalised value. A platform still unknown after that is
+# an error: the app silently remaps anything it does not know to Red.
+KNOWN_PLATFORMS = set(_KNOWN_PLATFORMS)
 ALLOWED_GENDERS = {"Male", "Female", "Men", "Women"}
 WEIGHT_CLASS_RE = re.compile(r"^\+?\d{2,3}\+?$")
 NAME_FRAGMENT_RE = re.compile(r"\d")
@@ -81,7 +93,9 @@ def validate(
         weight_class = _norm(a.get("weightClass") or a.get("weight_class"))
         member_id = _norm(a.get("memberId") or a.get("member_id"))
         session_number = a.get("sessionNumber", a.get("session_number"))
-        session_platform = _norm(a.get("sessionPlatform") or a.get("session_platform"))
+        session_platform = normalize_platform(
+            _norm(a.get("sessionPlatform") or a.get("session_platform"))
+        )
 
         if member_id:
             seen_member_ids[member_id] += 1
@@ -133,7 +147,7 @@ def validate(
         if session_number in (None, "", 0) or not session_platform:
             f.add(ERROR, "session_unassigned", "Athlete missing session number/platform", name)
         elif session_platform not in KNOWN_PLATFORMS:
-            f.add(WARNING, "platform_unknown", "Unknown session platform", f"{name} -> {session_platform}")
+            f.add(ERROR, "platform_unknown", "Unknown session platform", f"{name} -> {session_platform}")
 
     for member_id, count in seen_member_ids.items():
         if count > 1:
@@ -160,17 +174,32 @@ def validate(
     schedule_sessions = set()
     for s in schedule:
         session_id = s.get("sessionId", s.get("session_id"))
-        platform = _norm(s.get("platform"))
+        platform = normalize_platform(_norm(s.get("platform")))
         start_time = _norm(s.get("startTime") or s.get("start_time"))
+        weigh_in_time = _norm(s.get("weighInTime") or s.get("weigh_in_time"))
         date = _norm(s.get("date"))
         if session_id in (None, "", 0):
             f.add(ERROR, "schedule_session_missing", "Schedule row missing sessionId", platform)
         if not platform:
             f.add(ERROR, "schedule_platform_missing", "Schedule row missing platform", str(session_id))
         elif platform not in KNOWN_PLATFORMS:
-            f.add(WARNING, "schedule_platform_unknown", "Unknown schedule platform", platform)
+            f.add(ERROR, "schedule_platform_unknown", "Unknown schedule platform", platform)
         if not start_time:
             f.add(WARNING, "schedule_no_start_time", "Schedule row missing start time", f"{session_id} {platform}")
+        elif parse_time(start_time) is None:
+            f.add(
+                WARNING,
+                "schedule_time_unparseable",
+                "Schedule time is not h:mm[:ss][ AM/PM]; it will be stored verbatim",
+                f"{session_id} {platform} start {start_time}",
+            )
+        if weigh_in_time and parse_time(weigh_in_time) is None:
+            f.add(
+                WARNING,
+                "schedule_time_unparseable",
+                "Schedule time is not h:mm[:ss][ AM/PM]; it will be stored verbatim",
+                f"{session_id} {platform} weigh-in {weigh_in_time}",
+            )
         if not date:
             f.add(WARNING, "schedule_no_date", "Schedule row missing date", f"{session_id} {platform}")
         try:
@@ -185,7 +214,9 @@ def validate(
     athletes_by_session: Dict[Any, int] = defaultdict(int)
     for a in athletes:
         session_number = a.get("sessionNumber", a.get("session_number"))
-        session_platform = _norm(a.get("sessionPlatform") or a.get("session_platform"))
+        session_platform = normalize_platform(
+            _norm(a.get("sessionPlatform") or a.get("session_platform"))
+        )
         try:
             key = (int(float(session_number)), session_platform)
         except (TypeError, ValueError):

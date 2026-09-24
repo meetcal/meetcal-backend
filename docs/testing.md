@@ -36,7 +36,9 @@ PYTHONPATH=. python -m unittest discover -s common/tests -p 'test_*.py'
 PYTHONPATH=. python -m unittest common.test_postgres_writer
 ```
 
-`common/tests/test_postgres_ingest.py` needs `DATABASE_URL` and psycopg. It skips when either is missing so meet-automation unit tests still run without Postgres.
+The DB-backed tests under `common/tests/` (`test_postgres_ingest.py`, `test_dedupe_idless_athletes.py`, `test_complete_ended_meets.py`) need `DATABASE_URL` and psycopg. They skip when either is missing so meet-automation unit tests still run without Postgres. `test_normalize.py` has no DB dependency.
+
+The schema for those tests is the real one: `test_postgres_ingest.apply_migrations` applies every `app/migrations/*.sql` in filename order and records each version in `_sqlx_migrations` the way `sqlx migrate run` does, skipping versions already recorded. Point `DATABASE_URL` at an empty database (CI does) or one sqlx already migrated; a migration that drifts from what the writer expects fails the Python job instead of being masked by a hand-written copy of the DDL.
 
 Risk cases that belong in Python tests:
 
@@ -45,7 +47,11 @@ Risk cases that belong in Python tests:
 - Empty intl ranking group identity
 - Empty `groups` prune is a noop
 - Exact-set sync (WSO records, intl ranking groups) writes only changes
-- Meet automation: empty parse is not staged; approval decision files; ingest refuses empty `meet_name`; replace+insert rolls back if a later write fails
+- `IngestClient.actions` is one transaction: a failing row rolls back the batch
+- `upsert_lifting_result` lookup precedence: `convex_id`, then `legacy_id`, then the natural key
+- Id-less athletes (blank or `noid:` member id) update one row across re-ingests; platform casing and `h:mm AM/PM` times are canonicalised at ingest
+- `complete-ended-meets` compares `end_date` against the meet-local date and tolerates unknown `time_zone` values
+- Meet automation: empty parse is not staged; approval decision files; a failing approved ingest is parked as `failed` and its decision consumed; reply classification ("no issues, ship it" approves); ingest refuses empty `meet_name`; replace+insert rolls back if a later write fails
 
 ## Coverage inventory
 

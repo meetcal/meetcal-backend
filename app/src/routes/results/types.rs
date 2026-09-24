@@ -1,8 +1,13 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
+/// One `lifting_results` row as every endpoint returns it. `id` and `event_id`
+/// are the row's identity, so the app can dedupe the same result seen through
+/// `/meets/package`, `/lifting-results/*`, and `/search`.
 #[derive(Debug, Deserialize, Serialize, Clone, FromRow)]
 pub struct LiftingResults {
+    pub id: i64,
+    pub event_id: String,
     pub federation: String,
     pub meet: String,
     pub date: String,
@@ -26,7 +31,9 @@ pub struct LiftingResults {
 /// field to the struct means editing one list, not eight queries.
 macro_rules! lifting_result_columns {
     () => {
-        "COALESCE(federation, '') AS federation,
+        "id,
+            event_id,
+            COALESCE(federation, '') AS federation,
             meet,
             date,
             name,
@@ -112,6 +119,8 @@ mod tests {
         assert_eq!(
             output_names(lifting_result_columns!()),
             vec![
+                "id",
+                "event_id",
                 "federation",
                 "meet",
                 "date",

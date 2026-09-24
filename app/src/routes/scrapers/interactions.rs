@@ -5,12 +5,11 @@
 //! signature, then record the decision as a file under
 //! `<state_dir>/decisions/<run_id>.json`. The Python `approve` cron picks that
 //! up and performs the actual Postgres write, posting a confirmation.
-//! confirmations.
 //!
-//! Keeping the DB write in Python means this read-only API never gains database
-//! credentials; the button just drops a decision token on the shared filesystem.
-//! We also update the original Slack message via `response_url` for instant
-//! feedback (best-effort).
+//! Keeping the DB write in Python means the API's read-mostly database role
+//! never needs write access to athletes or schedules; the button just drops a
+//! decision token on the shared filesystem. We also update the original Slack
+//! message via `response_url` for instant feedback (best-effort).
 
 use axum::{
     body::Bytes,
@@ -94,8 +93,22 @@ pub async fn slack_interactions(
         .get("response_url")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let channel_id = payload
+        .pointer("/channel/id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
 
-    // Optional user allowlist (same as slash commands).
+    // Optional channel + user allowlists (same as slash commands). The
+    // review message is posted in the meet-automation channel, so a click
+    // from anywhere else is not a decision we take.
+    if !cfg.channel_allowed(channel_id) {
+        update_message(
+            response_url,
+            ":no_entry: Approvals aren't enabled in this channel.",
+        )
+        .await;
+        return StatusCode::OK.into_response();
+    }
     if !cfg.user_allowed(user_id) {
         update_message(
             response_url,

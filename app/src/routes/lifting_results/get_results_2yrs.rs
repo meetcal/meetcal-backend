@@ -44,6 +44,8 @@ const RESULTS_SINCE_CUTOFF_SQL: &str = concat!(
 ///
 /// [
 ///   {
+///     "id": 2,
+///     "event_id": "event_2026",
 ///     "federation": "USAW",
 ///     "meet": "2026 Adaptive Men 85kg National Championship",
 ///     "date": "2026-02-01",

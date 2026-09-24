@@ -22,7 +22,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import pdfplumber
 
-from common.postgres_ingest import IngestClient
+from common.postgres_ingest import IngestClient, RowFailure
 
 # Load environment variables
 load_dotenv()
@@ -431,37 +431,39 @@ class USAMWMastersRecordsScraper:
         inserted = []
         updated = []
 
-        for record in records:
-            try:
-                result = self.ingest_client.action(
-                    "scraperIngestion:ingestRecord",
-                    {
-                        "recordType": record["record_type"],
-                        "ageCategory": record["age_category"],
-                        "gender": record["gender"],
-                        "weightClass": record["weight_class"],
-                        "snatchRecord": record.get("snatch_record") or None,
-                        "cjRecord": record.get("cj_record") or None,
-                        "totalRecord": record.get("total_record") or None,
-                    },
-                )
-                if result.get("wasInsert"):
-                    inserted.append(record)
-                    print(
-                        f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}"
-                    )
-                elif result.get("wasChanged"):
-                    updated.append(record)
-                    print(
-                        f"  ✓ Updated: {record['age_category']} {record['gender']} {record['weight_class']}"
-                    )
-                else:
-                    print(
-                        f"  - Unchanged: {record['age_category']} {record['gender']} {record['weight_class']}"
-                    )
-            except Exception as e:
+        # One connection. Each record is independent, so a bad one is
+        # reported and skipped (its own savepoint) rather than costing the rest.
+        results = self.ingest_client.actions_skipping_errors(
+            "scraperIngestion:ingestRecord",
+            [
+                {
+                    "recordType": record["record_type"],
+                    "ageCategory": record["age_category"],
+                    "gender": record["gender"],
+                    "weightClass": record["weight_class"],
+                    "snatchRecord": record.get("snatch_record") or None,
+                    "cjRecord": record.get("cj_record") or None,
+                    "totalRecord": record.get("total_record") or None,
+                }
+                for record in records
+            ],
+        )
+        for record, result in zip(records, results):
+            if isinstance(result, RowFailure):
+                print(f"  ✗ Error: {record['age_category']} {record['gender']} {record['weight_class']}: {result.error}")
+            elif result.get("wasInsert"):
+                inserted.append(record)
                 print(
-                    f"  ✗ Error: {record['age_category']} {record['gender']} {record['weight_class']}: {e}"
+                    f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}"
+                )
+            elif result.get("wasChanged"):
+                updated.append(record)
+                print(
+                    f"  ✓ Updated: {record['age_category']} {record['gender']} {record['weight_class']}"
+                )
+            else:
+                print(
+                    f"  - Unchanged: {record['age_category']} {record['gender']} {record['weight_class']}"
                 )
 
         return {"inserted": inserted, "updated": updated}

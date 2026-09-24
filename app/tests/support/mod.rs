@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use app::{
-    common::spawn_server::{TestApp, spawn_app_with_auth},
+    common::spawn_server::{TestApp, spawn_app_as_api_role, spawn_app_with_auth},
     routes::users::auth::AuthVerifier,
 };
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
@@ -43,7 +43,9 @@ static TEST_KEYS: LazyLock<TestKeys> = LazyLock::new(|| {
 struct TestClaims<'a> {
     sub: &'a str,
     iss: &'a str,
-    azp: &'a str,
+    /// Web sessions carry the origin here; native Clerk sessions omit it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    azp: Option<&'a str>,
     exp: u64,
     nbf: u64,
 }
@@ -60,11 +62,34 @@ pub async fn spawn_test_app() -> TestApp {
     spawn_app_with_auth(Some(auth)).await
 }
 
+/// The test app with every query running as `meetcal_api`, the role
+/// production connects as: its grants and row-level security apply.
+pub async fn spawn_test_app_as_api_role() -> TestApp {
+    let auth = AuthVerifier::from_rsa_pem(
+        TEST_KID,
+        TEST_KEYS.public_pem.as_bytes(),
+        TEST_ISSUER,
+        vec![TEST_AZP.to_string()],
+        None,
+    )
+    .expect("valid test public key");
+    spawn_app_as_api_role(Some(auth)).await
+}
+
 pub fn test_token(user_id: &str) -> String {
     test_token_with(user_id, TEST_ISSUER, TEST_AZP, 300)
 }
 
 pub fn test_token_with(user_id: &str, issuer: &str, azp: &str, lifetime_secs: i64) -> String {
+    test_token_claims(user_id, issuer, Some(azp), lifetime_secs)
+}
+
+/// A token shaped like a native app session: valid signature, no `azp`.
+pub fn test_token_without_azp(user_id: &str, issuer: &str) -> String {
+    test_token_claims(user_id, issuer, None, 300)
+}
+
+fn test_token_claims(user_id: &str, issuer: &str, azp: Option<&str>, lifetime_secs: i64) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock")
@@ -89,4 +114,24 @@ pub fn test_token_with(user_id: &str, issuer: &str, azp: &str, lifetime_secs: i6
             .expect("valid test private key"),
     )
     .expect("encode test token")
+}
+
+/// A direct pool on the test database, for seeding rows and for checking what
+/// the `meetcal_api` role can do (`SET ROLE`) without going through the API.
+/// Resolves the URL the same way the spawned server does.
+pub async fn db_pool() -> sqlx::PgPool {
+    app::load_env();
+    let database_url = match std::env::var("DATABASE_URL") {
+        Ok(database_url) => database_url,
+        Err(_) => app::configuration::get_configuration()
+            .expect("Failed to read config")
+            .database
+            .connection_string()
+            .expect("Failed to build database connection string"),
+    };
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to postgres")
 }
