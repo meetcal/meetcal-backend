@@ -168,10 +168,20 @@ const _: () = assert!(DEFAULT_KEY_TOKENS_PER_SECOND >= DEFAULT_IP_TOKENS_PER_SEC
 /// refilled completely (at most `burst / rate`, 30s with the defaults), so
 /// the map holds only clients seen within roughly the last 90 seconds.
 pub const CLIENT_EVICTION_INTERVAL: Duration = Duration::from_secs(60);
-/// Tracked client addresses above which a sweep runs at once instead of
-/// waiting for [`CLIENT_EVICTION_INTERVAL`], so an address spray is cleared
-/// as it happens. About 64 MB of map at this size.
+/// Most client addresses given their own bucket. At this size a sweep runs at
+/// once instead of waiting for [`CLIENT_EVICTION_INTERVAL`], and until it
+/// frees room every address is charged to one of [`OVERFLOW_BUCKETS`] shared
+/// buckets instead (see [`RateLimit::charged_client`]), so an address spray
+/// cannot grow the map past `MAX_TRACKED_CLIENTS + OVERFLOW_BUCKETS`. About
+/// 64 MB of map at this size.
 pub const MAX_TRACKED_CLIENTS: usize = 1_000_000;
+/// Shared buckets for addresses that arrive while the map is full. Slots are
+/// picked by the per-process random hash key, so a sprayer cannot aim at the
+/// slot a given user lands in; each slot has the normal per-address quota.
+pub const OVERFLOW_BUCKETS: u16 = 1024;
+/// Overflow slots live in the IPv6 discard-only prefix `100::/64` (RFC 6666),
+/// which no real client address (or `/64` client network) can fall in.
+const OVERFLOW_PREFIX: u16 = 0x0100;
 /// Shortest gap between two sweeps, so a sustained spray costs at most one
 /// full-map pass per second.
 pub const MIN_EVICTION_GAP: Duration = Duration::from_secs(1);
@@ -513,6 +523,8 @@ pub struct RateLimit {
     /// reversed by hashing all 2^32 IPv4 addresses.
     tag_key: RandomState,
     evict_now: Notify,
+    /// [`MAX_TRACKED_CLIENTS`], lowered in tests.
+    max_tracked: usize,
 }
 
 impl std::fmt::Debug for RateLimit {
@@ -564,7 +576,40 @@ impl RateLimit {
             untrusted_forward_log: RateLimiter::direct(untrusted_quota),
             tag_key: RandomState::new(),
             evict_now: Notify::new(),
+            max_tracked: MAX_TRACKED_CLIENTS,
         })
+    }
+
+    #[cfg(test)]
+    fn with_max_tracked(mut self, max_tracked: usize) -> Self {
+        self.max_tracked = max_tracked;
+        self
+    }
+
+    /// The client a request is actually charged to (and logged as). While the
+    /// address map is at [`MAX_TRACKED_CLIENTS`], an address is folded into
+    /// one of [`OVERFLOW_BUCKETS`] shared slots instead of getting a new
+    /// bucket, and a sweep is requested. The keyed store cannot tell a new
+    /// address from a tracked one, so tracked addresses fold too until the
+    /// sweep frees room: fairness degrades during a spray, memory does not.
+    pub fn charged_client(&self, client: Client) -> Client {
+        match client {
+            Client::Ip(addr) if self.ip_buckets.len() >= self.max_tracked => {
+                self.evict_now.notify_one();
+                let slot = (self.tag_key.hash_one(addr) % u64::from(OVERFLOW_BUCKETS)) as u16;
+                Client::Ip(IpAddr::V6(std::net::Ipv6Addr::new(
+                    OVERFLOW_PREFIX,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    slot,
+                )))
+            }
+            other => other,
+        }
     }
 
     pub fn enforce(&self) -> bool {
@@ -655,15 +700,12 @@ impl RateLimit {
                     };
                 }
             },
-            Client::Ip(addr) => {
-                if self.ip_buckets.len() > MAX_TRACKED_CLIENTS {
-                    self.evict_now.notify_one();
-                }
-                (
-                    self.ip_buckets.check_key_n(addr, cost),
-                    self.ip_buckets.clock().now(),
-                )
-            }
+            // Callers fold the address first (`charged_client`), so this never
+            // grows the map past the cap plus the overflow slots.
+            Client::Ip(addr) => (
+                self.ip_buckets.check_key_n(addr, cost),
+                self.ip_buckets.clock().now(),
+            ),
         };
         match outcome {
             Ok(Ok(())) => Decision::Allow,
@@ -685,6 +727,9 @@ impl RateLimit {
                 Some(key) => format!("key:{}", key.name),
                 None => "key:?".to_string(),
             },
+            Client::Ip(IpAddr::V6(v6)) if v6.segments()[0] == OVERFLOW_PREFIX => {
+                "ip-overflow".to_string()
+            }
             Client::Ip(_) => "ip".to_string(),
         }
     }
@@ -725,11 +770,11 @@ impl RateLimit {
         self.limited_log.retain_recent();
         self.limited_log.shrink_to_fit();
         let tracked = self.ip_buckets.len();
-        if tracked > MAX_TRACKED_CLIENTS {
+        if tracked >= self.max_tracked {
             tracing::warn!(
                 tracked,
-                cap = MAX_TRACKED_CLIENTS,
-                "more active client addresses than MAX_TRACKED_CLIENTS after eviction"
+                cap = self.max_tracked,
+                "client address map still full after eviction; new addresses share overflow buckets"
             );
         }
     }
@@ -779,7 +824,7 @@ pub async fn rate_limit(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ConnectInfo(addr)| *addr);
-    let client = limits.identify(peer, request.headers());
+    let client = limits.charged_client(limits.identify(peer, request.headers()));
     match limits.check(&client, route_cost(path)) {
         Decision::Allow => next.run(request).await,
         Decision::Limited { retry_after_secs } => {
@@ -1006,6 +1051,48 @@ mod tests {
         };
         assert!(RateLimit::new(&bad_proxy, ApiKeys::none()).is_err());
         assert!(RateLimit::new(&RateLimitSettings::default(), ApiKeys::none()).is_ok());
+    }
+
+    #[test]
+    fn a_full_address_map_folds_new_addresses_into_bounded_overflow_slots() {
+        let cap = 3;
+        let limits = RateLimit::new(&RateLimitSettings::default(), ApiKeys::none())
+            .unwrap()
+            .with_max_tracked(cap);
+        for last in 1..=cap {
+            let client =
+                limits.charged_client(Client::Ip(format!("203.0.113.{last}").parse().unwrap()));
+            assert!(
+                matches!(client, Client::Ip(IpAddr::V4(_))),
+                "below the cap: own bucket"
+            );
+            assert_eq!(limits.check(&client, 1), Decision::Allow);
+        }
+        assert_eq!(limits.tracked_clients(), cap);
+
+        // A spray of far more distinct addresses than the cap plus slots.
+        let spray = 4 * usize::from(OVERFLOW_BUCKETS);
+        for n in 0..spray {
+            let addr = IpAddr::V4(std::net::Ipv4Addr::from(0x0a00_0000 + n as u32));
+            let client = limits.charged_client(Client::Ip(addr));
+            match &client {
+                Client::Ip(IpAddr::V6(v6)) => {
+                    assert_eq!(v6.segments()[0], OVERFLOW_PREFIX);
+                    assert!(v6.segments()[7] < OVERFLOW_BUCKETS);
+                }
+                other => panic!("past the cap an address must fold, got {other:?}"),
+            }
+            assert_eq!(limits.kind(&client), "ip-overflow");
+            limits.check(&client, 1);
+        }
+        let tracked = limits.tracked_clients();
+        assert!(
+            tracked <= cap + usize::from(OVERFLOW_BUCKETS),
+            "map grew to {tracked}"
+        );
+
+        // Keys are never folded.
+        assert_eq!(limits.charged_client(Client::Key(0)), Client::Key(0));
     }
 
     #[test]

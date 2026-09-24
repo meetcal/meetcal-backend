@@ -85,6 +85,7 @@ pub async fn get_wso_records(
         WHERE wso = $1
             AND ($2::text IS NULL OR age_category = $2)
             AND ($3::text IS NULL OR gender = $3)
+        ORDER BY gender, age_category, weight_class, id
         "#,
     )
     .bind(params.wso)
@@ -93,6 +94,8 @@ pub async fn get_wso_records(
     .fetch_all(&state.db)
     .await?;
 
+    // `sort_by_class` is stable, so the SQL order (unique through `id`) breaks
+    // its ties: identical data always serializes to the same body and ETag.
     let sorted = sort_by_class(rows, |r| r.weight_class.as_str());
 
     cacheable_json(&sorted, &headers)

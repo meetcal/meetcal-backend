@@ -6,7 +6,7 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -119,7 +119,10 @@ fn best_by_weight_class(
     gender: &str,
     season_start: u32,
 ) -> Vec<AdaptiveRecords> {
-    let mut records: HashMap<String, AdaptiveRecords> = HashMap::new();
+    // Ordered by class string, so classes that `sort_by_class` ranks equal
+    // (`60` and `60kg`, or any non-numeric class) come out in the same order
+    // on every request and the body's strong ETag is stable.
+    let mut records: BTreeMap<String, AdaptiveRecords> = BTreeMap::new();
 
     let filtered = rows
         .iter()
