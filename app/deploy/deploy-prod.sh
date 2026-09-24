@@ -23,6 +23,13 @@ set +a
 : "${CLERK_ISSUER:?CLERK_ISSUER must be set in the production env file}"
 : "${CLERK_AUTHORIZED_PARTIES:?CLERK_AUTHORIZED_PARTIES must be set in the production env file}"
 
+# The audience Clerk puts in the app's session token (`aud: "convex"`, a
+# session-token claim kept from the Convex era). Pinned here, after the env
+# file is sourced, because a CLERK_AUDIENCE that does not match it answers 401
+# to every signed-in /users/me/* request. Change this together with the claim
+# in Clerk's session-token settings, Clerk first.
+export CLERK_AUDIENCE=convex
+
 SCRAPERS_MOUNT="/srv/meetcal-backend/scrapers"
 MEET_AUTOMATION_WATCHES_PATH="${MEET_AUTOMATION_WATCHES_PATH:-${SCRAPERS_MOUNT}/usaw/meet_automation/watches.json}"
 ENTRIES_TARGETS_PATH="${ENTRIES_TARGETS_PATH:-${SCRAPERS_MOUNT}/usaw/entry_scraper/entries_targets.json}"
