@@ -660,3 +660,85 @@ async fn by_names_limit_per_name_is_bounded() {
         .unwrap();
     assert_eq!(posted.status(), 400);
 }
+
+// ---------------------------------------------------------------------------
+// Body and per-name size caps on the name-list POST routes.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn post_name_lists_answer_413_json_past_the_body_limit() {
+    let app = support::spawn_test_app().await;
+    let limit = app::common::query::NAME_LIST_BODY_LIMIT;
+    // One name long enough to push the body one byte past the limit.
+    let overhead = r#"{"names":[""]}"#.len();
+    let body = serde_json::json!({ "names": ["a".repeat(limit + 1 - overhead)] }).to_string();
+    assert_eq!(body.len(), limit + 1);
+    for path in ["by-names", "recent", "bests"] {
+        let response = client()
+            .post(format!("{}/lifting-results/{path}", app.address))
+            .header("content-type", "application/json")
+            .body(body.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 413, "{path}");
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/json",
+            "{path}"
+        );
+        let json: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "error": "request body too large" })
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_maximal_valid_name_list_fits_under_the_body_limit() {
+    let app = support::spawn_test_app().await;
+    use app::common::query::{MAX_NAME_LEN, MAX_NAME_LIST_LEN};
+    // The worst case the limit is sized for: every decoded byte sent as a
+    // six-byte `\u00XX` escape, as an ASCII-only serializer may.
+    let names: Vec<String> = (0..MAX_NAME_LIST_LEN)
+        .map(|index| format!("\"{index:03}{}\"", "\\u0001".repeat(MAX_NAME_LEN - 3)))
+        .collect();
+    let body = format!(r#"{{"names":[{}],"latest_only":true}}"#, names.join(","));
+    assert!(body.len() > 200 * 1024, "the body really is escaped");
+    let response = client()
+        .post(format!("{}/lifting-results/by-names", app.address))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+}
+
+#[tokio::test]
+async fn names_longer_than_the_per_name_cap_are_rejected() {
+    let app = support::spawn_test_app().await;
+    let too_long = "a".repeat(app::common::query::MAX_NAME_LEN + 1);
+    let post = client()
+        .post(format!("{}/lifting-results/bests", app.address))
+        .json(&serde_json::json!({ "names": ["Alexander Nordstrom", too_long] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(post.status(), 400);
+    let body: serde_json::Value = post.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("bytes"), "{body}");
+
+    // Name lists are always strict: a legacy client's GET is refused too.
+    let get = client()
+        .get(format!(
+            "{}/lifting-results/by-names?names={too_long}",
+            app.address
+        ))
+        .header("X-MeetCal-App", LEGACY_CLIENT)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(get.status(), 400);
+}

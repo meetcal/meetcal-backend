@@ -373,15 +373,21 @@ class StandardsScraper:
         inserted = []
         updated = []
 
-        for standard in standards:
-            result = self.ingest.action("scraperIngestion:ingestStandard", {
+        # The standards table is one published set: write it on one connection
+        # in one transaction, so a failing row (which raises, as it always did)
+        # leaves the previous set intact instead of half-updated.
+        results = self.ingest.actions("scraperIngestion:ingestStandard", [
+            {
                 "scraperSecret": self.scraper_secret,
                 "ageCategory": standard['age_category'],
                 "gender": standard['gender'],
                 "weightClass": standard['weight_class'],
                 "standardA": standard['standard_a'],
                 "standardB": standard['standard_b'],
-            })
+            }
+            for standard in standards
+        ])
+        for standard, result in zip(standards, results):
             if result.get('wasInsert'):
                 inserted.append(standard)
                 print(f"  ✓ Inserted: {standard['age_category']} {standard['gender']} {standard['weight_class']}")

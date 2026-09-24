@@ -9,6 +9,14 @@ from typing import Any, Iterable
 
 from common import postgres_writer as pg
 
+# Ceilings on what ``main`` accepts on stdin. The largest real payload is one
+# meet's entry list (a national championship is ~2,000 athletes at a few hundred
+# bytes each, well under 1 MiB), so these leave an order of magnitude of
+# headroom while refusing a runaway or corrupted producer before it is parsed
+# into memory or written row by row.
+MAX_STDIN_BYTES = 16 * 1024 * 1024
+MAX_STDIN_ROWS = 20_000
+
 
 def dispatch(conn, path: str, args: dict[str, Any]) -> dict[str, Any]:
     if path == "scraperIngestion:ingestLiftingResult":
@@ -113,13 +121,43 @@ class IngestClient:
         return results
 
 
+class PayloadTooLarge(ValueError):
+    """Stdin exceeded ``MAX_STDIN_BYTES`` or held more than ``MAX_STDIN_ROWS`` rows."""
+
+
+def read_payload(
+    stream,
+    max_bytes: int = MAX_STDIN_BYTES,
+    max_rows: int = MAX_STDIN_ROWS,
+) -> Any:
+    """Read and parse one JSON payload (an object or a list of row objects).
+
+    Reads at most ``max_bytes + 1`` bytes so an oversized payload is refused
+    without being buffered whole. A list longer than ``max_rows`` is refused
+    before any row is written.
+    """
+    data = stream.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise PayloadTooLarge(f"stdin payload exceeds the {max_bytes}-byte limit")
+    payload = json.loads(data)
+    if isinstance(payload, list) and len(payload) > max_rows:
+        raise PayloadTooLarge(
+            f"stdin payload has {len(payload)} rows; the limit is {max_rows}"
+        )
+    return payload
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("Usage: postgres_ingest.py <scraperIngestion:path>", file=sys.stderr)
         return 2
 
     path = sys.argv[1]
-    payload = json.load(sys.stdin)
+    try:
+        payload = read_payload(sys.stdin.buffer)
+    except PayloadTooLarge as error:
+        print(f"postgres_ingest.py {path}: {error}; nothing written", file=sys.stderr)
+        return 3
     rows = payload if isinstance(payload, list) else [payload]
 
     results = IngestClient().actions(path, rows)

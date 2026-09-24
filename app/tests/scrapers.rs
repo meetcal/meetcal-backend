@@ -450,3 +450,26 @@ async fn slack_scraper_control_endpoints() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// Slack bodies get the global [`app::DEFAULT_BODY_LIMIT`], not the name-list
+/// cap: a body over that cap still reaches signature verification, and
+/// one past the global limit is a JSON `413` before it is buffered.
+#[tokio::test]
+async fn slack_bodies_use_the_global_body_limit() {
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+    let url = format!("{}/scrapers/slack/commands", app.address);
+
+    let large = "a".repeat(app::common::query::NAME_LIST_BODY_LIMIT * 2);
+    let response = post(&client, &url, &large, &now(), "v0=bad").await;
+    assert_eq!(response.status(), 401, "reaches the signature check");
+
+    let oversized = "a".repeat(app::DEFAULT_BODY_LIMIT + 1);
+    let response = post(&client, &url, &oversized, &now(), "v0=bad").await;
+    assert_eq!(response.status(), 413);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({ "error": "request body too large" })
+    );
+}

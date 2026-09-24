@@ -2,6 +2,32 @@ use crate::AppError;
 use serde::{Deserialize, Deserializer};
 
 pub const MAX_NAME_LIST_LEN: usize = 100;
+/// Longest single name in a name list, in UTF-8 bytes (after trimming). The
+/// longest real lifter names run to ~60 characters; 400 bytes is still at
+/// least 100 characters of any script. The cap bounds the per-request
+/// `normalize_name` work and the `= ANY($1)` array alongside
+/// [`MAX_NAME_LIST_LEN`]. Like the list cap it is not version-gated: name
+/// lists fail closed for every client.
+pub const MAX_NAME_LEN: usize = 400;
+/// Worst-case JSON bytes per decoded UTF-8 byte: a one-byte control character
+/// sent as a `\u00XX` escape. (A four-byte astral character sent as a
+/// `\uXXXX\uXXXX` surrogate pair is 12 bytes, only 3 per decoded byte.)
+pub const MAX_JSON_BYTES_PER_UTF8_BYTE: usize = 6;
+/// Worst-case JSON bytes per decoded character: an astral character sent as a
+/// surrogate-pair escape.
+pub const MAX_JSON_BYTES_PER_CHAR: usize = 12;
+/// Request-body ceiling for the `POST` name-list endpoints
+/// (`/lifting-results/by-names`, `/recent`, `/bests`). A maximal valid body is
+/// [`MAX_NAME_LIST_LEN`] names of [`MAX_NAME_LEN`] decoded bytes; with every
+/// byte escaped by an ASCII-only serializer that is 240,000 bytes, plus quotes
+/// and commas (~400 bytes) and the optional scalar fields (~100 bytes). 256 KiB
+/// admits every body that can pass validation however it is encoded, and
+/// rejects anything larger with `413` before it is buffered.
+pub const NAME_LIST_BODY_LIMIT: usize = 256 * 1024;
+const _: () = assert!(
+    MAX_NAME_LIST_LEN * (MAX_NAME_LEN * MAX_JSON_BYTES_PER_UTF8_BYTE + 4) + 1024
+        <= NAME_LIST_BODY_LIMIT
+);
 pub const MAX_SAVED_SESSION_ATHLETE_NAMES: usize = 64;
 
 #[derive(Deserialize)]
@@ -151,14 +177,20 @@ pub fn require_year(field: &str, value: &str) -> Result<(), AppError> {
     }
 }
 
-/// Empty and oversized name lists fail closed for every client. This is not
-/// version-gated: an empty list was never a meaningful request, and the size
-/// cap bounds the `= ANY($1)` array so one call cannot pin a connection.
+/// Empty and oversized name lists, and lists holding an oversized name, fail
+/// closed for every client. This is not version-gated: an empty list was never
+/// a meaningful request, and the size caps bound the `= ANY($1)` array so one
+/// call cannot pin a connection.
 pub fn require_name_list(names: &[String]) -> Result<(), AppError> {
     require_non_empty("names", names.first().map(String::as_str).unwrap_or(""))?;
     if names.len() > MAX_NAME_LIST_LEN {
         return Err(AppError::Validation(format!(
             "names exceeds the {MAX_NAME_LIST_LEN}-name limit"
+        )));
+    }
+    if names.iter().any(|name| name.len() > MAX_NAME_LEN) {
+        return Err(AppError::Validation(format!(
+            "each name must be at most {MAX_NAME_LEN} bytes"
         )));
     }
     Ok(())
@@ -187,6 +219,18 @@ mod tests {
             .map(|index| format!("name-{index}"))
             .collect();
         assert!(require_name_list(&oversized).is_err());
+    }
+
+    #[test]
+    fn rejects_a_name_longer_than_the_per_name_cap() {
+        let at_cap = "a".repeat(MAX_NAME_LEN);
+        assert!(require_name_list(std::slice::from_ref(&at_cap)).is_ok());
+        let over_cap = "a".repeat(MAX_NAME_LEN + 1);
+        assert!(require_name_list(&["Ada".to_string(), over_cap]).is_err());
+        // Bytes, not characters: 200 two-byte characters is exactly the cap.
+        let multibyte_at_cap = "\u{e9}".repeat(MAX_NAME_LEN / 2);
+        assert!(require_name_list(std::slice::from_ref(&multibyte_at_cap)).is_ok());
+        assert!(require_name_list(&[format!("{multibyte_at_cap}a")]).is_err());
     }
 
     #[test]

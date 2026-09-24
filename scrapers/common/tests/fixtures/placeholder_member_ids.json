@@ -1,0 +1,113 @@
+{
+  "_comment": "Shared by common/tests/test_placeholder_parity.py and common/tests/placeholder_parity.js. Each case's `expected` is the `noid:` placeholder both placeholder_member_id (common/normalize.py) and placeholderMemberId (usaw/entry_scraper/placeholder_member_id.js) must produce for `name`.",
+  "cases": [
+    {
+      "name": "Jane Doe",
+      "expected": "noid:jane-doe"
+    },
+    {
+      "name": "  Jane   Doe  ",
+      "expected": "noid:jane-doe"
+    },
+    {
+      "name": "Jane\tDoe",
+      "expected": "noid:jane-doe"
+    },
+    {
+      "name": "Jane\n\r\t Doe",
+      "expected": "noid:jane-doe"
+    },
+    {
+      "name": "JANE DOE",
+      "expected": "noid:jane-doe"
+    },
+    {
+      "name": "jAnE dOe",
+      "expected": "noid:jane-doe"
+    },
+    {
+      "name": "O'Brien, Pat",
+      "expected": "noid:o-brien-pat"
+    },
+    {
+      "name": "Mary-Kate  O'Neil Jr.",
+      "expected": "noid:mary-kate-o-neil-jr"
+    },
+    {
+      "name": "Jane_Doe",
+      "expected": "noid:jane-doe"
+    },
+    {
+      "name": "123 Main",
+      "expected": "noid:123-main"
+    },
+    {
+      "name": "Jos\u00e9 \u00c1lvarez",
+      "expected": "noid:jos-lvarez"
+    },
+    {
+      "name": "Zo\u00eb  \u00d8deg\u00e5rd",
+      "expected": "noid:zo-deg-rd"
+    },
+    {
+      "name": "\u674e\u5c0f\u9f8d",
+      "expected": "noid:"
+    },
+    {
+      "name": "Anna\u00a0McElderry",
+      "expected": "noid:anna-mcelderry"
+    },
+    {
+      "name": "Anna\u3000McElderry",
+      "expected": "noid:anna-mcelderry"
+    },
+    {
+      "name": "\ufeffJane Doe",
+      "expected": "noid:jane-doe"
+    },
+    {
+      "name": "Jane\u001fDoe",
+      "expected": "noid:jane-doe"
+    },
+    {
+      "name": "Jane\u0085Doe",
+      "expected": "noid:jane-doe"
+    },
+    {
+      "name": "\u212aim Lee",
+      "expected": "noid:kim-lee"
+    },
+    {
+      "name": "\u0130lker",
+      "expected": "noid:i-lker"
+    },
+    {
+      "name": "\u00c9mile \ud83c\udfcb\ufe0f Dupont",
+      "expected": "noid:mile-dupont"
+    },
+    {
+      "name": "\uff2a\uff41\uff4e\uff45 Doe",
+      "expected": "noid:doe"
+    },
+    {
+      "name": "---",
+      "expected": "noid:"
+    },
+    {
+      "name": "  ",
+      "expected": "noid:"
+    },
+    {
+      "name": "",
+      "expected": "noid:"
+    },
+    {
+      "name": null,
+      "expected": "noid:"
+    },
+    {
+      "name": 0,
+      "expected": "noid:0"
+    }
+  ]
+}

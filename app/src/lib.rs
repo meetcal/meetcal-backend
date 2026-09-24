@@ -33,14 +33,16 @@ use crate::routes::{
 };
 use axum::{
     Router,
-    extract::Request,
-    http::{HeaderName, HeaderValue, Method, header},
+    extract::{DefaultBodyLimit, Request},
+    http::{HeaderName, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, patch, post, put},
 };
 use common::client::CLIENT_VERSION_HEADER;
+use common::query::NAME_LIST_BODY_LIMIT;
 pub use error::AppError;
+use routes::users::USER_WRITE_BODY_LIMIT;
 use routes::{
     clubs::get_all_clubs::get_all_clubs,
     comp_data::{
@@ -90,6 +92,30 @@ async fn with_timeout(limit: Duration, request: Request, next: Next) -> Response
 
 async fn request_timeout(request: Request, next: Next) -> Response {
     with_timeout(REQUEST_TIMEOUT, request, next).await
+}
+
+/// Request-body ceiling for every route without a tighter one. The only other
+/// bodies the API reads are Slack's form-encoded slash commands and
+/// interaction payloads (the message blocks plus action state), which are tens
+/// of kilobytes at most. 1 MiB keeps generous headroom for those while halving
+/// axum's implicit 2 MB default. The name-list and `/users/me/*` write routes
+/// use [`NAME_LIST_BODY_LIMIT`] and [`USER_WRITE_BODY_LIMIT`] instead.
+pub const DEFAULT_BODY_LIMIT: usize = 1024 * 1024;
+
+/// Gives a body-limit rejection the same `{"error": ...}` JSON body as every
+/// other failure. Axum's extractors (`Json`, `Bytes`, `Form`) answer an
+/// oversized body with `413` and a plain-text message; this rewrites only
+/// that plain-text form, so a handler's own JSON `413` would pass through.
+async fn payload_too_large_as_json(request: Request, next: Next) -> Response {
+    let response = next.run(request).await;
+    let is_json = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .is_some_and(|value| value.as_bytes().starts_with(b"application/json"));
+    if response.status() == StatusCode::PAYLOAD_TOO_LARGE && !is_json {
+        return AppError::PayloadTooLarge.into_response();
+    }
+    response
 }
 
 #[derive(Clone)]
@@ -196,33 +222,50 @@ pub async fn run_with_auth(
         .route("/lifting-results", get(get_lifting_results))
         .route(
             "/lifting-results/by-names",
-            get(get_results_by_names).post(post_results_by_names),
+            get(get_results_by_names)
+                .post(post_results_by_names)
+                .layer(DefaultBodyLimit::max(NAME_LIST_BODY_LIMIT)),
         )
         .route(
             "/lifting-results/recent",
-            get(get_results_2yrs).post(post_results_2yrs),
+            get(get_results_2yrs)
+                .post(post_results_2yrs)
+                .layer(DefaultBodyLimit::max(NAME_LIST_BODY_LIMIT)),
         )
         .route("/lifting-results/year", get(get_results_current_year))
         .route(
             "/lifting-results/bests",
-            get(get_results_bests).post(post_results_bests),
+            get(get_results_bests)
+                .post(post_results_bests)
+                .layer(DefaultBodyLimit::max(NAME_LIST_BODY_LIMIT)),
         )
         .route("/search", get(search_wrapped))
         .route(
             "/users/me/saved-sessions",
-            get(get_saved_sessions).delete(delete_saved_sessions),
+            get(get_saved_sessions)
+                .delete(delete_saved_sessions)
+                .layer(DefaultBodyLimit::max(USER_WRITE_BODY_LIMIT)),
         )
         .route(
             "/users/me/saved-sessions/{session_id}",
-            put(put_saved_session).delete(delete_saved_session),
+            put(put_saved_session)
+                .delete(delete_saved_session)
+                .layer(DefaultBodyLimit::max(USER_WRITE_BODY_LIMIT)),
         )
-        .route("/users/me/preferences", get(get_preferences))
+        .route(
+            "/users/me/preferences",
+            get(get_preferences).layer(DefaultBodyLimit::max(USER_WRITE_BODY_LIMIT)),
+        )
         .route(
             "/users/me/preferences/auto-unsave",
-            patch(patch_auto_unsave),
+            patch(patch_auto_unsave).layer(DefaultBodyLimit::max(USER_WRITE_BODY_LIMIT)),
         )
         .route("/scrapers/slack/commands", post(slack_commands))
         .route("/scrapers/slack/interactions", post(slack_interactions))
+        // Route-level limits above are inner layers, so they override this
+        // default for their routes.
+        .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT))
+        .layer(middleware::from_fn(payload_too_large_as_json))
         .layer(CompressionLayer::new())
         .layer(cors)
         .layer(middleware::from_fn(request_timeout))

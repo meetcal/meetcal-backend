@@ -19,6 +19,9 @@ pub enum AppError {
     /// The server is at a work limit it enforces (e.g. concurrent package
     /// builds). Answered `503`; clients treat it like any 5xx and retry.
     Busy,
+    /// The request body exceeded the route's `DefaultBodyLimit`. Answered
+    /// `413` with the standard error body (see `payload_too_large_as_json`).
+    PayloadTooLarge,
 }
 
 impl From<anyhow::Error> for AppError {
@@ -59,6 +62,10 @@ impl IntoResponse for AppError {
             AppError::Validation(message) => (StatusCode::BAD_REQUEST, message),
             AppError::Timeout => (StatusCode::REQUEST_TIMEOUT, "timeout".to_string()),
             AppError::Busy => (StatusCode::SERVICE_UNAVAILABLE, "busy".to_string()),
+            AppError::PayloadTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request body too large".to_string(),
+            ),
         };
 
         (status, Json(json!({ "error": message }))).into_response()
@@ -97,6 +104,14 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         assert_eq!(body.as_ref(), br#"{"error":"busy"}"#);
+    }
+
+    #[tokio::test]
+    async fn payload_too_large_is_a_413_with_the_error_body_shape() {
+        let response = AppError::PayloadTooLarge.into_response();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(body.as_ref(), br#"{"error":"request body too large"}"#);
     }
 
     #[tokio::test]

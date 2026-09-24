@@ -4,7 +4,7 @@ import requests
 import logging
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from common.postgres_ingest import IngestClient
+from common.postgres_ingest import IngestClient, RowFailure
 
 # Load environment variables from .env file
 load_dotenv()
@@ -85,13 +85,28 @@ def add_meet_results_to_postgres(client: IngestClient, results_to_insert: list):
         logging.info("No results to insert.")
         return
 
+    # One connection per meet. Each lifter's result is independent, so a bad
+    # row is logged and skipped (its own savepoint) rather than costing the
+    # meet's whole result set, as the old per-row loop did.
     success_count = 0
-    for result in results_to_insert:
-        try:
-            client.action("scraperIngestion:ingestLiftingResult", result)
+    try:
+        ingest_results = client.actions_skipping_errors(
+            "scraperIngestion:ingestLiftingResult", results_to_insert
+        )
+    except Exception as e:
+        # Connection-level failure: nothing in the batch was committed.
+        logging.error(
+            f"Error upserting {len(results_to_insert)} results for "
+            f"'{results_to_insert[0].get('meet')}' in Postgres: {e}"
+        )
+        ingest_results = []
+    for result, ingest_result in zip(results_to_insert, ingest_results):
+        if isinstance(ingest_result, RowFailure):
+            logging.error(
+                f"Error upserting result for '{result.get('name')}' in Postgres: {ingest_result.error}"
+            )
+        else:
             success_count += 1
-        except Exception as e:
-            logging.error(f"Error upserting result for '{result.get('name')}' in Postgres: {e}")
 
     logging.info(f"Successfully upserted {success_count}/{len(results_to_insert)} results via Postgres.")
 

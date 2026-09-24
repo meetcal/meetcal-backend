@@ -20,6 +20,7 @@ try:
     from psycopg.rows import dict_row
 
     from common import postgres_writer as pg
+    from common import postgres_ingest
     from common.postgres_ingest import IngestClient, RowFailure, dispatch
     from common.tests.db_schema import MIGRATIONS_DIR, apply_migrations
 except ImportError:  # pragma: no cover - optional local dep
@@ -28,6 +29,7 @@ except ImportError:  # pragma: no cover - optional local dep
     pg = None
     IngestClient = None
     dispatch = None
+    postgres_ingest = None
 
 def _ranking(meet: str, gender: str, age_category: str, name: str, ranking: int) -> dict:
     return {
@@ -512,6 +514,93 @@ class PostgresIngestTests(unittest.TestCase):
         self.assertEqual(float(rows[0]["entry_total"]), 160.0)
         self.assertEqual(rows[1]["member_id"], "123456")
 
+    def test_federated_athlete_name_case_change_updates_one_row(self) -> None:
+        meet = f"__test_federated_name_{self.token}__"
+
+        def athlete(name: str, member_id: str = "100200300", **extra: object) -> dict:
+            row = {
+                "memberId": member_id,
+                "name": name,
+                "age": 30,
+                "club": "Club",
+                "gender": "Male",
+                "weightClass": "73",
+                "entryTotal": 250,
+                "meet": meet,
+            }
+            row.update(extra)
+            return row
+
+        for path in ("scraperIngestion:ingestAthlete", "scraperIngestion:ingestEntryAthlete"):
+            with self.subTest(path=path):
+                self.conn.execute("DELETE FROM athletes WHERE meet = %s", (meet,))
+                first = dispatch(self.conn, path, athlete("John Smith"))
+                original_convex_id = self.conn.execute(
+                    "SELECT convex_id FROM athletes WHERE id = %s", (int(first["id"]),)
+                ).fetchone()["convex_id"]
+                # The source re-cased and re-spaced the display name.
+                second = dispatch(
+                    self.conn, path, athlete("  JOHN\tsmith ", entryTotal=260)
+                )
+                # A different member id with the same name is a different athlete.
+                other = dispatch(self.conn, path, athlete("John Smith", member_id="999888777"))
+                rows = self.conn.execute(
+                    "SELECT id, convex_id, member_id, name, entry_total FROM athletes "
+                    "WHERE meet = %s ORDER BY id",
+                    (meet,),
+                ).fetchall()
+
+                self.assertTrue(first["wasInsert"])
+                self.assertFalse(second["wasInsert"])
+                self.assertTrue(second["wasChanged"])
+                self.assertEqual(second["id"], first["id"])
+                self.assertTrue(other["wasInsert"])
+                self.assertEqual(len(rows), 2)
+                # The existing identity keeps its convex_id; the row takes the
+                # latest spelling and values.
+                self.assertEqual(rows[0]["convex_id"], original_convex_id)
+                self.assertEqual(rows[0]["name"], "  JOHN\tsmith ")
+                self.assertEqual(float(rows[0]["entry_total"]), 260.0)
+                self.assertEqual(rows[1]["member_id"], "999888777")
+
+    def test_federated_athlete_exact_convex_id_wins_over_a_normalized_match(self) -> None:
+        meet = f"__test_federated_dupes_{self.token}__"
+        base = {
+            "memberId": "100200301",
+            "age": 30,
+            "club": "Club",
+            "gender": "Male",
+            "weightClass": "73",
+            "entryTotal": 250,
+            "meet": meet,
+        }
+        # Two rows that already exist for one lifter (written before the
+        # normalized lookup, one per spelling), each with its own convex_id.
+        first = dispatch(
+            self.conn, "scraperIngestion:ingestAthlete", {**base, "name": "Jane Roe", "convexId": "legacy-a"}
+        )
+        second_id = self.conn.execute(
+            """
+            INSERT INTO athletes (
+                convex_id, member_id, name, age, club, wso, gender, weight_class,
+                entry_total, session_number, session_platform, meet, adaptive
+            )
+            SELECT 'legacy-b', member_id, 'JANE ROE', age, club, wso, gender, weight_class,
+                entry_total, session_number, session_platform, meet, adaptive
+            FROM athletes WHERE id = %s
+            RETURNING id
+            """,
+            (int(first["id"]),),
+        ).fetchone()["id"]
+        # An ingest carrying one of those convex_ids updates exactly that row.
+        again = dispatch(
+            self.conn,
+            "scraperIngestion:ingestAthlete",
+            {**base, "name": "jane roe", "convexId": "legacy-b", "entryTotal": 255},
+        )
+        self.assertEqual(again["id"], str(second_id))
+        self.assertFalse(again["wasInsert"])
+
     def test_placeholder_ingest_adopts_a_pre_placeholder_random_id(self) -> None:
         meet = f"__test_random_id_{self.token}__"
         other_meet = f"__test_random_id_other_{self.token}__"
@@ -752,3 +841,69 @@ class IngestClientTests(unittest.TestCase):
     def test_actions_rejects_an_unknown_path_before_writing(self) -> None:
         with self.assertRaises(NotImplementedError):
             self.client.actions("scraperIngestion:notARealAction", [{"meet": self.meet}])
+
+
+@unittest.skipUnless(psycopg is not None, "psycopg is required to import postgres_ingest")
+class StdinPayloadCapTests(unittest.TestCase):
+    """``main`` refuses oversized stdin before touching the database."""
+
+    SCRAPERS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    def test_read_payload_accepts_an_object_or_a_list_within_the_caps(self) -> None:
+        import io
+
+        self.assertEqual(postgres_ingest.read_payload(io.BytesIO(b'{"a": 1}')), {"a": 1})
+        rows = postgres_ingest.read_payload(io.BytesIO(b"[{}, {}]"), max_bytes=8, max_rows=2)
+        self.assertEqual(rows, [{}, {}])
+
+    def test_read_payload_refuses_bytes_past_the_limit(self) -> None:
+        import io
+
+        with self.assertRaises(postgres_ingest.PayloadTooLarge):
+            postgres_ingest.read_payload(io.BytesIO(b"[{}, {}] "), max_bytes=8)
+
+    def test_read_payload_refuses_rows_past_the_limit(self) -> None:
+        import io
+
+        with self.assertRaises(postgres_ingest.PayloadTooLarge):
+            postgres_ingest.read_payload(io.BytesIO(b"[{}, {}, {}]"), max_rows=2)
+
+    def _run_main(self, stdin: bytes):
+        import subprocess
+        import sys
+
+        env = {k: v for k, v in os.environ.items() if k != "DATABASE_URL"}
+        env["PYTHONPATH"] = self.SCRAPERS_DIR
+        return subprocess.run(
+            [
+                sys.executable,
+                os.path.join(self.SCRAPERS_DIR, "common", "postgres_ingest.py"),
+                "scraperIngestion:ingestSessionSchedule",
+            ],
+            input=stdin,
+            capture_output=True,
+            env=env,
+            timeout=60,
+        )
+
+    def test_main_exits_non_zero_on_too_many_rows(self) -> None:
+        rows = b"[" + b",".join([b"{}"] * (postgres_ingest.MAX_STDIN_ROWS + 1)) + b"]"
+        result = self._run_main(rows)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn(b"rows; the limit is", result.stderr)
+        self.assertIn(b"nothing written", result.stderr)
+        self.assertEqual(result.stdout, b"")
+
+    def test_main_exits_non_zero_on_too_many_bytes(self) -> None:
+        # Valid JSON padded with whitespace: the byte cap, not the parser, refuses it.
+        payload = b"[]" + b" " * (postgres_ingest.MAX_STDIN_BYTES - 1)
+        result = self._run_main(payload)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn(b"-byte limit", result.stderr)
+        self.assertEqual(result.stdout, b"")
+
+    def test_main_accepts_an_empty_list_at_the_byte_limit(self) -> None:
+        payload = b"[]" + b" " * (postgres_ingest.MAX_STDIN_BYTES - 2)
+        result = self._run_main(payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), b"[]")

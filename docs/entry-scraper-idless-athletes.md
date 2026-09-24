@@ -9,8 +9,10 @@ nightly run and the same person gained one `athletes` row per night.
 ## Current behaviour
 
 - The scraper mints a deterministic placeholder, `noid:<slug of the normalised
-  name>` (`placeholderMemberId` in `csv_scraper.js`; the same rule is
-  `placeholder_member_id` in `scrapers/common/normalize.py`).
+  name>` (`placeholderMemberId` in `usaw/entry_scraper/placeholder_member_id.js`;
+  the same rule is `placeholder_member_id` in `scrapers/common/normalize.py`).
+  `scrapers/common/tests/test_placeholder_parity.py` runs both against the
+  shared fixture `scrapers/common/tests/fixtures/placeholder_member_ids.json`.
 - `postgres_writer.upsert_athlete` treats a blank or `noid:` member id as
   "id-less": the row's `convex_id` is derived from `(meet, normalised name)`
   and the fallback lookup is `(meet, id-less member_id, normalised name)`,
@@ -18,7 +20,10 @@ nightly run and the same person gained one `athletes` row per night.
   expression as `idx_athletes_name_normalized`. Two ingests of the same
   id-less athlete update one row, whatever the name's casing or spacing.
 - An athlete with a real membership number keeps the old identity, so two
-  different athletes who share a name are still two rows.
+  different athletes who share a name are still two rows. Its fallback lookup
+  is `(meet, member_id, normalised name)`, so a source that re-cases or
+  re-spaces the name updates the existing row (which keeps its `convex_id`)
+  instead of inserting a duplicate.
 
 ## One-off cleanup of rows that already have random ids
 
