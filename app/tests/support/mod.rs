@@ -116,19 +116,24 @@ fn test_token_claims(user_id: &str, issuer: &str, azp: Option<&str>, lifetime_se
     .expect("encode test token")
 }
 
-/// A direct pool on the test database, for seeding rows and for checking what
-/// the `meetcal_api` role can do (`SET ROLE`) without going through the API.
-/// Resolves the URL the same way the spawned server does.
-pub async fn db_pool() -> sqlx::PgPool {
+/// The test database URL, resolved the same way the spawned server does.
+pub fn database_url() -> String {
     app::load_env();
-    let database_url = match std::env::var("DATABASE_URL") {
+    match std::env::var("DATABASE_URL") {
         Ok(database_url) => database_url,
         Err(_) => app::configuration::get_configuration()
             .expect("Failed to read config")
             .database
             .connection_string()
             .expect("Failed to build database connection string"),
-    };
+    }
+}
+
+/// A direct pool on the test database, for seeding rows and for checking what
+/// the `meetcal_api` role can do (`SET ROLE`) without going through the API.
+/// Resolves the URL the same way the spawned server does.
+pub async fn db_pool() -> sqlx::PgPool {
+    let database_url = database_url();
     sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
         .connect(&database_url)

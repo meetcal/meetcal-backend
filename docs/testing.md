@@ -15,6 +15,8 @@ cargo test --locked
 
 CI (`.github/workflows/ci.yml`) starts Postgres 16, runs that setup, then fmt, clippy, `cargo test --locked`, shellcheck, and a production container build.
 
+The database must be `UTF8` with a ctype that folds Unicode (`C.UTF-8`, `en_US.UTF-8`, or the ICU provider; the `postgres:16` image defaults to `en_US.utf8`). Name matching runs `lower()` and a `\s` regex inside Postgres against a parameter the app normalizes with Unicode rules, and under `LC_CTYPE=C`/`POSIX` Postgres folds only ASCII, so `JOSÉ ÁLVAREZ` would match nothing. `setup_test_db.sh` checks this before migrating, the API refuses to start otherwise (`ensure_database_locale` in `app/src/common/schema.rs`), and `tests/schema.rs` proves the refusal against a database created with `LC_CTYPE 'C'` (it needs `CREATEDB`, which the CI superuser has). `LC_CTYPE` cannot be changed on an existing database; recreate it from `template0`.
+
 Put HTTP tests in `app/tests/` next to the surface they cover (`users.rs`, `scrapers.rs`, `clubs.rs`, `wsos.rs`). Unit tests for pure helpers live in the same `.rs` file under `#[cfg(test)]`.
 
 Risk cases that belong in Rust tests:
@@ -22,6 +24,7 @@ Risk cases that belong in Rust tests:
 - Clerk JWT (missing, empty, forged, expired, wrong `azp`)
 - Slack HMAC (bad signature, stale timestamp, path-unsafe run id)
 - Empty / oversized `names` on `/lifting-results/by-names`, `/recent`, `/bests`
+- Non-ASCII names (`JOSÉ ÁLVAREZ`, a no-break space between words) match on `/lifting-results/bests`, `/by-names` and `/search` (`tests/results.rs`)
 - Empty `club` / `wso` on history endpoints
 - Missing meet → 404 (`sqlx::Error::RowNotFound`), not 500
 - Saved-session validation (empty meet/platform, oversized `athlete_names`)

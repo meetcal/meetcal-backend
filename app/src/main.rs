@@ -1,4 +1,4 @@
-use app::common::schema::ensure_migrations_applied;
+use app::common::schema::{ensure_database_locale, ensure_migrations_applied};
 use app::configuration::get_configuration;
 use app::{DB_ACQUIRE_TIMEOUT, MAX_DB_CONNECTIONS, MIN_DB_CONNECTIONS, load_env, run};
 use sqlx::postgres::PgPoolOptions;
@@ -36,6 +36,12 @@ async fn main() {
     // Exit (non-zero) rather than serve 500s from a schema this build does
     // not match; the deploy's health check then keeps the old container.
     if let Err(reason) = ensure_migrations_applied(&connection).await {
+        tracing::error!("refusing to start: {reason}");
+        std::process::exit(1);
+    }
+    // Same for a database whose locale folds only ASCII: name matching would
+    // silently miss every non-ASCII name (docs/testing.md, scripts/init_db.sh).
+    if let Err(reason) = ensure_database_locale(&connection).await {
         tracing::error!("refusing to start: {reason}");
         std::process::exit(1);
     }

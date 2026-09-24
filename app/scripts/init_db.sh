@@ -53,6 +53,7 @@ if [[ -z "${SKIP_DOCKER}" ]]; then
       -e POSTGRES_USER="${DB_USER}" \
       -e POSTGRES_PASSWORD="${DB_PASSWORD}" \
       -e POSTGRES_DB="${DB_NAME}" \
+      -e POSTGRES_INITDB_ARGS="${POSTGRES_INITDB_ARGS:---encoding=UTF8 --locale=C.UTF-8}" \
       -p "${DB_PORT}":5432 \
       -d "${POSTGRES_IMAGE}" \
       postgres -N 1000
@@ -79,5 +80,6 @@ until psql -h 127.0.0.1 -U "${DB_USER}" -p "${DB_PORT}" -d postgres -c '\q' >/de
 done
 echo "Postgres is up and running on port ${DB_PORT} - running migrations now!"
 sqlx database create
+check_database_locale
 sqlx migrate run
 echo "Postgres has been migrated, ready to go!"
