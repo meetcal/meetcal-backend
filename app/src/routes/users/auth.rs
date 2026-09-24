@@ -145,6 +145,43 @@ impl fmt::Display for JwksRefreshError {
     }
 }
 
+/// Why a token was refused. Every variant still answers a plain `401`; the
+/// reason is only logged, so an operator can tell a JWKS outage from an
+/// audience mismatch without guessing.
+#[derive(Debug)]
+enum Rejection {
+    MalformedHeader,
+    Algorithm,
+    MissingKid,
+    MalformedPayload,
+    UntrustedIssuer,
+    KeysUnavailable(JwksRefreshError),
+    UnknownKid,
+    /// Signature, expiry, not-before, issuer or audience, as `jsonwebtoken`
+    /// reports it.
+    Invalid(jsonwebtoken::errors::ErrorKind),
+    Subject,
+    /// The web origin claim was present but not an authorized party.
+    AuthorizedParty(String),
+}
+
+impl fmt::Display for Rejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MalformedHeader => write!(f, "header is not a JWT header"),
+            Self::Algorithm => write!(f, "algorithm is not RS256"),
+            Self::MissingKid => write!(f, "header has no kid"),
+            Self::MalformedPayload => write!(f, "payload has no readable iss"),
+            Self::UntrustedIssuer => write!(f, "issuer is not a trusted Clerk instance"),
+            Self::KeysUnavailable(error) => write!(f, "JWKS unavailable: {error}"),
+            Self::UnknownKid => write!(f, "kid is not in the issuer's JWKS"),
+            Self::Invalid(kind) => write!(f, "claims or signature invalid: {kind:?}"),
+            Self::Subject => write!(f, "empty sub or issuer mismatch"),
+            Self::AuthorizedParty(azp) => write!(f, "azp {azp:?} is not an authorized party"),
+        }
+    }
+}
+
 impl AuthVerifier {
     pub fn from_env() -> anyhow::Result<Option<Arc<Self>>> {
         let jwks_url = std::env::var("CLERK_JWKS_URL").ok();
@@ -295,31 +332,45 @@ impl AuthVerifier {
     }
 
     async fn verify(&self, token: &str) -> Result<String, AppError> {
-        let header = decode_header(token).map_err(|_| AppError::Unauthorized)?;
+        self.check(token).await.map_err(|rejection| {
+            // TODO: move to `tracing` once the crate adopts it. One line per
+            // rejected token, naming the failed check and the claimed issuer
+            // (public), never the token or its subject: without it every
+            // failure below was an unexplained 401.
+            eprintln!(
+                "auth: rejected token ({rejection}); claimed iss {:?}",
+                unverified_issuer(token)
+            );
+            AppError::Unauthorized
+        })
+    }
+
+    async fn check(&self, token: &str) -> Result<String, Rejection> {
+        let header = decode_header(token).map_err(|_| Rejection::MalformedHeader)?;
         if header.alg != Algorithm::RS256 {
-            return Err(AppError::Unauthorized);
+            return Err(Rejection::Algorithm);
         }
-        let kid = header.kid.ok_or(AppError::Unauthorized)?;
+        let kid = header.kid.ok_or(Rejection::MissingKid)?;
 
         // The unverified `iss` only picks which instance's keys to try; the
         // signature and the issuer are then both checked against that one
         // instance below, so a forged `iss` just selects keys that cannot
         // verify the token.
-        let claimed_issuer = unverified_issuer(token).ok_or(AppError::Unauthorized)?;
+        let claimed_issuer = unverified_issuer(token).ok_or(Rejection::MalformedPayload)?;
         let instance = self
             .instances
             .iter()
             .find(|instance| instance.issuer == claimed_issuer)
-            .ok_or(AppError::Unauthorized)?;
+            .ok_or(Rejection::UntrustedIssuer)?;
 
         let mut key = instance.keys.read().await.get(&kid).cloned();
         if key.is_none() {
             self.refresh_keys(instance)
                 .await
-                .map_err(|_| AppError::Unauthorized)?;
+                .map_err(Rejection::KeysUnavailable)?;
             key = instance.keys.read().await.get(&kid).cloned();
         }
-        let key = key.ok_or(AppError::Unauthorized)?;
+        let key = key.ok_or(Rejection::UnknownKid)?;
 
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_required_spec_claims(&["exp", "iss", "sub"]);
@@ -337,11 +388,11 @@ impl AuthVerifier {
         }
 
         let claims = decode::<JwtClaims>(token, &key, &validation)
-            .map_err(|_| AppError::Unauthorized)?
+            .map_err(|error| Rejection::Invalid(error.into_kind()))?
             .claims;
 
         if claims.sub.trim().is_empty() || claims.iss != instance.issuer {
-            return Err(AppError::Unauthorized);
+            return Err(Rejection::Subject);
         }
         // `azp` is Clerk's web origin claim: present on browser sessions (and
         // then it must be a listed party), absent on native app sessions.
@@ -351,7 +402,7 @@ impl AuthVerifier {
                 .iter()
                 .any(|allowed| allowed == &azp)
         {
-            return Err(AppError::Unauthorized);
+            return Err(Rejection::AuthorizedParty(azp));
         }
 
         Ok(claims.sub)
@@ -998,5 +1049,46 @@ mod tests {
         assert_eq!(unverified_issuer("a.!!!.c"), None);
         // `e30` is `{}`: valid JSON with no `iss`.
         assert_eq!(unverified_issuer("e30.e30.sig"), None);
+    }
+
+    /// Each refusal names the check that failed, so the log line tells an
+    /// operator which one to fix.
+    #[tokio::test]
+    async fn rejections_name_the_failed_check() {
+        use jsonwebtoken::errors::ErrorKind;
+
+        let with_audience = verifier_with_audience(Some("meetcal-api"));
+        assert!(matches!(
+            with_audience
+                .check(&token_with(KID, ISSUER, None, Some("convex"), false))
+                .await,
+            Err(Rejection::Invalid(ErrorKind::InvalidAudience))
+        ));
+        assert!(matches!(
+            verifier().check(&token(ISSUER, AZP, true)).await,
+            Err(Rejection::Invalid(ErrorKind::ExpiredSignature))
+        ));
+        assert!(matches!(
+            verifier()
+                .check(&token("https://wrong-issuer.test", AZP, false))
+                .await,
+            Err(Rejection::UntrustedIssuer)
+        ));
+        assert!(matches!(
+            verifier()
+                .check(&token(ISSUER, "https://evil.example", false))
+                .await,
+            Err(Rejection::AuthorizedParty(_))
+        ));
+        assert!(matches!(
+            verifier()
+                .check(&token_with("unknown-kid", ISSUER, None, None, false))
+                .await,
+            Err(Rejection::KeysUnavailable(JwksRefreshError::NotConfigured))
+        ));
+        assert!(matches!(
+            verifier().check("not-a-jwt").await,
+            Err(Rejection::MalformedHeader)
+        ));
     }
 }
