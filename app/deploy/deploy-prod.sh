@@ -48,7 +48,39 @@ env_args=(
   -e "MEET_AUTOMATION_STATE_DIR=${MEET_AUTOMATION_STATE_DIR}"
 )
 
+# Rate limiting (see docs/rate-limits.md). Caddy on the host reaches the
+# container through Docker's port publishing, so the API sees the Docker
+# network's gateway as its TCP peer, not loopback. Unless the env file sets
+# them, trust X-Forwarded-For from loopback and from that gateway only: the
+# port is published on 127.0.0.1, so only host processes (Caddy, health
+# checks) connect from there, and Caddy overwrites the header.
+if [[ -z "${APP_RATE_LIMIT__TRUSTED_PROXIES:-}" ]]; then
+  gateways="$(docker network inspect -f '{{range .IPAM.Config}}{{if .Gateway}}{{.Gateway}},{{end}}{{end}}' "${DOCKER_NETWORK}" 2>/dev/null || true)"
+  gateways="${gateways%,}"
+  if [[ -n "${gateways}" ]]; then
+    APP_RATE_LIMIT__TRUSTED_PROXIES="127.0.0.0/8,::1/128,${gateways}"
+    export APP_RATE_LIMIT__TRUSTED_PROXIES
+  elif [[ "${APP_RATE_LIMIT__ENFORCE:-false}" == "true" ]]; then
+    # Without the gateway every visitor would share the proxy's one bucket,
+    # and enforcing that would throttle the whole API. Refuse before the
+    # running container is touched.
+    echo >&2 "Error: APP_RATE_LIMIT__ENFORCE=true but no gateway was found for Docker network ${DOCKER_NETWORK}; set APP_RATE_LIMIT__TRUSTED_PROXIES in the env file."
+    exit 1
+  else
+    echo >&2 "Warning: no gateway found for Docker network ${DOCKER_NETWORK}; X-Forwarded-For will be ignored (shadow mode only logs)."
+  fi
+fi
+
 for optional_var in \
+  APP_RATE_LIMIT__ENFORCE \
+  APP_RATE_LIMIT__KEYS \
+  APP_RATE_LIMIT__TRUST_FORWARDED_FOR \
+  APP_RATE_LIMIT__TRUSTED_PROXIES \
+  APP_RATE_LIMIT__IP_TOKENS_PER_SECOND \
+  APP_RATE_LIMIT__IP_BURST \
+  APP_RATE_LIMIT__KEY_TOKENS_PER_SECOND \
+  APP_RATE_LIMIT__KEY_BURST \
+  APP_RATE_LIMIT__MAX_IN_FLIGHT \
   CLERK_AUDIENCE \
   SLACK_SIGNING_SECRET \
   SLACK_MEET_AUTOMATION_CHANNEL \

@@ -1,6 +1,7 @@
-use crate::{AppError, AppState};
-use axum::Json;
+use crate::{AppError, AppState, common::http_cache::cacheable_json};
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
@@ -43,6 +44,9 @@ pub struct NatRankings {
 ///
 /// This endpoint takes federation and age category and returns national rankings for a weight_class
 ///
+/// The body carries a strong `ETag` and `Cache-Control: no-cache`; a matching
+/// `If-None-Match` is `304`.
+///
 /// [
 ///  {
 ///    "name": "gabe chhum",
@@ -55,8 +59,9 @@ pub struct NatRankings {
 /// ]
 pub async fn get_national_rankings(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<NatRankingsParams>,
-) -> Result<Json<Vec<NatRankings>>, AppError> {
+) -> Result<Response, AppError> {
     let rows = sqlx::query_as::<_, NatRankings>(
         r#"
         SELECT name, COALESCE(total, 0) AS total
@@ -73,9 +78,7 @@ pub async fn get_national_rankings(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(super::best_total_per_athlete(
-        rows,
-        |row| row.name.as_str(),
-        |row| row.total,
-    )))
+    let rankings = super::best_total_per_athlete(rows, |row| row.name.as_str(), |row| row.total);
+
+    cacheable_json(&rankings, &headers)
 }

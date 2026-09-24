@@ -113,6 +113,28 @@ Responses are gzip- and Brotli-compressed.
 
 The mobile app sends `X-MeetCal-App: <major.minor.patch>`. Clients at or above the version in `app/src/common/client.rs` opt into fail-closed validation (`400` on a blank `wso`, a missing or malformed `cutoff_date`, or malformed search dates); older or absent headers get the legacy behaviour, so shipped builds keep working across a rollout.
 
+### Rate limits
+
+The API is open: no key is needed. To keep it fast for everyone on meet day, each client spends tokens from a bucket that refills continuously:
+
+| Client | Refill | Burst |
+| --- | --- | --- |
+| Anonymous, per IPv4 address or IPv6 `/64` | 40 tokens/s | 1,200 tokens |
+| With an API key (`X-MeetCal-Key`) | 200 tokens/s | 6,000 tokens |
+
+Most requests cost 1 token. `/meets/package` costs 4; `/search`, `/lifting-results/by-names`, `/lifting-results/recent`, `/lifting-results/bests` (`GET` or `POST`) and `/clubs/meet-stats` cost 5. `/health` is free.
+
+- **`429 {"error":"rate limited"}`** means your bucket is empty. The `Retry-After` header says, in whole seconds, when it will hold enough tokens for that request again. Wait at least that long before retrying.
+- **`503 {"error":"overloaded"}`** with `Retry-After: 1` means the server as a whole is at capacity, whoever is asking. Retry after a second, with a cap on attempts.
+- Both are JSON, and browsers can read them cross-origin: `Retry-After` is listed in `Access-Control-Expose-Headers`.
+- Spend fewer tokens by sending up to 100 names per name-list request (`POST {"names": [...]}`) instead of one request per athlete, and by caching what you fetch.
+
+Limits are being introduced in log-only mode first, so you may not see a `429` yet. Build for one anyway.
+
+**API keys** are for server-side integrations that need more than the anonymous budget. Send the secret as `X-MeetCal-Key: <secret>`. Never put a key in a browser or mobile app, where anyone can read it; browsers cannot send the header cross-origin anyway. An unknown key is treated exactly like no key: no error, the anonymous budget. To request a key, open an issue on this repository with your project, a contact, and your expected request volume. The secret is then shared privately.
+
+Operators: settings, production env vars and the shadow-mode rollout are in [`docs/rate-limits.md`](docs/rate-limits.md).
+
 ### Slack control surfaces (scraper lists + approvals)
 
 The API exposes two Slack endpoints — its only mutating surfaces. They edit JSON

@@ -309,6 +309,124 @@ async fn reference_data_carries_cache_headers_and_revalidates() {
     }
 }
 
+/// Every other ingest-driven reference list: `200` carries a strong `ETag` and
+/// `no-cache`, the same tag in `If-None-Match` is a bodiless `304`, and any
+/// other tag is a full `200` with the same validator.
+#[tokio::test]
+async fn reference_lists_revalidate_with_a_strong_etag() {
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+    for path in [
+        "/data/wso",
+        "/data/wso/",
+        "/data/wso/age-groups?wso=Carolina",
+        "/data/wso/records?wso=Carolina",
+        "/data/wso/records?wso=Carolina&gender=Men&age_category=Senior",
+        "/data/nat-rankings?age_category=Open%20Men%27s%2060kg&federation=USAW",
+        "/data/nat-rankings-year?age_category=Open%20Men%27s%2060kg&federation=USAW&year=2025",
+        "/data/adaptive?exclude_federation=BWL&gender=Men",
+        "/clubs",
+        "/meets/completed",
+    ] {
+        let url = format!("{}{path}", app.address);
+        let first = client.get(&url).send().await.unwrap();
+        assert_eq!(first.status(), 200, "{path}");
+        assert_eq!(
+            first.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+            "application/json",
+            "{path}"
+        );
+        assert_eq!(
+            first.headers().get(reqwest::header::CACHE_CONTROL).unwrap(),
+            "no-cache",
+            "{path}"
+        );
+        let etag = first
+            .headers()
+            .get(reqwest::header::ETAG)
+            .unwrap_or_else(|| panic!("{path} carries an ETag"))
+            .clone();
+        let etag_text = etag.to_str().unwrap();
+        assert!(
+            etag_text.starts_with('"') && etag_text.ends_with('"') && !etag_text.starts_with("W/"),
+            "{path}: {etag_text}"
+        );
+        let first_body = first.bytes().await.unwrap();
+        serde_json::from_slice::<serde_json::Value>(&first_body)
+            .unwrap_or_else(|error| panic!("{path} is JSON: {error}"));
+
+        let revalidate = client
+            .get(&url)
+            .header(reqwest::header::IF_NONE_MATCH, &etag)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(revalidate.status(), 304, "{path}");
+        assert_eq!(
+            revalidate.headers().get(reqwest::header::ETAG),
+            Some(&etag),
+            "{path}"
+        );
+        assert_eq!(
+            revalidate
+                .headers()
+                .get(reqwest::header::CACHE_CONTROL)
+                .unwrap(),
+            "no-cache",
+            "{path}"
+        );
+        assert!(revalidate.bytes().await.unwrap().is_empty(), "{path}");
+
+        let mismatch = client
+            .get(&url)
+            .header(reqwest::header::IF_NONE_MATCH, "\"not-the-etag\"")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(mismatch.status(), 200, "{path}");
+        assert_eq!(
+            mismatch.headers().get(reqwest::header::ETAG),
+            Some(&etag),
+            "{path}"
+        );
+        assert_eq!(mismatch.bytes().await.unwrap(), first_body, "{path}");
+    }
+}
+
+/// A validation failure is still the plain JSON error, never a cacheable body.
+#[tokio::test]
+async fn rejected_reference_requests_carry_no_etag() {
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+    for path in [
+        "/data/wso/records?wso=",
+        "/data/wso/age-groups?wso=%20",
+        "/data/nat-rankings-year?age_category=Open%20Men%27s%2060kg&federation=USAW&year=20x5",
+    ] {
+        let response = client
+            .get(format!("{}{path}", app.address))
+            .header("X-MeetCal-App", "6.2.0")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400, "{path}");
+        assert!(
+            response.headers().get(reqwest::header::ETAG).is_none(),
+            "{path}"
+        );
+    }
+    let response = client
+        .get(format!(
+            "{}/data/adaptive?exclude_federation=BWL&gender=Men&season=soon",
+            app.address
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    assert!(response.headers().get(reqwest::header::ETAG).is_none());
+}
+
 #[tokio::test]
 async fn nat_rankings_year_is_validated_for_strict_clients() {
     let app = support::spawn_test_app().await;

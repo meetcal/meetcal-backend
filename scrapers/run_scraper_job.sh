@@ -152,9 +152,17 @@ meet_sync() {
   ensure_postgres_ingest_python
   local dir="${SCRAPERS_DIR}/usaw/meet_to_supabase"
   export SLACK_WEBHOOK_URL="${SLACK_MEET_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
-  node_job "${dir}" scripts/sync-meets.js
-  node_job "${dir}" scripts/sync-nat-meets.js
-  node_job "${dir}" scripts/sync-virus-meets.js
+  # Each script runs even when an earlier one failed; the job exits non-zero
+  # if any did, so cron's log and status do not hide a failed first script
+  # behind a successful last one.
+  local status=0 script
+  for script in sync-meets.js sync-nat-meets.js sync-virus-meets.js; do
+    if ! node_job "${dir}" "scripts/${script}"; then
+      status=1
+      echo >&2 "meet-sync: ${script} failed"
+    fi
+  done
+  return "${status}"
 }
 
 complete_ended_meets() {

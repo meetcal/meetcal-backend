@@ -1,3 +1,4 @@
+use crate::common::rate_limit::RateLimitSettings;
 use config::{Config, Environment, File};
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -7,6 +8,12 @@ pub struct Settings {
     pub database: DatabaseSettings,
     pub application_host: String,
     pub application_port: u16,
+    /// Per-client rate limits and the in-flight cap. Optional: every field has
+    /// a default, and each can be set with `APP_RATE_LIMIT__<FIELD>`. API keys
+    /// are secrets and are read only from the environment
+    /// (`APP_RATE_LIMIT__KEYS`), never from this file.
+    #[serde(default)]
+    pub rate_limit: RateLimitSettings,
 }
 
 #[derive(Deserialize)]

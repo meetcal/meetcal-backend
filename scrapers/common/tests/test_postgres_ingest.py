@@ -11,6 +11,7 @@ of a hand-written copy of the DDL hiding it.
 
 from __future__ import annotations
 
+import json
 import os
 import unittest
 import uuid
@@ -843,6 +844,125 @@ class IngestClientTests(unittest.TestCase):
             self.client.actions("scraperIngestion:notARealAction", [{"meet": self.meet}])
 
 
+def _meet_row(name: str, **overrides) -> dict:
+    row = {
+        "name": name,
+        "venueName": "V",
+        "venueStreet": "S",
+        "venueCity": "C",
+        "venueState": "IL",
+        "venueZip": "62701",
+        "timeZone": "America/Chicago",
+        "startDate": "2026-10-01",
+        "endDate": "2026-10-02",
+        "status": "upcoming",
+        "federation": "USAW",
+    }
+    row.update(overrides)
+    return row
+
+
+def _run_script(script: str, args: list[str], stdin: bytes, database_url: str | None):
+    import subprocess
+    import sys
+
+    scrapers_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    env = {k: v for k, v in os.environ.items() if k != "DATABASE_URL"}
+    if database_url:
+        env["DATABASE_URL"] = database_url
+    env["PYTHONPATH"] = scrapers_dir
+    return subprocess.run(
+        [sys.executable, os.path.join(scrapers_dir, "common", script), *args],
+        input=stdin,
+        capture_output=True,
+        env=env,
+        timeout=60,
+    )
+
+
+@unittest.skipUnless(
+    os.getenv("DATABASE_URL") and psycopg is not None,
+    "DATABASE_URL and psycopg are required",
+)
+class MeetSyncCliTests(unittest.TestCase):
+    """The two CLIs the meet-sync scripts call once per run, against Postgres."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        apply_migrations(os.environ["DATABASE_URL"])
+
+    def setUp(self) -> None:
+        self.prefix = f"__test_meet_cli_{uuid.uuid4().hex[:8]}__"
+
+    def tearDown(self) -> None:
+        with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as conn:
+            conn.execute("DELETE FROM meets WHERE name LIKE %s", (self.prefix + "%",))
+
+    def _names_in_db(self) -> list[str]:
+        with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn:
+            rows = conn.execute(
+                "SELECT name FROM meets WHERE name LIKE %s ORDER BY name", (self.prefix + "%",)
+            ).fetchall()
+        return [row["name"] for row in rows]
+
+    def _ingest(self, args: list[str], rows) -> "subprocess.CompletedProcess":
+        return _run_script(
+            "postgres_ingest.py", args, json.dumps(rows).encode(), os.environ["DATABASE_URL"]
+        )
+
+    def test_skip_errors_writes_the_good_meets_and_reports_the_bad_one(self) -> None:
+        rows = [
+            _meet_row(self.prefix + "a"),
+            _meet_row(self.prefix + "b", startDate="not-a-date"),
+            _meet_row(self.prefix + "c"),
+        ]
+        result = self._ingest(["--skip-errors", "scraperIngestion:ingestMeet"], rows)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        self.assertEqual(len(out), 3)
+        self.assertTrue(out[0]["wasInsert"])
+        self.assertEqual(out[1]["index"], 1)
+        self.assertIn("not-a-date", out[1]["rowError"])
+        self.assertTrue(out[2]["wasInsert"])
+        self.assertEqual(self._names_in_db(), [self.prefix + "a", self.prefix + "c"])
+        self.assertIn(b"failed; skipped", result.stderr)
+
+        # Re-running updates rather than inserts, and a single object stays an object.
+        again = self._ingest(["--skip-errors", "scraperIngestion:ingestMeet"], rows[0])
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertFalse(json.loads(again.stdout)["wasInsert"])
+
+    def test_without_the_flag_one_bad_meet_writes_nothing(self) -> None:
+        rows = [_meet_row(self.prefix + "a"), _meet_row(self.prefix + "b", startDate="not-a-date")]
+        result = self._ingest(["scraperIngestion:ingestMeet"], rows)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(self._names_in_db(), [])
+
+    def test_lookup_answers_many_names_in_one_call(self) -> None:
+        done, live, missing = self.prefix + "done", self.prefix + "live", self.prefix + "missing"
+        self._ingest(
+            ["scraperIngestion:ingestMeet"],
+            [_meet_row(done, status="completed"), _meet_row(live)],
+        )
+        result = _run_script(
+            "lookup_meet_status.py",
+            [],
+            json.dumps({"names": [done, live, missing]}).encode(),
+            os.environ["DATABASE_URL"],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {"statuses": {done: "completed", live: "upcoming", missing: None}},
+        )
+        # The one-name form the old per-meet loop used still works.
+        single = _run_script(
+            "lookup_meet_status.py", [], json.dumps({"name": done}).encode(), os.environ["DATABASE_URL"]
+        )
+        self.assertEqual(json.loads(single.stdout), {"status": "completed"})
+
+
 @unittest.skipUnless(psycopg is not None, "psycopg is required to import postgres_ingest")
 class StdinPayloadCapTests(unittest.TestCase):
     """``main`` refuses oversized stdin before touching the database."""
@@ -901,6 +1021,27 @@ class StdinPayloadCapTests(unittest.TestCase):
         self.assertEqual(result.returncode, 3, result.stderr)
         self.assertIn(b"-byte limit", result.stderr)
         self.assertEqual(result.stdout, b"")
+
+    def test_main_refuses_bad_arguments(self) -> None:
+        for args in ([], ["--bogus", "scraperIngestion:ingestMeet"], ["--skip-errors"], ["a", "b"]):
+            with self.subTest(args=args):
+                result = _run_script("postgres_ingest.py", args, b"[]", None)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(b"Usage: postgres_ingest.py [--skip-errors]", result.stderr)
+
+    def test_skip_errors_mode_keeps_the_stdin_caps(self) -> None:
+        rows = b"[" + b",".join([b"{}"] * (postgres_ingest.MAX_STDIN_ROWS + 1)) + b"]"
+        result = _run_script(
+            "postgres_ingest.py", ["--skip-errors", "scraperIngestion:ingestMeet"], rows, None
+        )
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn(b"nothing written", result.stderr)
+
+    def test_lookup_refuses_too_many_names_before_connecting(self) -> None:
+        names = json.dumps({"names": ["m"] * (postgres_ingest.MAX_STDIN_ROWS + 1)}).encode()
+        result = _run_script("lookup_meet_status.py", [], names, None)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn(b"the limit is", result.stderr)
 
     def test_main_accepts_an_empty_list_at_the_byte_limit(self) -> None:
         payload = b"[]" + b" " * (postgres_ingest.MAX_STDIN_BYTES - 2)

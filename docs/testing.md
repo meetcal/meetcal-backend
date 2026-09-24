@@ -25,6 +25,7 @@ Risk cases that belong in Rust tests:
 - Empty `club` / `wso` on history endpoints
 - Missing meet → 404 (`sqlx::Error::RowNotFound`), not 500
 - Saved-session validation (empty meet/platform, oversized `athlete_names`)
+- Rate limits and load shedding (`tests/rate_limits.rs`): `429` + `Retry-After` past the burst, key vs anonymous budgets, bad key is anonymous, `X-Forwarded-For` trust and rightmost entry, IPv6 `/64` grouping, `/health` exempt, shadow mode, `503` at the in-flight cap, CORS on both. Tests build servers with `spawn_app_with_limits`; every other test runs in shadow mode.
 
 ## Python ingest (`scrapers/`)
 
@@ -36,7 +37,7 @@ PYTHONPATH=. python -m unittest discover -s common/tests -p 'test_*.py'
 PYTHONPATH=. python -m unittest common.test_postgres_writer
 ```
 
-The DB-backed tests under `common/tests/` (`test_postgres_ingest.py`, `test_dedupe_idless_athletes.py`, `test_complete_ended_meets.py`) need `DATABASE_URL` and psycopg. They skip when either is missing so meet-automation unit tests still run without Postgres. `test_normalize.py`, `test_placeholder_parity.py` (Python vs JS `noid:` placeholder rule on `fixtures/placeholder_member_ids.json`; the JS half runs `node` and skips with a message when it is not on PATH), and `test_ingest_callers.py` (scrapers batch through `IngestClient.actions` / `actions_skipping_errors`, plus a static check that no scraper calls `.action(` inside a loop) have no DB dependency.
+The DB-backed tests under `common/tests/` (`test_postgres_ingest.py`, `test_dedupe_idless_athletes.py`, `test_complete_ended_meets.py`) need `DATABASE_URL` and psycopg. They skip when either is missing so meet-automation unit tests still run without Postgres. `test_normalize.py`, `test_placeholder_parity.py` (Python vs JS `noid:` placeholder rule on `fixtures/placeholder_member_ids.json`; the JS half runs `node` and skips with a message when it is not on PATH), `test_ingest_callers.py` (scrapers batch through `IngestClient.actions` / `actions_skipping_errors`, plus static checks that no Python scraper calls `.action(` inside a loop and no JS scraper starts a child process per row), and `test_meet_sync_batching.py` (runs the three meet-sync JS scripts under `node` with the Sport80 API, Slack and `$POSTGRES_INGEST_PYTHON` faked, and checks one `postgres_ingest.py --skip-errors` call per run, chunking past `INGEST_CHUNK_MAX_ROWS`, and the per-meet failure semantics; skips with a message when `node` is not on PATH) have no DB dependency.
 
 The schema for those tests is the real one: `test_postgres_ingest.apply_migrations` applies every `app/migrations/*.sql` in filename order and records each version in `_sqlx_migrations` the way `sqlx migrate run` does, skipping versions already recorded. Point `DATABASE_URL` at an empty database (CI does) or one sqlx already migrated; a migration that drifts from what the writer expects fails the Python job instead of being masked by a hand-written copy of the DDL.
 

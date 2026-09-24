@@ -7,7 +7,9 @@ semantics. Third-party modules the scrapers import only for scraping (HTTP,
 PDF, HTML, dotenv, the Sport80 client) are stubbed while the module is
 imported, since CI installs only ``requirements.txt``.
 
-A static check also walks every scraper source for ``.action(`` inside a loop.
+A static check also walks every scraper source for ``.action(`` inside a loop,
+and every JS scraper for a child process (the ingest CLI) started inside a
+loop, which is the JS spelling of the same per-row pattern.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 import ast
 import importlib
 import io
+import re
 import sys
 import types
 import unittest
@@ -234,6 +237,221 @@ class NoPerRowActionTests(unittest.TestCase):
             "use IngestClient.actions / actions_skipping_errors instead of action() in a loop",
         )
 
+
+# --- JS: no child process per row -------------------------------------------
+
+_JS_SPAWN = re.compile(r"\b(?:spawnSync|spawn|execFileSync|execFile|execSync|exec|fork)\s*\(")
+_JS_FUNCTION = re.compile(
+    r"\bfunction\s+([A-Za-z_$][\w$]*)\s*\("
+    r"|\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\([^()]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)"
+)
+_JS_FOR_WHILE = re.compile(r"\b(?:for|while)\s*(?:await\s*)?\(")
+_JS_ITERATOR = re.compile(
+    r"([A-Za-z_$][\w$.]*(?:\([^()]*\))?)\s*\.\s*(?:forEach|map|flatMap|reduce|filter|some|every|find)\s*\("
+)
+_JS_REGEX_PREFIX = set("(,=:[!&|?{};+-*%<>~^")
+
+
+def _js_strip(source: str) -> str:
+    """Blank out JS comments, strings, template literals and regex literals.
+
+    Keeps offsets and newlines so line numbers survive. A heuristic lexer, good
+    enough for the scrapers' plain Node scripts; it only has to keep braces and
+    parentheses inside literals from confusing the block matcher below.
+    """
+    out = list(source)
+    i, n = 0, len(source)
+    last_significant = ""
+
+    def blank(start: int, end: int) -> None:
+        for k in range(start, min(end, n)):
+            if out[k] != "\n":
+                out[k] = " "
+
+    while i < n:
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < n else ""
+        if ch == "/" and nxt == "/":
+            end = source.find("\n", i)
+            end = n if end == -1 else end
+            blank(i, end)
+            i = end
+            continue
+        if ch == "/" and nxt == "*":
+            end = source.find("*/", i + 2)
+            end = n if end == -1 else end + 2
+            blank(i, end)
+            i = end
+            continue
+        if ch in "'\"`":
+            j = i + 1
+            while j < n and source[j] != ch:
+                j += 2 if source[j] == "\\" else 1
+            blank(i + 1, j)
+            i = j + 1
+            last_significant = ch
+            continue
+        if ch == "/" and (last_significant == "" or last_significant in _JS_REGEX_PREFIX):
+            j, in_class = i + 1, False
+            while j < n and source[j] != "\n":
+                c = source[j]
+                if c == "\\":
+                    j += 2
+                    continue
+                if c == "[":
+                    in_class = True
+                elif c == "]":
+                    in_class = False
+                elif c == "/" and not in_class:
+                    break
+                j += 1
+            blank(i + 1, j)
+            i = j + 1
+            last_significant = "/"
+            continue
+        if not ch.isspace():
+            last_significant = ch
+        i += 1
+    return "".join(out)
+
+
+def _js_match(text: str, open_index: int) -> int:
+    """Index just past the bracket that closes ``text[open_index]``."""
+    pairs = {"(": ")", "{": "}", "[": "]"}
+    closer = pairs[text[open_index]]
+    depth = 0
+    for k in range(open_index, len(text)):
+        if text[k] == text[open_index]:
+            depth += 1
+        elif text[k] == closer:
+            depth -= 1
+            if depth == 0:
+                return k + 1
+    return len(text)
+
+
+def _js_function_bodies(text: str) -> dict[str, str]:
+    bodies: dict[str, str] = {}
+    for match in _JS_FUNCTION.finditer(text):
+        name = match.group(1) or match.group(2)
+        brace = text.find("{", match.end() - 1)
+        if brace == -1:
+            continue
+        # An arrow with an expression body has no brace before the next ";".
+        semicolon = text.find(";", match.end())
+        if semicolon != -1 and semicolon < brace and match.group(2):
+            bodies[name] = text[match.end():semicolon]
+            continue
+        bodies[name] = text[brace:_js_match(text, brace)]
+    return bodies
+
+
+def _js_loops(text: str):
+    """Yield ``(header, body, offset)`` for each ``for``/``while`` loop and
+    array-iterator callback (``xs.forEach(...)``, ``xs.map(...)``, ...)."""
+    for match in _JS_FOR_WHILE.finditer(text):
+        paren = match.end() - 1
+        header_end = _js_match(text, paren)
+        rest = text[header_end:]
+        stripped = rest.lstrip()
+        body_start = header_end + (len(rest) - len(stripped))
+        if stripped.startswith("{"):
+            body_end = _js_match(text, body_start)
+        else:
+            body_end = text.find(";", body_start)
+            body_end = len(text) if body_end == -1 else body_end
+        yield text[paren:header_end], text[body_start:body_end], match.start()
+    for match in _JS_ITERATOR.finditer(text):
+        paren = match.end() - 1
+        yield match.group(1), text[paren:_js_match(text, paren)], match.start()
+
+
+def js_spawns_in_loops(sources: dict[str, str]) -> list[str]:
+    """``file:line`` of every loop that starts a child process per iteration.
+
+    A function that spawns (directly, or by calling one that does, in any of
+    ``sources``) counts as a spawn. The one exempt shape is a loop over
+    ingest chunks (its header names a ``chunk``): a bounded number of batched
+    calls, each well under the ingest CLI's stdin caps.
+    """
+    stripped = {name: _js_strip(text) for name, text in sources.items()}
+    bodies: dict[str, str] = {}
+    for text in stripped.values():
+        bodies.update(_js_function_bodies(text))
+    spawners = {name for name, body in bodies.items() if _JS_SPAWN.search(body)}
+    while True:
+        calls = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(spawners))) + r")\s*\(") if spawners else None
+        grown = {
+            name for name, body in bodies.items()
+            if name not in spawners and calls is not None and calls.search(body)
+        }
+        if not grown:
+            break
+        spawners |= grown
+    calls = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(spawners))) + r")\s*\(") if spawners else None
+
+    offenders = []
+    for name, text in stripped.items():
+        for header, body, offset in _js_loops(text):
+            if re.search(r"chunk", header, re.I):
+                continue
+            if _JS_SPAWN.search(body) or (calls is not None and calls.search(body)):
+                offenders.append(f"{name}:{text.count(chr(10), 0, offset) + 1}")
+    return sorted(set(offenders))
+
+
+class NoPerRowJsSpawnTests(unittest.TestCase):
+    """JS scrapers must not start an ingest process per meet / row."""
+
+    EXCLUDED_PARTS = NoPerRowActionTests.EXCLUDED_PARTS
+
+    def test_the_check_flags_the_old_per_meet_spawn(self) -> None:
+        per_meet = """
+            const { spawnSync } = require('child_process');
+            function ingestMeetToPostgres(meet) {
+              const result = spawnSync(python, [ingestScript, 'x'], { input: JSON.stringify(meet) });
+              return JSON.parse(result.stdout); // '{' in a comment
+            }
+            async function ingestMeet(meet) { return ingestMeetToPostgres(meet); }
+            async function syncMeets(meets) {
+              const re = /[{(]/g;
+              for (const meet of meets) {
+                const label = `meet ${meet.name} }`;
+                await ingestMeet(meet);
+              }
+            }
+        """
+        self.assertEqual(js_spawns_in_loops({"old.js": per_meet}), ["old.js:10"])
+        each = "const run = (row) => spawnSync('python3', [row]);\nrows.forEach(row => { run(row); });\n"
+        self.assertEqual(js_spawns_in_loops({"each.js": each}), ["each.js:2"])
+
+    def test_the_check_allows_one_call_per_chunk(self) -> None:
+        batched = """
+            function runPython(rows) { return spawnSync('python3', ['ingest.py'], { input: JSON.stringify(rows) }); }
+            function ingestAll(rows) {
+              const chunks = chunkForIngest(rows);
+              chunks.forEach((chunk) => runPython(chunk));
+              for (const chunk of chunks) runPython(chunk);
+              for (const row of rows) console.log(row.name);
+            }
+            ingestAll(rows);
+        """
+        self.assertEqual(js_spawns_in_loops({"new.js": batched}), [])
+
+    def test_no_js_scraper_spawns_inside_a_loop(self) -> None:
+        sources = {}
+        for path in sorted(SCRAPERS_DIR.rglob("*.js")):
+            relative = path.relative_to(SCRAPERS_DIR)
+            if self.EXCLUDED_PARTS.intersection(relative.parts):
+                continue
+            sources[str(relative)] = path.read_text(encoding="utf-8")
+        self.assertIn("usaw/meet_to_supabase/scripts/sync-meets.js", sources)
+        self.assertEqual(
+            js_spawns_in_loops(sources),
+            [],
+            "batch rows into one ingest call per run (chunked under the stdin caps), "
+            "not one child process per row",
+        )
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,19 +1,9 @@
 use app::common::schema::ensure_migrations_applied;
 use app::configuration::get_configuration;
-use app::{load_env, run};
+use app::{DB_ACQUIRE_TIMEOUT, MAX_DB_CONNECTIONS, MIN_DB_CONNECTIONS, load_env, run};
 use sqlx::postgres::PgPoolOptions;
-use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
-
-/// Postgres pool sizing. The ceiling is the number of concurrent statements
-/// this process can have in flight; the floor keeps warm connections so a
-/// meet-weekend burst does not pay TCP + TLS setup on every request.
-const MAX_DB_CONNECTIONS: u32 = 20;
-const MIN_DB_CONNECTIONS: u32 = 2;
-/// How long a request waits for a free pool connection before failing. Shorter
-/// than the 15s request timeout so the pool, not the client, reports saturation.
-const DB_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Log filter when `RUST_LOG` is unset: request spans and handler errors at
 /// INFO and above, library internals quiet.
@@ -52,5 +42,5 @@ async fn main() {
 
     let address = format!("{}:{}", config.application_host, config.application_port);
     let listener = TcpListener::bind(address).await.unwrap();
-    run(listener, connection).await;
+    run(listener, connection, config.rate_limit).await;
 }

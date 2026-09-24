@@ -1,6 +1,10 @@
-use crate::{AppError, AppState, common::client::ClientVersion};
-use axum::Json;
+use crate::{
+    AppError, AppState,
+    common::{client::ClientVersion, http_cache::cacheable_json},
+};
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
@@ -48,6 +52,9 @@ pub struct NatRankingsYear {
 /// `year` must be four digits for a 6.2.0+ client (`400` otherwise); a legacy client's malformed
 /// year compares as text and returns `[]`, as it always has.
 ///
+/// The body carries a strong `ETag` and `Cache-Control: no-cache`; a matching
+/// `If-None-Match` is `304`.
+///
 /// [
 ///  {
 ///    "name": "gabe chhum",
@@ -61,8 +68,9 @@ pub struct NatRankingsYear {
 pub async fn get_national_rankings_by_year(
     State(state): State<AppState>,
     client: ClientVersion,
+    headers: HeaderMap,
     Query(params): Query<NatRankingsParamsYear>,
-) -> Result<Json<Vec<NatRankingsYear>>, AppError> {
+) -> Result<Response, AppError> {
     client.require_year("year", &params.year)?;
     let year_start = format!("{}-01-01", params.year);
     let year_end = format!("{}-12-31", params.year);
@@ -86,9 +94,7 @@ pub async fn get_national_rankings_by_year(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(super::best_total_per_athlete(
-        rows,
-        |row| row.name.as_str(),
-        |row| row.total,
-    )))
+    let rankings = super::best_total_per_athlete(rows, |row| row.name.as_str(), |row| row.total);
+
+    cacheable_json(&rankings, &headers)
 }

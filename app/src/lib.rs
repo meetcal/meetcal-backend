@@ -40,7 +40,9 @@ use axum::{
     routing::{get, patch, post, put},
 };
 use common::client::CLIENT_VERSION_HEADER;
+use common::load_shed::{LoadShedder, shed_load};
 use common::query::NAME_LIST_BODY_LIMIT;
+use common::rate_limit::{ApiKeys, RateLimit, RateLimitSettings, rate_limit};
 pub use error::AppError;
 use routes::users::USER_WRITE_BODY_LIMIT;
 use routes::{
@@ -63,6 +65,7 @@ use routes::{
     },
 };
 use sqlx::PgPool;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::{sync::Arc, time::Duration};
 use tokio::net::TcpListener;
@@ -75,6 +78,37 @@ use tracing::Level;
 /// `408 {"error":"timeout"}` instead of holding a pool connection for the
 /// client's lifetime. `AGENTS.md` pins this at 15s.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Postgres pool sizing. The ceiling is the number of concurrent statements
+/// this process can have in flight; the floor keeps warm connections so a
+/// meet-weekend burst does not pay TCP + TLS setup on every request.
+pub const MAX_DB_CONNECTIONS: u32 = 20;
+pub const MIN_DB_CONNECTIONS: u32 = 2;
+/// How long a request waits for a free pool connection before failing. Shorter
+/// than the 15s request timeout so the pool, not the client, reports saturation.
+pub const DB_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Database time of a slow request under load: a `/search`, a name-list batch
+/// or a package build (typical reads are well under a millisecond).
+pub const SLOW_REQUEST_DB_TIME: Duration = Duration::from_millis(200);
+
+/// Default cap on requests in flight server-wide (`rate_limit.max_in_flight`).
+///
+/// Every request that reaches a handler needs a pool connection, and one that
+/// waits longer than [`DB_ACQUIRE_TIMEOUT`] for it fails anyway. In that window
+/// each of the [`MAX_DB_CONNECTIONS`] connections can serve
+/// `DB_ACQUIRE_TIMEOUT / SLOW_REQUEST_DB_TIME` = 25 slow requests, so at most
+/// 20 x 25 = 500 requests can be admitted and still get a connection in time
+/// even when every one of them is slow. Anything past that would sit on the
+/// pool for five seconds and then fail with `500`; shedding it at once with
+/// `503 Retry-After: 1` is kinder to the client and to the database. On a
+/// normal meet day the server has a few dozen requests in flight, so the cap
+/// only bites when the database is saturated or the server is flooded.
+pub const DEFAULT_MAX_IN_FLIGHT: usize = MAX_DB_CONNECTIONS as usize
+    * (DB_ACQUIRE_TIMEOUT.as_millis() / SLOW_REQUEST_DB_TIME.as_millis()) as usize;
+
+const _: () = assert!(DB_ACQUIRE_TIMEOUT.as_millis() < REQUEST_TIMEOUT.as_millis());
+const _: () = assert!(DEFAULT_MAX_IN_FLIGHT >= MAX_DB_CONNECTIONS as usize);
 
 /// Drops the handler once `limit` elapses and answers [`AppError::Timeout`],
 /// so a timeout has the same JSON error body as every other failure. Dropping
@@ -106,13 +140,30 @@ pub const DEFAULT_BODY_LIMIT: usize = 1024 * 1024;
 /// other failure. Axum's extractors (`Json`, `Bytes`, `Form`) answer an
 /// oversized body with `413` and a plain-text message; this rewrites only
 /// that plain-text form, so a handler's own JSON `413` would pass through.
+///
+/// Each rewrite logs one warning with the path and the declared
+/// `Content-Length` (absent for a chunked body), so production logs show
+/// whether a limit ever rejects a real client or Slack payload. Only the path
+/// is logged: the query string can carry athlete names.
 async fn payload_too_large_as_json(request: Request, next: Next) -> Response {
+    // `Uri` clones share its buffer, so this costs no copy of the path.
+    let uri = request.uri().clone();
+    let declared_length = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
     let response = next.run(request).await;
     let is_json = response
         .headers()
         .get(header::CONTENT_TYPE)
         .is_some_and(|value| value.as_bytes().starts_with(b"application/json"));
     if response.status() == StatusCode::PAYLOAD_TOO_LARGE && !is_json {
+        tracing::warn!(
+            path = %uri.path(),
+            content_length = declared_length,
+            "request body over the limit; answered 413"
+        );
         return AppError::PayloadTooLarge.into_response();
     }
     response
@@ -132,7 +183,7 @@ pub fn load_env() {
     }
 }
 
-pub async fn run(listener: TcpListener, db: PgPool) {
+pub async fn run(listener: TcpListener, db: PgPool, limits: RateLimitSettings) {
     let auth = routes::users::auth::AuthVerifier::from_env()
         .unwrap_or_else(|error| panic!("invalid Clerk authentication configuration: {error}"));
     if auth.is_none() {
@@ -140,14 +191,32 @@ pub async fn run(listener: TcpListener, db: PgPool) {
             "Clerk authentication is not configured; protected user routes will reject all requests"
         );
     }
-    run_with_auth(listener, db, auth).await;
+    let keys = ApiKeys::from_env()
+        .unwrap_or_else(|error| panic!("invalid rate-limit API key configuration: {error:#}"));
+    run_with_auth(listener, db, auth, &limits, keys).await;
 }
 
+/// Serves the API. Invalid `limits` or `keys` panic before the listener
+/// accepts anything: the server refuses to start rather than run with limits
+/// nobody chose.
 pub async fn run_with_auth(
     listener: TcpListener,
     db: PgPool,
     auth: Option<Arc<routes::users::auth::AuthVerifier>>,
+    limits: &RateLimitSettings,
+    keys: ApiKeys,
 ) {
+    let rate_limits = Arc::new(
+        RateLimit::new(limits, keys)
+            .unwrap_or_else(|error| panic!("invalid rate-limit configuration: {error:#}")),
+    );
+    rate_limits.log_settings();
+    let shedder = Arc::new(
+        LoadShedder::new(limits.max_in_flight)
+            .unwrap_or_else(|error| panic!("invalid rate-limit configuration: {error:#}")),
+    );
+    let evictor = tokio::spawn(rate_limits.clone().evict_idle_forever());
+
     let cors = CorsLayer::new()
         .allow_origin([
             "https://meetcal.app".parse::<HeaderValue>().unwrap(),
@@ -169,7 +238,8 @@ pub async fn run_with_auth(
             header::IF_NONE_MATCH,
             HeaderName::from_static(CLIENT_VERSION_HEADER),
         ])
-        .expose_headers([header::ETAG]);
+        // `Retry-After` on `429`/`503`, so a browser client can back off.
+        .expose_headers([header::ETAG, header::RETRY_AFTER]);
 
     // One span per request carrying method, path, and the declared app
     // version (which decides strict-vs-legacy validation), closed with the
@@ -267,6 +337,13 @@ pub async fn run_with_auth(
         .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT))
         .layer(middleware::from_fn(payload_too_large_as_json))
         .layer(CompressionLayer::new())
+        // Both inside CORS (`cors` must stay the outer layer), so a `429` or
+        // `503` carries the CORS headers a browser needs to read its status
+        // and `Retry-After`; `tests/rate_limits.rs` checks both. Both outside
+        // everything that does work. The rate limit runs first so a limited
+        // client never takes an in-flight slot.
+        .layer(middleware::from_fn_with_state(shedder, shed_load))
+        .layer(middleware::from_fn_with_state(rate_limits, rate_limit))
         .layer(cors)
         .layer(middleware::from_fn(request_timeout))
         .layer(trace)
@@ -276,10 +353,15 @@ pub async fn run_with_auth(
             auth,
         });
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .unwrap();
+    // Connect info gives the rate limiter each request's TCP peer.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .unwrap();
+    evictor.abort();
 }
 
 /// Resolves on SIGINT or SIGTERM so `axum::serve` stops accepting connections
@@ -359,5 +441,100 @@ mod timeout_tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+}
+
+#[cfg(test)]
+mod payload_too_large_tests {
+    use super::*;
+    use axum::body::{Body, Bytes, to_bytes};
+    use std::sync::Mutex;
+    use tower::ServiceExt;
+
+    /// Collects formatted log lines so a test can read what was logged.
+    #[derive(Clone, Default)]
+    struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl CapturedLogs {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    async fn echo(body: Bytes) -> String {
+        body.len().to_string()
+    }
+
+    #[tokio::test]
+    async fn an_over_limit_body_is_a_json_413_logged_with_path_and_length_only() {
+        let logs = CapturedLogs::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .with_max_level(Level::WARN)
+            .finish();
+        // The current-thread test runtime polls the whole request on this
+        // thread, so the thread-local default catches the middleware's event.
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let app = Router::new()
+            .route("/echo", post(echo))
+            .layer(DefaultBodyLimit::max(8))
+            .layer(middleware::from_fn(payload_too_large_as_json));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/echo?name=Secret%20Athlete")
+                    .header(header::CONTENT_LENGTH, "16")
+                    .body(Body::from("0123456789abcdef"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        to_bytes(response.into_body(), 1024).await.unwrap();
+
+        let logged = logs.text();
+        assert_eq!(logged.lines().count(), 1, "{logged}");
+        assert!(logged.contains("WARN"), "{logged}");
+        assert!(logged.contains("path=/echo"), "{logged}");
+        assert!(logged.contains("content_length=16"), "{logged}");
+        assert!(
+            !logged.contains("Secret"),
+            "the query is never logged: {logged}"
+        );
+
+        // A body within the limit passes through and logs nothing.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/echo")
+                    .body(Body::from("0123"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(logs.text(), logged);
     }
 }

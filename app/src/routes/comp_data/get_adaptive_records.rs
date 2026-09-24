@@ -1,11 +1,12 @@
 use crate::common::{query::require_year, sort::sort_by_class};
 use crate::routes::results::types::{LiftingResults, lifting_result_columns};
-use crate::{AppError, AppState};
-use axum::Json;
+use crate::{AppError, AppState, common::http_cache::cacheable_json};
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -71,6 +72,9 @@ const ADAPTIVE_RESULTS_SQL: &str = concat!(
 /// Optional `season=YYYY` (default 2026, see [`ADAPTIVE_RECORDS_SEASON_START`]) is the first
 /// year whose results count; anything else for `season` is `400`.
 ///
+/// The body carries a strong `ETag` and `Cache-Control: no-cache`; a matching
+/// `If-None-Match` is `304`.
+///
 /// [
 ///  {
 ///    "weight_class": "85",
@@ -81,8 +85,9 @@ const ADAPTIVE_RESULTS_SQL: &str = concat!(
 /// ]
 pub async fn get_adaptive_records(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<AdaptiveRecordsParams>,
-) -> Result<Json<Vec<AdaptiveRecords>>, AppError> {
+) -> Result<Response, AppError> {
     let season = params
         .season
         .as_deref()
@@ -97,11 +102,9 @@ pub async fn get_adaptive_records(
         .await?;
 
     let season_start: u32 = season.parse().map_err(anyhow::Error::from)?;
-    Ok(Json(best_by_weight_class(
-        &rows,
-        &params.gender,
-        season_start,
-    )))
+    let records = best_by_weight_class(&rows, &params.gender, season_start);
+
+    cacheable_json(&records, &headers)
 }
 
 /// Collapses adaptive result rows to one record per weight class, keeping the
@@ -116,7 +119,10 @@ fn best_by_weight_class(
     gender: &str,
     season_start: u32,
 ) -> Vec<AdaptiveRecords> {
-    let mut records: HashMap<String, AdaptiveRecords> = HashMap::new();
+    // Ordered by class string, so classes that `sort_by_class` ranks equal
+    // (`60` and `60kg`, or any non-numeric class) come out in the same order
+    // on every request and the body's strong ETag is stable.
+    let mut records: BTreeMap<String, AdaptiveRecords> = BTreeMap::new();
 
     let filtered = rows
         .iter()
