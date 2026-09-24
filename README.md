@@ -48,6 +48,7 @@ Required variables:
 | `CLERK_JWKS_URL`         | Clerk JWKS endpoint used to verify session JWTs  |
 | `CLERK_ISSUER`           | Expected Clerk token issuer                      |
 | `CLERK_AUTHORIZED_PARTIES` | Comma-separated trusted web origins (`azp`)    |
+| `CLERK_DEV_ISSUERS`      | Optional comma-separated Clerk development issuers (dev client sign-in); keys from `<issuer>/.well-known/jwks.json` |
 
 Optional:
 

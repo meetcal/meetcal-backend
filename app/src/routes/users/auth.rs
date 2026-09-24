@@ -54,15 +54,50 @@ struct Jwk {
     key_use: Option<String>,
 }
 
+/// Ceiling on how many Clerk instances one verifier trusts: production plus
+/// the development instance the dev client signs in to, with room to spare.
+/// Each instance costs its own JWKS cache and refresh throttle.
+const MAX_CLERK_INSTANCES: usize = 4;
+
 /// Verifies Clerk session tokens against Clerk's rotating RS256 public keys.
+///
+/// Several Clerk instances may be trusted (production, plus the development
+/// instance a dev client signs in to). Each keeps its own key set, and a token
+/// is only ever checked against the keys of the instance its `iss` names, so a
+/// key from one instance can never vouch for a token claiming another.
 pub struct AuthVerifier {
-    jwks_url: Option<String>,
-    issuer: String,
+    instances: Vec<ClerkInstance>,
     authorized_parties: Vec<String>,
-    audience: Option<String>,
     client: reqwest::Client,
+}
+
+/// One trusted Clerk instance: its issuer, where its keys live, and the cache
+/// of those keys.
+struct ClerkInstance {
+    issuer: String,
+    jwks_url: Option<String>,
+    /// Compared against `aud` (see [`AuthVerifier::verify`]). Only production
+    /// takes `CLERK_AUDIENCE`.
+    audience: Option<String>,
     keys: RwLock<HashMap<String, Arc<DecodingKey>>>,
     refresh: Mutex<RefreshClock>,
+}
+
+impl ClerkInstance {
+    fn new(
+        issuer: String,
+        jwks_url: Option<String>,
+        audience: Option<String>,
+        keys: HashMap<String, Arc<DecodingKey>>,
+    ) -> Self {
+        Self {
+            issuer,
+            jwks_url,
+            audience,
+            keys: RwLock::new(keys),
+            refresh: Mutex::new(RefreshClock::default()),
+        }
+    }
 }
 
 /// When the JWKS was last fetched, kept separately for success and failure so
@@ -122,16 +157,27 @@ impl AuthVerifier {
 
         let jwks_url = jwks_url.ok_or_else(|| anyhow::anyhow!("CLERK_JWKS_URL is required"))?;
         let issuer = issuer.ok_or_else(|| anyhow::anyhow!("CLERK_ISSUER is required"))?;
-        let authorized_parties = authorized_parties
-            .ok_or_else(|| anyhow::anyhow!("CLERK_AUTHORIZED_PARTIES is required"))?
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
+        let authorized_parties = split_list(
+            &authorized_parties
+                .ok_or_else(|| anyhow::anyhow!("CLERK_AUTHORIZED_PARTIES is required"))?,
+        );
 
         if authorized_parties.is_empty() {
             anyhow::bail!("CLERK_AUTHORIZED_PARTIES must contain at least one origin");
+        }
+
+        let mut instances = vec![ClerkInstance::new(
+            issuer,
+            Some(jwks_url),
+            std::env::var("CLERK_AUDIENCE").ok(),
+            HashMap::new(),
+        )];
+        let dev_issuers = std::env::var("CLERK_DEV_ISSUERS").unwrap_or_default();
+        for dev_issuer in split_list(&dev_issuers) {
+            instances.push(dev_instance(&dev_issuer)?);
+        }
+        if instances.len() > MAX_CLERK_INSTANCES {
+            anyhow::bail!("at most {MAX_CLERK_INSTANCES} Clerk issuers may be trusted");
         }
 
         let client = reqwest::Client::builder()
@@ -139,13 +185,9 @@ impl AuthVerifier {
             .build()?;
 
         Ok(Some(Arc::new(Self {
-            jwks_url: Some(jwks_url),
-            issuer,
+            instances,
             authorized_parties,
-            audience: std::env::var("CLERK_AUDIENCE").ok(),
             client,
-            keys: RwLock::new(HashMap::new()),
-            refresh: Mutex::new(RefreshClock::default()),
         })))
     }
 
@@ -157,27 +199,44 @@ impl AuthVerifier {
         authorized_parties: Vec<String>,
         audience: Option<String>,
     ) -> anyhow::Result<Arc<Self>> {
-        let key = DecodingKey::from_rsa_pem(public_key_pem)?;
-        Ok(Arc::new(Self {
-            jwks_url: None,
-            issuer: issuer.to_owned(),
+        Self::from_rsa_pems(
+            &[(kid, public_key_pem, issuer, audience)],
             authorized_parties,
-            audience,
+        )
+    }
+
+    /// Creates a verifier trusting several fixed-key instances, one per
+    /// `(kid, public key PEM, issuer, audience)`, with no network access.
+    pub fn from_rsa_pems(
+        instances: &[(&str, &[u8], &str, Option<String>)],
+        authorized_parties: Vec<String>,
+    ) -> anyhow::Result<Arc<Self>> {
+        let mut trusted = Vec::with_capacity(instances.len());
+        for (kid, public_key_pem, issuer, audience) in instances {
+            let key = DecodingKey::from_rsa_pem(public_key_pem)?;
+            trusted.push(ClerkInstance::new(
+                (*issuer).to_owned(),
+                None,
+                audience.clone(),
+                HashMap::from([((*kid).to_owned(), Arc::new(key))]),
+            ));
+        }
+        Ok(Arc::new(Self {
+            instances: trusted,
+            authorized_parties,
             client: reqwest::Client::new(),
-            keys: RwLock::new(HashMap::from([(kid.to_owned(), Arc::new(key))])),
-            refresh: Mutex::new(RefreshClock::default()),
         }))
     }
 
-    /// Re-fetch Clerk's key set, throttled by [`RefreshClock`]. The lock is held
-    /// across the fetch so concurrent unknown-`kid` requests queue behind one
-    /// network round trip instead of each starting their own.
-    async fn refresh_keys(&self) -> Result<(), JwksRefreshError> {
-        let url = self
+    /// Re-fetch one instance's key set, throttled by its [`RefreshClock`]. The
+    /// lock is held across the fetch so concurrent unknown-`kid` requests queue
+    /// behind one network round trip instead of each starting their own.
+    async fn refresh_keys(&self, instance: &ClerkInstance) -> Result<(), JwksRefreshError> {
+        let url = instance
             .jwks_url
             .as_ref()
             .ok_or(JwksRefreshError::NotConfigured)?;
-        let mut clock = self.refresh.lock().await;
+        let mut clock = instance.refresh.lock().await;
         if clock
             .last_success
             .is_some_and(|at| at.elapsed() < MIN_JWKS_REFRESH_INTERVAL)
@@ -193,7 +252,7 @@ impl AuthVerifier {
 
         match self.fetch_keys(url).await {
             Ok(next_keys) => {
-                *self.keys.write().await = next_keys;
+                *instance.keys.write().await = next_keys;
                 // Stamped only now: a failed fetch must not start the 60s
                 // refresh interval, or a rotated key stays unknown until it ends.
                 clock.last_success = Some(Instant::now());
@@ -242,20 +301,31 @@ impl AuthVerifier {
         }
         let kid = header.kid.ok_or(AppError::Unauthorized)?;
 
-        let mut key = self.keys.read().await.get(&kid).cloned();
+        // The unverified `iss` only picks which instance's keys to try; the
+        // signature and the issuer are then both checked against that one
+        // instance below, so a forged `iss` just selects keys that cannot
+        // verify the token.
+        let claimed_issuer = unverified_issuer(token).ok_or(AppError::Unauthorized)?;
+        let instance = self
+            .instances
+            .iter()
+            .find(|instance| instance.issuer == claimed_issuer)
+            .ok_or(AppError::Unauthorized)?;
+
+        let mut key = instance.keys.read().await.get(&kid).cloned();
         if key.is_none() {
-            self.refresh_keys()
+            self.refresh_keys(instance)
                 .await
                 .map_err(|_| AppError::Unauthorized)?;
-            key = self.keys.read().await.get(&kid).cloned();
+            key = instance.keys.read().await.get(&kid).cloned();
         }
         let key = key.ok_or(AppError::Unauthorized)?;
 
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_required_spec_claims(&["exp", "iss", "sub"]);
-        validation.set_issuer(&[self.issuer.as_str()]);
+        validation.set_issuer(&[instance.issuer.as_str()]);
         validation.validate_nbf = true;
-        if let Some(audience) = self.audience.as_deref() {
+        if let Some(audience) = instance.audience.as_deref() {
             validation.set_audience(&[audience]);
             // `jsonwebtoken` only compares `aud` when the claim is present. A
             // native Clerk session token carries no `azp` (that claim is the
@@ -270,7 +340,7 @@ impl AuthVerifier {
             .map_err(|_| AppError::Unauthorized)?
             .claims;
 
-        if claims.sub.trim().is_empty() || claims.iss != self.issuer {
+        if claims.sub.trim().is_empty() || claims.iss != instance.issuer {
             return Err(AppError::Unauthorized);
         }
         // `azp` is Clerk's web origin claim: present on browser sessions (and
@@ -286,6 +356,50 @@ impl AuthVerifier {
 
         Ok(claims.sub)
     }
+}
+
+/// Split a comma-separated environment list, dropping blanks.
+fn split_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A Clerk development instance named in `CLERK_DEV_ISSUERS`, whose keys are
+/// published at the issuer's standard JWKS path. Only `https://` issuers are
+/// accepted, since the keys fetched from there decide who is signed in.
+fn dev_instance(issuer: &str) -> anyhow::Result<ClerkInstance> {
+    let issuer = issuer.trim_end_matches('/');
+    if !issuer.starts_with("https://") {
+        anyhow::bail!("CLERK_DEV_ISSUERS entries must be https:// URLs, got {issuer}");
+    }
+    let jwks_url = format!("{issuer}/.well-known/jwks.json");
+    Ok(ClerkInstance::new(
+        issuer.to_owned(),
+        Some(jwks_url),
+        None,
+        HashMap::new(),
+    ))
+}
+
+/// The `iss` claim of a token, read without verifying anything. Used only to
+/// choose which trusted instance's keys to verify the token with.
+fn unverified_issuer(token: &str) -> Option<String> {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    #[derive(Deserialize)]
+    struct IssuerOnly {
+        iss: String,
+    }
+
+    let payload = token.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    serde_json::from_slice::<IssuerOnly>(&bytes)
+        .ok()
+        .map(|claims| claims.iss)
 }
 
 /// Keep the RS256 signing keys from a JWKS response, at most [`MAX_JWKS_KEYS`]
@@ -654,13 +768,14 @@ mod tests {
     /// A verifier that starts with an empty cache and refreshes from `url`.
     fn network_verifier(url: &str) -> AuthVerifier {
         AuthVerifier {
-            jwks_url: Some(url.to_string()),
-            issuer: ISSUER.to_string(),
+            instances: vec![ClerkInstance::new(
+                ISSUER.to_string(),
+                Some(url.to_string()),
+                None,
+                HashMap::new(),
+            )],
             authorized_parties: vec![AZP.to_string()],
-            audience: None,
             client: reqwest::Client::builder().no_proxy().build().unwrap(),
-            keys: RwLock::new(HashMap::new()),
-            refresh: Mutex::new(RefreshClock::default()),
         }
     }
 
@@ -680,7 +795,7 @@ mod tests {
         assert!(verifier.verify(&good).await.is_err());
         assert_eq!(stub.hits(), 1);
         {
-            let clock = verifier.refresh.lock().await;
+            let clock = verifier.instances[0].refresh.lock().await;
             assert!(clock.last_success.is_none());
             assert!(clock.last_failure.is_some());
         }
@@ -692,14 +807,14 @@ mod tests {
         // Once the backoff lapses the next request retries -- well before the
         // 60s interval a success would have started.
         rewind(
-            &mut verifier.refresh.lock().await.last_failure,
+            &mut verifier.instances[0].refresh.lock().await.last_failure,
             JWKS_FAILURE_BACKOFF,
         );
         stub.set_healthy(true);
         assert_eq!(verifier.verify(&good).await.unwrap(), "user_123");
         assert_eq!(stub.hits(), 2);
         {
-            let clock = verifier.refresh.lock().await;
+            let clock = verifier.instances[0].refresh.lock().await;
             assert!(clock.last_success.is_some());
             assert!(clock.last_failure.is_none());
         }
@@ -722,10 +837,166 @@ mod tests {
 
         // After the interval the same request is allowed one more fetch.
         rewind(
-            &mut verifier.refresh.lock().await.last_success,
+            &mut verifier.instances[0].refresh.lock().await.last_success,
             MIN_JWKS_REFRESH_INTERVAL,
         );
         assert!(verifier.verify(&bogus).await.is_err());
         assert_eq!(stub.hits(), 2);
+    }
+
+    const DEV_KID: &str = "meetcal-dev-key";
+    const DEV_ISSUER: &str = "https://dev.clerk.test";
+
+    /// A second keypair standing in for the Clerk development instance.
+    static DEV_KEYS: LazyLock<TestKeys> = LazyLock::new(|| {
+        let private = RsaPrivateKey::new(&mut OsRng, 2048).expect("generate dev RSA key");
+        let public = RsaPublicKey::from(&private);
+        TestKeys {
+            private_pem: private
+                .to_pkcs8_pem(LineEnding::LF)
+                .expect("encode dev private key")
+                .to_string(),
+            public_pem: public
+                .to_public_key_pem(LineEnding::LF)
+                .expect("encode dev public key"),
+        }
+    });
+
+    /// A native (no `azp`, no `aud`) token signed with `keys`.
+    fn native_token_signed_by(keys: &TestKeys, kid: &str, issuer: &str) -> String {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(kid.to_string());
+        encode(
+            &header,
+            &Claims {
+                sub: "user_dev",
+                iss: issuer,
+                azp: None,
+                aud: None,
+                exp: now + 300,
+                nbf: now - 1,
+            },
+            &EncodingKey::from_rsa_pem(keys.private_pem.as_bytes()).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn prod_and_dev_verifier(prod_audience: Option<&str>) -> Arc<AuthVerifier> {
+        AuthVerifier::from_rsa_pems(
+            &[
+                (
+                    KID,
+                    TEST_KEYS.public_pem.as_bytes(),
+                    ISSUER,
+                    prod_audience.map(str::to_string),
+                ),
+                (DEV_KID, DEV_KEYS.public_pem.as_bytes(), DEV_ISSUER, None),
+            ],
+            vec![AZP.to_string()],
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_trusted_dev_instance_token_verifies_alongside_production() {
+        let verifier = prod_and_dev_verifier(None);
+        assert_eq!(
+            verifier
+                .verify(&native_token_signed_by(&DEV_KEYS, DEV_KID, DEV_ISSUER))
+                .await
+                .unwrap(),
+            "user_dev"
+        );
+        assert_eq!(
+            verifier
+                .verify(&token_with(KID, ISSUER, None, None, false))
+                .await
+                .unwrap(),
+            "user_123"
+        );
+    }
+
+    #[tokio::test]
+    async fn dev_instance_tokens_are_rejected_unless_that_issuer_is_trusted() {
+        assert!(
+            verifier()
+                .verify(&native_token_signed_by(&DEV_KEYS, DEV_KID, DEV_ISSUER))
+                .await
+                .is_err()
+        );
+    }
+
+    /// Keys are bound to their instance: a dev key cannot sign for the
+    /// production issuer, nor a production key for the dev issuer, even when
+    /// the token names a `kid` the other instance knows.
+    #[tokio::test]
+    async fn one_instance_key_never_verifies_a_token_claiming_another() {
+        let verifier = prod_and_dev_verifier(None);
+        for kid in [DEV_KID, KID] {
+            assert!(
+                verifier
+                    .verify(&native_token_signed_by(&DEV_KEYS, kid, ISSUER))
+                    .await
+                    .is_err(),
+                "dev key signing as production (kid {kid})"
+            );
+            assert!(
+                verifier
+                    .verify(&native_token_signed_by(&TEST_KEYS, kid, DEV_ISSUER))
+                    .await
+                    .is_err(),
+                "production key signing as dev (kid {kid})"
+            );
+        }
+    }
+
+    /// `CLERK_AUDIENCE` belongs to production; it does not reach the dev
+    /// instance, whose native tokens carry no `aud`.
+    #[tokio::test]
+    async fn production_audience_does_not_apply_to_the_dev_instance() {
+        let verifier = prod_and_dev_verifier(Some("meetcal-api"));
+        assert_eq!(
+            verifier
+                .verify(&native_token_signed_by(&DEV_KEYS, DEV_KID, DEV_ISSUER))
+                .await
+                .unwrap(),
+            "user_dev"
+        );
+        assert!(
+            verifier
+                .verify(&token_with(KID, ISSUER, None, None, false))
+                .await
+                .is_err(),
+            "production still requires its audience"
+        );
+    }
+
+    #[test]
+    fn dev_issuers_must_be_https_and_map_to_their_jwks() {
+        assert!(dev_instance("http://dev.clerk.test").is_err());
+        let instance = dev_instance("https://dev.clerk.test/").unwrap();
+        assert_eq!(instance.issuer, "https://dev.clerk.test");
+        assert_eq!(
+            instance.jwks_url.as_deref(),
+            Some("https://dev.clerk.test/.well-known/jwks.json")
+        );
+        assert!(instance.audience.is_none());
+    }
+
+    #[test]
+    fn unverified_issuer_reads_iss_and_rejects_malformed_tokens() {
+        assert_eq!(
+            unverified_issuer(&token(ISSUER, AZP, false)).as_deref(),
+            Some(ISSUER)
+        );
+        assert_eq!(unverified_issuer(""), None);
+        assert_eq!(unverified_issuer("only-one-part"), None);
+        assert_eq!(unverified_issuer("a.!!!.c"), None);
+        // `e30` is `{}`: valid JSON with no `iss`.
+        assert_eq!(unverified_issuer("e30.e30.sig"), None);
     }
 }
