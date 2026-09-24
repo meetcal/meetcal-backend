@@ -451,8 +451,8 @@ async fn slack_scraper_control_endpoints() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Slack bodies get the global [`app::DEFAULT_BODY_LIMIT`], not the 64 KiB
-/// name-list cap: a body over 64 KiB still reaches signature verification, and
+/// Slack bodies get the global [`app::DEFAULT_BODY_LIMIT`], not the name-list
+/// cap: a body over that cap still reaches signature verification, and
 /// one past the global limit is a JSON `413` before it is buffered.
 #[tokio::test]
 async fn slack_bodies_use_the_global_body_limit() {

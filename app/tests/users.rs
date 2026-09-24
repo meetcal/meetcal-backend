@@ -637,7 +637,8 @@ async fn a_saved_session_at_every_field_cap_fits_under_the_body_limit() {
     let app = support::spawn_test_app().await;
     let client = reqwest::Client::new();
     let user = "test-user-body-limit-max";
-    // Four-byte characters everywhere: the worst case the limit is sized for.
+    // Astral characters everywhere, each sent as a 12-byte surrogate-pair
+    // escape: the worst case the limit is sized for.
     let wide = |count: usize| "\u{1F3CB}".repeat(count);
     let body = json!({
         "meet": wide(MAX_SAVED_SESSION_MEET_LEN),
@@ -647,8 +648,21 @@ async fn a_saved_session_at_every_field_cap_fits_under_the_body_limit() {
         "athlete_names": (0..MAX_SAVED_SESSION_ATHLETE_NAMES)
             .map(|_| wide(MAX_SAVED_SESSION_ATHLETE_NAME_LEN))
             .collect::<Vec<_>>(),
-    });
-    let response = put_session(&client, &app, user, "max-fields", body).await;
+    })
+    .to_string()
+    .replace('\u{1F3CB}', r"\ud83c\udfcb");
+    assert!(body.len() > 120 * 1024, "the body really is escaped");
+    let response = client
+        .put(format!(
+            "{}/users/me/saved-sessions/max-fields",
+            app.address
+        ))
+        .bearer_auth(support::test_token(user))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(response.status(), 200);
 
     client

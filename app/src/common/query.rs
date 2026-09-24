@@ -9,15 +9,25 @@ pub const MAX_NAME_LIST_LEN: usize = 100;
 /// [`MAX_NAME_LIST_LEN`]. Like the list cap it is not version-gated: name
 /// lists fail closed for every client.
 pub const MAX_NAME_LEN: usize = 400;
+/// Worst-case JSON bytes per decoded UTF-8 byte: a one-byte control character
+/// sent as a `\u00XX` escape. (A four-byte astral character sent as a
+/// `\uXXXX\uXXXX` surrogate pair is 12 bytes, only 3 per decoded byte.)
+pub const MAX_JSON_BYTES_PER_UTF8_BYTE: usize = 6;
+/// Worst-case JSON bytes per decoded character: an astral character sent as a
+/// surrogate-pair escape.
+pub const MAX_JSON_BYTES_PER_CHAR: usize = 12;
 /// Request-body ceiling for the `POST` name-list endpoints
 /// (`/lifting-results/by-names`, `/recent`, `/bests`). A maximal valid body is
-/// [`MAX_NAME_LIST_LEN`] names of [`MAX_NAME_LEN`] bytes (40,000 bytes) plus
-/// quotes and commas (~400 bytes) and the optional scalar fields (~100 bytes),
-/// so 64 KiB admits every body that can pass validation with room for
-/// pretty-printing, and rejects anything larger with `413` before it is
-/// buffered.
-pub const NAME_LIST_BODY_LIMIT: usize = 64 * 1024;
-const _: () = assert!(MAX_NAME_LIST_LEN * (MAX_NAME_LEN + 4) + 1024 <= NAME_LIST_BODY_LIMIT);
+/// [`MAX_NAME_LIST_LEN`] names of [`MAX_NAME_LEN`] decoded bytes; with every
+/// byte escaped by an ASCII-only serializer that is 240,000 bytes, plus quotes
+/// and commas (~400 bytes) and the optional scalar fields (~100 bytes). 256 KiB
+/// admits every body that can pass validation however it is encoded, and
+/// rejects anything larger with `413` before it is buffered.
+pub const NAME_LIST_BODY_LIMIT: usize = 256 * 1024;
+const _: () = assert!(
+    MAX_NAME_LIST_LEN * (MAX_NAME_LEN * MAX_JSON_BYTES_PER_UTF8_BYTE + 4) + 1024
+        <= NAME_LIST_BODY_LIMIT
+);
 pub const MAX_SAVED_SESSION_ATHLETE_NAMES: usize = 64;
 
 #[derive(Deserialize)]
