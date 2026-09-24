@@ -1,6 +1,7 @@
 use app::{
     common::query::MAX_SAVED_SESSION_ATHLETE_NAMES,
     routes::users::{
+        USER_WRITE_BODY_LIMIT,
         preferences::UserPreferencesResponse,
         saved_sessions::{
             DeleteSavedSessionResponse, DeleteSavedSessionsResponse,
@@ -593,4 +594,67 @@ async fn rls_isolates_saved_sessions_under_api_role() {
     );
 
     tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn user_writes_answer_413_json_past_the_body_limit() {
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+    let user = "test-user-body-limit";
+    let notes = "n".repeat(USER_WRITE_BODY_LIMIT);
+    let oversized =
+        json!({ "meet": "M", "session_number": 1.0, "platform": "Red", "notes": notes })
+            .to_string();
+
+    let response = client
+        .put(format!("{}/users/me/saved-sessions/too-big", app.address))
+        .bearer_auth(support::test_token(user))
+        .header("content-type", "application/json")
+        .body(oversized)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 413);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body, json!({ "error": "request body too large" }));
+
+    let padded = format!(r#"{{"enabled":true{}}}"#, " ".repeat(USER_WRITE_BODY_LIMIT));
+    let response = client
+        .patch(format!("{}/users/me/preferences/auto-unsave", app.address))
+        .bearer_auth(support::test_token(user))
+        .header("content-type", "application/json")
+        .body(padded)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 413);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body, json!({ "error": "request body too large" }));
+}
+
+#[tokio::test]
+async fn a_saved_session_at_every_field_cap_fits_under_the_body_limit() {
+    let app = support::spawn_test_app().await;
+    let client = reqwest::Client::new();
+    let user = "test-user-body-limit-max";
+    // Four-byte characters everywhere: the worst case the limit is sized for.
+    let wide = |count: usize| "\u{1F3CB}".repeat(count);
+    let body = json!({
+        "meet": wide(MAX_SAVED_SESSION_MEET_LEN),
+        "session_number": 1.0,
+        "platform": "Red",
+        "notes": wide(MAX_SAVED_SESSION_NOTES_LEN),
+        "athlete_names": (0..MAX_SAVED_SESSION_ATHLETE_NAMES)
+            .map(|_| wide(MAX_SAVED_SESSION_ATHLETE_NAME_LEN))
+            .collect::<Vec<_>>(),
+    });
+    let response = put_session(&client, &app, user, "max-fields", body).await;
+    assert_eq!(response.status(), 200);
+
+    client
+        .delete(format!("{}/users/me/saved-sessions", app.address))
+        .bearer_auth(support::test_token(user))
+        .send()
+        .await
+        .unwrap();
 }

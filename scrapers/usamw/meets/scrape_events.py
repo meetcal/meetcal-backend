@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 
 try:
-    from common.postgres_ingest import IngestClient
+    from common.postgres_ingest import IngestClient, RowFailure
 except ImportError:
     print("Error: postgres ingest helpers not importable. Set PYTHONPATH to scrapers/")
     sys.exit(1)
@@ -423,9 +423,13 @@ class USAMWEventsScraper:
         print("UPDATING DATABASE")
         print("="*60 + "\n")
         
+        # Each meet is an independent upsert: a bad event is reported and
+        # skipped (its own savepoint), the rest are written on one connection.
+        batch_events = []
+        rows = []
         for event in events:
             try:
-                result = self.ingest.action("scraperIngestion:ingestMeet", {
+                rows.append({
                     "scraperSecret": self.scraper_secret,
                     "name": event['name'],
                     "venueName": event['venue_name'],
@@ -439,13 +443,26 @@ class USAMWEventsScraper:
                     "status": event['status'],
                     "federation": event['federation'],
                 })
-                if result.get("wasInsert"):
-                    print(f"  Ingested: {event['name']}")
-                    inserted.append(event)
-                else:
-                    skipped.append(event)
+                batch_events.append(event)
             except Exception as e:
+                print(f"  Error ingesting {event.get('name')}: {e}")
+
+        try:
+            results = self.ingest.actions_skipping_errors("scraperIngestion:ingestMeet", rows)
+        except Exception as e:
+            # Connection-level failure: nothing in the batch was written.
+            for event in batch_events:
                 print(f"  Error ingesting {event['name']}: {e}")
+            results = []
+
+        for event, result in zip(batch_events, results):
+            if isinstance(result, RowFailure):
+                print(f"  Error ingesting {event['name']}: {result.error}")
+            elif result.get("wasInsert"):
+                print(f"  Ingested: {event['name']}")
+                inserted.append(event)
+            else:
+                skipped.append(event)
         
         return {'inserted': inserted, 'skipped': skipped}
     

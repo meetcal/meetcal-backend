@@ -744,15 +744,22 @@ def upsert_athlete(
             convex_id,
         )
     else:
-        lookup_sql = """
+        # A federated identity is (meet, member id, name) under the normalized
+        # name rule, so a source that re-cases or re-spaces a name ("JANE
+        # DOE", "Jane  Doe") updates the row it already wrote rather than
+        # inserting a second one. The matched row keeps its convex_id (the
+        # upsert below targets it), so rows keyed by the original spelling are
+        # never orphaned. An exact convex_id match wins when both exist.
+        lookup_sql = f"""
             SELECT id, convex_id, member_id, name, age, club, wso, gender, weight_class,
                 entry_total, session_number, session_platform, meet, adaptive
             FROM athletes
             WHERE convex_id = %s
-                OR (meet = %s AND member_id = %s AND name = %s)
+                OR (meet = %s AND member_id = %s AND {NORMALIZED_NAME_SQL} = %s)
+            ORDER BY CASE WHEN convex_id = %s THEN 0 ELSE 1 END, id
             LIMIT 1
         """
-        lookup_params = (convex_id, meet, member_id, name)
+        lookup_params = (convex_id, meet, member_id, normalize_name(name), convex_id)
     if preserve_assigned_session:
         lookup_sql += " FOR UPDATE"
     existing = conn.execute(lookup_sql, lookup_params).fetchone()

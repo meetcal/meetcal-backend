@@ -6,6 +6,9 @@ const fs = require('fs');
 const https = require('https');
 const path = require('path');
 const { spawnSync } = require('child_process');
+// Missing membership numbers get a deterministic `noid:` placeholder; the rule
+// is shared with the Python writer and checked by a parity test.
+const { placeholderMemberId } = require('./placeholder_member_id');
 
 if (!process.env.DATABASE_URL) {
     console.error('Missing DATABASE_URL. Exiting.');
@@ -227,16 +230,6 @@ async function scrapeWeightliftingData() {
 
 async function updateDatabase(entries) {
     return updatePostgres(entries);
-}
-
-// Deterministic stand-in for a missing membership number. Mirrors
-// `placeholder_member_id` in scrapers/common/normalize.py: the writer keys an
-// athlete carrying a `noid:` id on (meet, normalized name), so every nightly
-// re-scrape updates the same row instead of minting a new one.
-function placeholderMemberId(name) {
-    const normalized = String(name || '').split(/\s+/).filter(Boolean).join(' ').toLowerCase();
-    const slug = normalized.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-    return `noid:${slug}`;
 }
 
 function updatePostgres(entries) {

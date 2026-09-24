@@ -54,7 +54,8 @@ def is_placeholder_member_id(value: Any) -> bool:
 def placeholder_member_id(name: Any) -> str:
     """Deterministic stand-in for a missing member id, derived from the name.
 
-    Mirrors `placeholderMemberId` in usaw/entry_scraper/csv_scraper.js.
+    Mirrors `placeholderMemberId` in usaw/entry_scraper/placeholder_member_id.js;
+    parity is checked by common/tests/test_placeholder_parity.py.
     """
     slug = re.sub(r"[^a-z0-9]+", "-", normalize_name(name)).strip("-")
     return f"{MEMBER_ID_PLACEHOLDER_PREFIX}{slug}"

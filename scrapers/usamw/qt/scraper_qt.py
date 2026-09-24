@@ -389,15 +389,21 @@ class USAMWQTScraper:
         print("UPDATING DATABASE")
         print("="*60 + "\n")
 
-        for record in records:
-            result = self.ingest.action("scraperIngestion:ingestQualifyingTotal", {
+        # One event's qualifying totals are one published set: write them on
+        # one connection in one transaction, so a failing row (which raises, as
+        # it always did) leaves the previous set intact instead of half-updated.
+        results = self.ingest.actions("scraperIngestion:ingestQualifyingTotal", [
+            {
                 "scraperSecret": self.scraper_secret,
                 "eventName": record['event_name'],
                 "gender": record['gender'],
                 "ageCategory": record['age_category'],
                 "weightClass": record['weight_class'],
                 "qualifyingTotal": int(record['qualifying_total']),
-            })
+            }
+            for record in records
+        ])
+        for record, result in zip(records, results):
             if result.get('wasInsert'):
                 inserted.append(record)
             else:
