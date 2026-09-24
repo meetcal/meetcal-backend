@@ -147,12 +147,42 @@ def read_payload(
     return payload
 
 
-def main() -> int:
-    if len(sys.argv) != 2:
-        print("Usage: postgres_ingest.py <scraperIngestion:path>", file=sys.stderr)
+USAGE = "Usage: postgres_ingest.py [--skip-errors] <scraperIngestion:path>"
+SKIP_ERRORS_FLAG = "--skip-errors"
+
+
+def _row_failure_json(failure: RowFailure) -> dict[str, Any]:
+    """How ``--skip-errors`` reports a row it could not write.
+
+    ``rowError`` is a key no dispatch result uses (``skipped`` is taken: an
+    entry athlete whose session is already assigned reports ``skipped``).
+    """
+    return {"rowError": str(failure.error), "index": failure.index}
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Read one JSON payload from stdin and dispatch it on one connection.
+
+    ``postgres_ingest.py <path>`` writes every row in one transaction
+    (``IngestClient.actions``): any failing row rolls the whole payload back
+    and the process exits non-zero. ``postgres_ingest.py --skip-errors <path>``
+    gives each row its own savepoint (``IngestClient.actions_skipping_errors``)
+    and exits 0 once the transaction commits; a row that failed is reported in
+    its place in the output as ``{"rowError": "...", "index": i}``.
+    Exit 3 means stdin was over ``MAX_STDIN_BYTES`` / ``MAX_STDIN_ROWS`` and
+    nothing was written.
+    """
+    args = sys.argv[1:] if argv is None else argv
+    skip_errors = False
+    if len(args) == 2 and args[0] == SKIP_ERRORS_FLAG:
+        skip_errors = True
+        path = args[1]
+    elif len(args) == 1 and not args[0].startswith("-"):
+        path = args[0]
+    else:
+        print(USAGE, file=sys.stderr)
         return 2
 
-    path = sys.argv[1]
     try:
         payload = read_payload(sys.stdin.buffer)
     except PayloadTooLarge as error:
@@ -160,7 +190,13 @@ def main() -> int:
         return 3
     rows = payload if isinstance(payload, list) else [payload]
 
-    results = IngestClient().actions(path, rows)
+    if skip_errors:
+        results = [
+            _row_failure_json(result) if isinstance(result, RowFailure) else result
+            for result in IngestClient().actions_skipping_errors(path, rows)
+        ]
+    else:
+        results = IngestClient().actions(path, rows)
 
     print(json.dumps(results if isinstance(payload, list) else results[0]))
     return 0

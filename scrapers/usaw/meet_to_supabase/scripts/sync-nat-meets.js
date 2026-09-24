@@ -1,7 +1,9 @@
 require('dotenv').config();
 const axios = require('axios');
 const path = require('path');
-const { spawnSync } = require('child_process');
+// All meets go to Postgres in one ingest process per run (chunked under the
+// ingest stdin caps); see lib/meet_ingest.js.
+const { ingestMeets, lookupMeetStatuses } = require(path.join(__dirname, '..', 'lib', 'meet_ingest.js'));
 
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
 const API_URL = 'https://usaweightlifting.sport80.com/api/public/widget/data/new/1?p=0&i=20&s=Nationals&l=&d=10&f=';
@@ -146,39 +148,6 @@ function transformMeetsData(meetsData) {
   }).filter(meet => meet.startDate && meet.endDate && !meet.name.toUpperCase().includes('ADAPTIVE'));
 }
 
-async function ingestMeet(meet) {
-  return ingestMeetToPostgres(meet);
-}
-
-function ingestMeetToPostgres(meet) {
-  const ingestScript = path.resolve(__dirname, '../../../common/postgres_ingest.py');
-  const python = process.env.POSTGRES_INGEST_PYTHON || 'python3';
-  const result = spawnSync(python, [ingestScript, 'scraperIngestion:ingestMeet'], {
-    input: JSON.stringify({
-      name: meet.name,
-      venueName: meet.venueName,
-      venueStreet: meet.venueStreet,
-      venueCity: meet.venueCity,
-      venueState: meet.venueState,
-      venueZip: meet.venueZip,
-      timeZone: meet.timeZone,
-      startDate: meet.startDate,
-      endDate: meet.endDate,
-      status: meet.status,
-      federation: meet.federation,
-    }),
-    encoding: 'utf8',
-    env: process.env,
-  });
-
-  if (result.status !== 0) {
-    throw new Error(result.stderr || result.stdout || `Postgres ingest failed with exit code ${result.status}`);
-  }
-
-  const parsed = JSON.parse(result.stdout);
-  return Boolean(parsed.wasInsert);
-}
-
 async function retry(fn, maxRetries = 3) {
   let retries = 0;
   while (retries < maxRetries) {
@@ -211,23 +180,29 @@ async function syncMeets() {
     }
     const transformedMeets = transformMeetsData(meetsData);
     console.log(`Fetched ${meetsData.length} meets, ${transformedMeets.length} valid`);
+    const { outcomes, chunkFailures } = ingestMeets(transformedMeets);
     let insertCount = 0;
+    let failedCount = 0;
     const addedMeetNames = [];
-    for (const meet of transformedMeets) {
-      try {
-        const wasInsert = await ingestMeet(meet);
-        if (wasInsert) {
-          insertCount++;
-          addedMeetNames.push(meet.name);
-          console.log(`Ingested: ${meet.name}`);
-        }
-      } catch (error) {
-        console.error(`Error ingesting "${meet.name}":`, error.message);
+    // A meet that failed is logged and skipped; the others are still written.
+    for (const outcome of outcomes) {
+      if (!outcome.ok) {
+        failedCount++;
+        console.error(`Error ingesting "${outcome.meet.name}":`, outcome.error);
+        continue;
       }
-      await new Promise(r => setTimeout(r, 200));
+      if (outcome.wasInsert) {
+        insertCount++;
+        addedMeetNames.push(outcome.meet.name);
+        console.log(`Ingested: ${outcome.meet.name}`);
+      }
     }
     console.log(`Sync completed. Processed ${transformedMeets.length} meets. Ingested: ${insertCount}`);
+    if (failedCount > 0) console.error(`Failed to ingest ${failedCount} of ${outcomes.length} meets.`);
     await sendSlackNotification(insertCount, addedMeetNames);
+    // A whole ingest call failing (database down, CLI refused the payload) is a
+    // failed run for cron; individual skipped meets are not, as before.
+    if (chunkFailures > 0) process.exitCode = 1;
   } catch (error) {
     console.error('Error in syncMeets:', error);
     process.exit(1);
