@@ -1,7 +1,8 @@
-use crate::common::{client::ClientVersion, sort::sort_by_class};
+use crate::common::{client::ClientVersion, http_cache::cacheable_json, sort::sort_by_class};
 use crate::{AppError, AppState};
-use axum::Json;
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
 
@@ -33,6 +34,9 @@ pub struct WsoRecord {
 /// curl 'https://api.meetcal.app/data/wso/records?wso=Carolina&gender=Men&age_category=Senior' | jq .
 ///
 /// This endpoint takes wso plus optional gender and age category filters and returns wso records
+///
+/// The body carries a strong `ETag` and `Cache-Control: no-cache`; a matching
+/// `If-None-Match` is `304`.
 ///
 /// WSOs:
 ///    "California North",
@@ -70,8 +74,9 @@ pub struct WsoRecord {
 pub async fn get_wso_records(
     State(state): State<AppState>,
     client: ClientVersion,
+    headers: HeaderMap,
     Query(params): Query<WsoRecordParams>,
-) -> Result<Json<Vec<WsoRecord>>, AppError> {
+) -> Result<Response, AppError> {
     client.require_non_empty("wso", &params.wso)?;
     let rows = sqlx::query_as::<_, WsoRecord>(
         r#"
@@ -90,14 +95,16 @@ pub async fn get_wso_records(
 
     let sorted = sort_by_class(rows, |r| r.weight_class.as_str());
 
-    Ok(Json(sorted))
+    cacheable_json(&sorted, &headers)
 }
 
 /// /data/wso/age-groups endpoint
 ///
 /// curl 'https://api.meetcal.app/data/wso/age-groups?wso=Carolina' | jq .
 ///
-/// This endpoint returns the age categories that have records for one WSO.
+/// This endpoint returns the age categories that have records for one WSO. The
+/// body carries a strong `ETag` and `Cache-Control: no-cache`; a matching
+/// `If-None-Match` is `304`.
 ///
 /// [
 ///   "U11",
@@ -107,8 +114,9 @@ pub async fn get_wso_records(
 pub async fn get_wso_age_groups(
     State(state): State<AppState>,
     client: ClientVersion,
+    headers: HeaderMap,
     Query(params): Query<WsoAgeGroupsParams>,
-) -> Result<Json<Vec<String>>, AppError> {
+) -> Result<Response, AppError> {
     client.require_non_empty("wso", &params.wso)?;
     let rows: Vec<(String,)> = sqlx::query_as(
         r#"
@@ -122,7 +130,7 @@ pub async fn get_wso_age_groups(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(
-        rows.into_iter().map(|(age_group,)| age_group).collect(),
-    ))
+    let age_groups: Vec<String> = rows.into_iter().map(|(age_group,)| age_group).collect();
+
+    cacheable_json(&age_groups, &headers)
 }

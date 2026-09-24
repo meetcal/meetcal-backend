@@ -106,13 +106,30 @@ pub const DEFAULT_BODY_LIMIT: usize = 1024 * 1024;
 /// other failure. Axum's extractors (`Json`, `Bytes`, `Form`) answer an
 /// oversized body with `413` and a plain-text message; this rewrites only
 /// that plain-text form, so a handler's own JSON `413` would pass through.
+///
+/// Each rewrite logs one warning with the path and the declared
+/// `Content-Length` (absent for a chunked body), so production logs show
+/// whether a limit ever rejects a real client or Slack payload. Only the path
+/// is logged: the query string can carry athlete names.
 async fn payload_too_large_as_json(request: Request, next: Next) -> Response {
+    // `Uri` clones share its buffer, so this costs no copy of the path.
+    let uri = request.uri().clone();
+    let declared_length = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
     let response = next.run(request).await;
     let is_json = response
         .headers()
         .get(header::CONTENT_TYPE)
         .is_some_and(|value| value.as_bytes().starts_with(b"application/json"));
     if response.status() == StatusCode::PAYLOAD_TOO_LARGE && !is_json {
+        tracing::warn!(
+            path = %uri.path(),
+            content_length = declared_length,
+            "request body over the limit; answered 413"
+        );
         return AppError::PayloadTooLarge.into_response();
     }
     response
@@ -359,5 +376,100 @@ mod timeout_tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+}
+
+#[cfg(test)]
+mod payload_too_large_tests {
+    use super::*;
+    use axum::body::{Body, Bytes, to_bytes};
+    use std::sync::Mutex;
+    use tower::ServiceExt;
+
+    /// Collects formatted log lines so a test can read what was logged.
+    #[derive(Clone, Default)]
+    struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl CapturedLogs {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    async fn echo(body: Bytes) -> String {
+        body.len().to_string()
+    }
+
+    #[tokio::test]
+    async fn an_over_limit_body_is_a_json_413_logged_with_path_and_length_only() {
+        let logs = CapturedLogs::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .with_max_level(Level::WARN)
+            .finish();
+        // The current-thread test runtime polls the whole request on this
+        // thread, so the thread-local default catches the middleware's event.
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let app = Router::new()
+            .route("/echo", post(echo))
+            .layer(DefaultBodyLimit::max(8))
+            .layer(middleware::from_fn(payload_too_large_as_json));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/echo?name=Secret%20Athlete")
+                    .header(header::CONTENT_LENGTH, "16")
+                    .body(Body::from("0123456789abcdef"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        to_bytes(response.into_body(), 1024).await.unwrap();
+
+        let logged = logs.text();
+        assert_eq!(logged.lines().count(), 1, "{logged}");
+        assert!(logged.contains("WARN"), "{logged}");
+        assert!(logged.contains("path=/echo"), "{logged}");
+        assert!(logged.contains("content_length=16"), "{logged}");
+        assert!(
+            !logged.contains("Secret"),
+            "the query is never logged: {logged}"
+        );
+
+        // A body within the limit passes through and logs nothing.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/echo")
+                    .body(Body::from("0123"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(logs.text(), logged);
     }
 }

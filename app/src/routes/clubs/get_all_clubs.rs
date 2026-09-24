@@ -1,11 +1,15 @@
-use crate::{AppError, AppState};
-use axum::Json;
+use crate::{AppError, AppState, common::http_cache::cacheable_json};
 use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::response::Response;
+
 /// /meets endpoint
 ///
 /// curl 'https://api.meetcal.app/clubs' | jq .
 ///
-/// This endpoint takes no input and returns a list of clubs in the db
+/// This endpoint takes no input and returns a list of clubs in the db. The body
+/// carries a strong `ETag` and `Cache-Control: no-cache`; a matching
+/// `If-None-Match` is `304`.
 ///
 /// [
 ///    "12 Labours Barbell",
@@ -19,7 +23,10 @@ use axum::extract::State;
 ///    "ALLSOUTH Barbell",
 ///    "ALPHA BARBELL",
 /// ]
-pub async fn get_all_clubs(State(state): State<AppState>) -> Result<Json<Vec<String>>, AppError> {
+pub async fn get_all_clubs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
     let names: Vec<(String,)> = sqlx::query_as(
         r#"
         SELECT DISTINCT club
@@ -31,5 +38,7 @@ pub async fn get_all_clubs(State(state): State<AppState>) -> Result<Json<Vec<Str
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(names.into_iter().map(|(club,)| club).collect()))
+    let clubs: Vec<String> = names.into_iter().map(|(club,)| club).collect();
+
+    cacheable_json(&clubs, &headers)
 }

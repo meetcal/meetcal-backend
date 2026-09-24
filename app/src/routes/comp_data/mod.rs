@@ -11,11 +11,16 @@ pub mod get_wso_records;
 use std::collections::HashMap;
 
 /// Collapses ranking rows to one per athlete — their heaviest total — heaviest
-/// first.
+/// first, athletes with equal totals in name order.
 ///
 /// `lifting_results` stores one row per meet, so a national ranking has to pick
 /// each athlete's best rather than list them once per competition. Both ranking
 /// endpoints rank the same way; only the row shape differs.
+///
+/// The name tie-break makes the order a function of the data alone. Without it
+/// equal totals came out in `HashMap` iteration order, which differs per
+/// request, so the body (and its strong `ETag`) would change between two
+/// identical requests and a revalidation could never be a `304`.
 fn best_total_per_athlete<T>(
     rows: Vec<T>,
     name: impl Fn(&T) -> &str,
@@ -33,7 +38,11 @@ fn best_total_per_athlete<T>(
     }
 
     let mut ranked: Vec<T> = best.into_values().collect();
-    ranked.sort_by(|left, right| total(right).total_cmp(&total(left)));
+    ranked.sort_by(|left, right| {
+        total(right)
+            .total_cmp(&total(left))
+            .then_with(|| name(left).cmp(name(right)))
+    });
     ranked
 }
 
@@ -77,6 +86,21 @@ mod tests {
             ]),
             vec![("Bo", 240.0), ("Ada", 205.0)]
         );
+    }
+
+    #[test]
+    fn equal_totals_rank_in_name_order_whatever_the_input_order() {
+        let tied = |names: [&'static str; 3]| {
+            rank(
+                names
+                    .into_iter()
+                    .map(|name| Row { name, total: 200.0 })
+                    .collect(),
+            )
+        };
+        let expected = vec![("Ada", 200.0), ("Bo", 200.0), ("Cy", 200.0)];
+        assert_eq!(tied(["Cy", "Ada", "Bo"]), expected);
+        assert_eq!(tied(["Bo", "Cy", "Ada"]), expected);
     }
 
     #[test]

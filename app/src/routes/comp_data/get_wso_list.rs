@@ -1,9 +1,14 @@
-use crate::{AppError, AppState};
-use axum::Json;
+use crate::{AppError, AppState, common::http_cache::cacheable_json};
 use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::response::Response;
+
 /// /data/wso/ endpoint
 ///
 /// curl 'https://api.meetcal.app/data/wso/' | jq .
+///
+/// The body carries a strong `ETag` and `Cache-Control: no-cache`; a matching
+/// `If-None-Match` is `304`.
 ///
 /// This endpoint takes nothing and returns a list of wsos
 ///
@@ -30,7 +35,10 @@ use axum::extract::State;
 ///    "Texas-Oklahoma",
 ///    "Wisconsin"
 /// ]
-pub async fn get_wso_list(State(state): State<AppState>) -> Result<Json<Vec<String>>, AppError> {
+pub async fn get_wso_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
     let rows: Vec<(String,)> = sqlx::query_as(
         r#"
         SELECT DISTINCT wso
@@ -41,5 +49,7 @@ pub async fn get_wso_list(State(state): State<AppState>) -> Result<Json<Vec<Stri
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(rows.into_iter().map(|(wso,)| wso).collect()))
+    let wsos: Vec<String> = rows.into_iter().map(|(wso,)| wso).collect();
+
+    cacheable_json(&wsos, &headers)
 }
