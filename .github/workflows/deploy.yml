@@ -50,10 +50,6 @@ jobs:
       CLERK_JWKS_URL: https://clerk.meetcal.app/.well-known/jwks.json
       CLERK_ISSUER: https://clerk.meetcal.app
       CLERK_AUTHORIZED_PARTIES: https://meetcal.app,https://www.meetcal.app
-      # The development Clerk instance the Expo dev client signs in to. Its
-      # tokens are verified only against its own keys; its users get their own
-      # (separate) saved-sessions rows.
-      CLERK_DEV_ISSUERS: https://ethical-bengal-15.clerk.accounts.dev
     steps:
       - name: Pull and run on prod
         env:

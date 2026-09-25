@@ -54,11 +54,6 @@ struct Jwk {
     key_use: Option<String>,
 }
 
-/// Ceiling on how many Clerk instances one verifier trusts: production plus
-/// the development instance the dev client signs in to, with room to spare.
-/// Each instance costs its own JWKS cache and refresh throttle.
-const MAX_CLERK_INSTANCES: usize = 4;
-
 /// Verifies Clerk session tokens against Clerk's rotating RS256 public keys.
 ///
 /// Several Clerk instances may be trusted (production, plus the development
@@ -203,19 +198,15 @@ impl AuthVerifier {
             anyhow::bail!("CLERK_AUTHORIZED_PARTIES must contain at least one origin");
         }
 
-        let mut instances = vec![ClerkInstance::new(
+        // Production only. The verifier can hold several instances (the tests
+        // use that to prove keys are bound to their issuer), but the deployed
+        // API trusts exactly one: a Clerk test instance lets anyone sign up.
+        let instances = vec![ClerkInstance::new(
             issuer,
             Some(jwks_url),
             std::env::var("CLERK_AUDIENCE").ok(),
             HashMap::new(),
         )];
-        let dev_issuers = std::env::var("CLERK_DEV_ISSUERS").unwrap_or_default();
-        for dev_issuer in split_list(&dev_issuers) {
-            instances.push(dev_instance(&dev_issuer)?);
-        }
-        if instances.len() > MAX_CLERK_INSTANCES {
-            anyhow::bail!("at most {MAX_CLERK_INSTANCES} Clerk issuers may be trusted");
-        }
 
         let client = reqwest::Client::builder()
             .timeout(JWKS_FETCH_TIMEOUT)
@@ -442,23 +433,6 @@ fn split_list(value: &str) -> Vec<String> {
         .filter(|item| !item.is_empty())
         .map(str::to_owned)
         .collect()
-}
-
-/// A Clerk development instance named in `CLERK_DEV_ISSUERS`, whose keys are
-/// published at the issuer's standard JWKS path. Only `https://` issuers are
-/// accepted, since the keys fetched from there decide who is signed in.
-fn dev_instance(issuer: &str) -> anyhow::Result<ClerkInstance> {
-    let issuer = issuer.trim_end_matches('/');
-    if !issuer.starts_with("https://") {
-        anyhow::bail!("CLERK_DEV_ISSUERS entries must be https:// URLs, got {issuer}");
-    }
-    let jwks_url = format!("{issuer}/.well-known/jwks.json");
-    Ok(ClerkInstance::new(
-        issuer.to_owned(),
-        Some(jwks_url),
-        None,
-        HashMap::new(),
-    ))
 }
 
 /// A compact JWS split into its three base64url segments.
@@ -1095,18 +1069,6 @@ mod tests {
                 .is_err(),
             "production still requires its audience"
         );
-    }
-
-    #[test]
-    fn dev_issuers_must_be_https_and_map_to_their_jwks() {
-        assert!(dev_instance("http://dev.clerk.test").is_err());
-        let instance = dev_instance("https://dev.clerk.test/").unwrap();
-        assert_eq!(instance.issuer, "https://dev.clerk.test");
-        assert_eq!(
-            instance.jwks_url.as_deref(),
-            Some("https://dev.clerk.test/.well-known/jwks.json")
-        );
-        assert!(instance.audience.is_none());
     }
 
     #[test]
