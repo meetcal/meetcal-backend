@@ -45,9 +45,8 @@ class WSORecordsDMVScraper:
     def setup_slack(self):
         """Set up Slack webhook URL."""
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
-        if not self.slack_webhook_url:
-            raise ValueError("SLACK_WEBHOOK_URL environment variable not set")
-        print("✓ Slack webhook configured")
+        if self.slack_webhook_url:
+            print("✓ Slack webhook configured")
     
     def _normalize_age_group(self, age_group: str) -> str:
         """
@@ -219,6 +218,8 @@ class WSORecordsDMVScraper:
     
     def send_slack_notification(self) -> None:
         """Send Slack notification with change summary."""
+        if not self.slack_webhook_url:
+            return
         total_inserted = len(self.changes["inserted"])
         total_updated = len(self.changes["updated"])
 
