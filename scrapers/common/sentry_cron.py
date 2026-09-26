@@ -13,6 +13,9 @@ carrying this run's slice of the log, so the alert shows what broke.
 `skipped` records an ok check-in for a run that found the previous one still
 holding the job lock (the stuck run is caught by its own max_runtime).
 
+`send_event` is also how scrapers/urlwatch/sentry_hooks.py reports page
+changes.
+
 Stdlib only: it runs under the system python3 before any venv exists. With
 SENTRY_DSN unset every command is a no-op, and a Sentry failure is logged to
 stderr but never changes the job's exit status.
@@ -46,6 +49,8 @@ FREQUENT_FAILURE_ISSUE_THRESHOLD = 3
 # Bytes of this run's log sent with a failure event. Sentry trims longer
 # strings in `extra`.
 MAX_LOG_TAIL_BYTES = 8000
+# Sentry truncates an event message past 8192 characters.
+MAX_MESSAGE_CHARS = 8000
 SLUG_RE = re.compile(r"^[a-z0-9_-]{1,50}$")
 
 
@@ -162,27 +167,34 @@ def read_log_slice(path: str | None, offset: int) -> str:
         return handle.read().decode("utf-8", errors="replace")
 
 
-def send_failure_event(
-    dsn: Dsn, slug: str, exit_code: int, duration: float, log_path: str | None, log_tail: str
+def send_event(
+    dsn: Dsn,
+    *,
+    message: str,
+    level: str,
+    logger: str,
+    fingerprint: list[str],
+    tags: dict[str, str],
+    extra: dict,
+    contexts: dict | None = None,
 ) -> None:
+    """Send one event through the envelope endpoint. `fingerprint` decides
+    which Sentry issue it joins; `message` is the title plus body shown in
+    the issue and its alert email."""
     event_id = uuid.uuid4().hex
     event = {
         "event_id": event_id,
         "timestamp": time.time(),
         "platform": "other",
-        "level": "error",
-        "logger": "cron",
+        "level": level,
+        "logger": logger,
         "environment": environment(),
         "server_name": socket.gethostname(),
-        "message": {"formatted": f"Cron job {slug} failed with exit code {exit_code}"},
-        "fingerprint": ["cron-job-failed", slug],
-        "tags": {"monitor.slug": slug, "exit_code": str(exit_code)},
-        "contexts": {"monitor": {"slug": slug}},
-        "extra": {
-            "log_tail": log_tail or "(no log output captured)",
-            "log_path": log_path or "",
-            "duration_seconds": round(duration, 1),
-        },
+        "message": {"formatted": message[:MAX_MESSAGE_CHARS]},
+        "fingerprint": fingerprint,
+        "tags": tags,
+        "contexts": contexts or {},
+        "extra": extra,
     }
     envelope = b"\n".join(
         json.dumps(item).encode()
@@ -193,6 +205,25 @@ def send_failure_event(
         dsn.envelope_url(),
         envelope,
         {"Content-Type": "application/x-sentry-envelope", "X-Sentry-Auth": auth},
+    )
+
+
+def send_failure_event(
+    dsn: Dsn, slug: str, exit_code: int, duration: float, log_path: str | None, log_tail: str
+) -> None:
+    send_event(
+        dsn,
+        message=f"Cron job {slug} failed with exit code {exit_code}",
+        level="error",
+        logger="cron",
+        fingerprint=["cron-job-failed", slug],
+        tags={"monitor.slug": slug, "exit_code": str(exit_code)},
+        contexts={"monitor": {"slug": slug}},
+        extra={
+            "log_tail": log_tail or "(no log output captured)",
+            "log_path": log_path or "",
+            "duration_seconds": round(duration, 1),
+        },
     )
 
 
@@ -266,13 +297,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return args
 
 
+def dsn_from_env() -> Dsn | None:
+    """The configured DSN, or None when SENTRY_DSN is unset (reporting off)."""
+    raw_dsn = os.getenv("SENTRY_DSN", "").strip()
+    return Dsn(raw_dsn) if raw_dsn else None
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
-    raw_dsn = os.getenv("SENTRY_DSN", "").strip()
-    if not raw_dsn:
-        return 0
     try:
-        dsn = Dsn(raw_dsn)
+        dsn = dsn_from_env()
+        if dsn is None:
+            return 0
         if args.command == "start":
             start(dsn, args.slug, args.match)
         elif args.command == "skipped":

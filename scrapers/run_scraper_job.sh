@@ -27,10 +27,11 @@ export SCRAPER_SECRET="${SCRAPER_SECRET:-${SCAPER_SECRET:-postgres-cron}}"
 export PYTHONPATH="${SCRAPERS_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
 # Routine "rows changed" Slack posts are off: Sentry Crons reports failed,
-# missed and hung jobs instead (docs/sentry-crons.md). Every scraper skips its
-# post when its webhook is unset. Still posting to Slack: urlwatch, the meet
-# automation review flow (bot token, falling back to SLACK_MEET_WEBHOOK_URL)
-# and /usamw-results replies (falling back to SLACK_RESULTS_WEBHOOK_URL).
+# missed and hung jobs instead, and urlwatch sends page changes to Sentry
+# (docs/sentry-crons.md). Every scraper skips its post when its webhook is
+# unset. Still posting to Slack: the meet automation review flow (bot token,
+# falling back to SLACK_MEET_WEBHOOK_URL) and /usamw-results replies (falling
+# back to SLACK_RESULTS_WEBHOOK_URL).
 unset SLACK_WEBHOOK_URL SLACK_ENTRY_WEBHOOK_URL SLACK_WSO_WEBHOOK_URL \
   SLACK_RANKINGS_WEBHOOK_URL SLACK_STANDARDS_WEBHOOK_URL SLACK_RECORDS_WEBHOOK_URL \
   SLACK_IWF_RECORDS_WEBHOOK_URL SLACK_USAMW_RECORDS_WEBHOOK_URL
@@ -296,9 +297,9 @@ urlwatch_job() {
   fi
   local runtime="${dir}/.runtime"
   mkdir -p "${runtime}/config/urlwatch" "${runtime}/cache"
-  sed "s|\${SLACK_URLWATCH_WEBHOOK_URL}|${SLACK_URLWATCH_WEBHOOK_URL:-}|g" "${dir}/urlwatch.yaml" > "${runtime}/config/urlwatch/urlwatch.yaml"
-  cp "${dir}/urls.yaml" "${runtime}/config/urlwatch/urls.yaml"
-  XDG_CONFIG_HOME="${runtime}/config" XDG_CACHE_HOME="${runtime}/cache" "${venv}/bin/urlwatch"
+  cp "${dir}/urlwatch.yaml" "${dir}/urls.yaml" "${runtime}/config/urlwatch/"
+  XDG_CONFIG_HOME="${runtime}/config" XDG_CACHE_HOME="${runtime}/cache" \
+    "${venv}/bin/urlwatch" --hooks "${dir}/sentry_hooks.py"
 }
 
 run_selected_job() {

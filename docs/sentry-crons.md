@@ -18,6 +18,24 @@ Jobs that fire more than hourly (`*/2`, `*/5`) open an issue only after 3 failur
 a row. A run that finds the previous one still holding the job lock checks in `ok`, so
 a long `meet-automation-requests` run does not count as missed.
 
+## urlwatch page changes
+
+`urlwatch` watches four usamasters.net pages (results, qualifying totals, events,
+records). Instead of posting to Slack, it sends each reported page to Sentry through
+[`scrapers/urlwatch/sentry_hooks.py`](../scrapers/urlwatch/sentry_hooks.py), tagged
+`source:urlwatch`:
+
+- **changed**: info event `<page> changed`, with the diff as the message body. Each
+  distinct diff is a new issue.
+- **could not be checked**: warning event with the fetch error. A page that stays down
+  stays one issue.
+- **now watching**: the first run for a page added to `urls.yaml`.
+
+These are not errors, so the high-priority alert ignores them. The **USA Masters page
+changes (urlwatch)** alert emails on a new or regressed `source:urlwatch` issue.
+Resolve a change issue once you've acted on it. To stop resolved-but-old issues piling
+up, set **Settings → Projects → meetcal-backend → Auto Resolve**.
+
 ## Setup
 
 1. In Sentry, create a project (for example `meetcal-backend`, platform Python) and copy
