@@ -10,6 +10,10 @@ the 19 `scrapers/run_scraper_job.sh <job>` jobs (monitor slug = job name) and
   stopped, `.env` unreadable).
 - **hangs**: still running after 120 minutes.
 
+Multi-step jobs (`wso-records`, `entries`, `meet-sync`) run every step even when one
+fails, then exit non-zero listing the failed steps, so one broken WSO sheet or entry
+page still fails the job without skipping the rest.
+
 Jobs that fire more than hourly (`*/2`, `*/5`) open an issue only after 3 failures in
 a row. A run that finds the previous one still holding the job lock checks in `ok`, so
 a long `meet-automation-requests` run does not count as missed.
