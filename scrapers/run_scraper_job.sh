@@ -28,12 +28,27 @@ export SLACK_IWF_RECORDS_WEBHOOK_URL="${SLACK_IWF_RECORDS_WEBHOOK_URL:-${SLACK_R
 export PYTHONPATH="${SCRAPERS_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
 LOCK_DIR="${SCRAPERS_DIR}/.locks"
+SENTRY_CRON="${SCRAPERS_DIR}/common/sentry_cron.py"
 mkdir -p "${LOCK_DIR}"
 exec 9>"${LOCK_DIR}/${JOB}.lock"
 if ! flock -n 9; then
   echo "Job ${JOB} is already running; skipping."
+  python3 "${SENTRY_CRON}" skipped "${JOB}" "run_scraper_job.sh ${JOB}" || true
   exit 0
 fi
+
+# Sentry Crons check-in (no-op without SENTRY_DSN). The log offset lets a
+# failure event carry only this run's output from the cron-redirected log.
+SENTRY_LOG="$(readlink -f "/proc/$$/fd/1" 2>/dev/null || true)"
+SENTRY_LOG_OFFSET="$(stat -c %s "${SENTRY_LOG}" 2>/dev/null || echo 0)"
+SECONDS=0
+SENTRY_CHECK_IN_ID="$(python3 "${SENTRY_CRON}" start "${JOB}" "run_scraper_job.sh ${JOB}" || true)"
+# shellcheck disable=SC2329  # invoked from the EXIT trap
+report_to_sentry() {
+  python3 "${SENTRY_CRON}" finish "${JOB}" "${SENTRY_CHECK_IN_ID}" "$1" "${SECONDS}" \
+    --log "${SENTRY_LOG}" --log-offset "${SENTRY_LOG_OFFSET}" || true
+}
+trap 'report_to_sentry "$?"' EXIT
 
 python_job() {
   local dir="$1"

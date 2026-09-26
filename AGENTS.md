@@ -17,7 +17,7 @@ Sister repos (do not implement them here): `meetcal-app` (Expo / React Native), 
 | `scrapers/common/` | Postgres writer + ingest dispatch (`postgres_writer.py`, `postgres_ingest.py`) |
 | `scrapers/usaw/meet_automation/` | Watch → scrape → validate → Slack approve → single-transaction Postgres write |
 | `scrapers/usaw/` `scrapers/iwf/` `scrapers/usamw/` `scrapers/bwl/` | Federation scrapers. They call ingest dispatch; they must not talk to Convex |
-| `docs/` | Ops runbooks (`meet-automation-setup.md`, `rate-limits.md`) and `testing.md` |
+| `docs/` | Ops runbooks (`meet-automation-setup.md`, `rate-limits.md`, `sentry-crons.md`) and `testing.md` |
 | `.codex/skills/` | Agent skills, including the three-pass review skill |
 | `loadtest/` | k6 meet-weekend scenarios |
 
