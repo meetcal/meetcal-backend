@@ -27,6 +27,13 @@ export SCRAPER_SECRET="${SCRAPER_SECRET:-${SCAPER_SECRET:-postgres-cron}}"
 export SLACK_IWF_RECORDS_WEBHOOK_URL="${SLACK_IWF_RECORDS_WEBHOOK_URL:-${SLACK_RECORDS_WEBHOOK_URL:-}}"
 export PYTHONPATH="${SCRAPERS_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
+# SLACK_UPDATES: the "rows changed" Slack posts from entries, meet-sync,
+# wso-records, results-sport80, usamw-events and intl-rankings are off. Those
+# jobs run without a webhook, which each scraper treats as "skip the post";
+# Sentry Crons reports failed, missed and hung jobs instead
+# (docs/sentry-crons.md). Slack replies to slash commands and the meet
+# automation review flow are unchanged.
+
 LOCK_DIR="${SCRAPERS_DIR}/.locks"
 SENTRY_CRON="${SCRAPERS_DIR}/common/sentry_cron.py"
 mkdir -p "${LOCK_DIR}"
@@ -184,7 +191,7 @@ for item in (data if isinstance(data,list) else []):
     )
   fi
 
-  export SLACK_WEBHOOK_URL="${SLACK_ENTRY_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
+  export SLACK_WEBHOOK_URL=""  # routine update posts off; see SLACK_UPDATES note
   for url in "${urls[@]}"; do
     printf '%s\n' "${url}" > "${dir}/target_url.txt"
     run_step entry_scrape "${dir}" "${url}"
@@ -194,7 +201,7 @@ for item in (data if isinstance(data,list) else []):
 meet_sync() {
   ensure_postgres_ingest_python
   local dir="${SCRAPERS_DIR}/usaw/meet_to_supabase"
-  export SLACK_WEBHOOK_URL="${SLACK_MEET_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
+  export SLACK_WEBHOOK_URL=""  # routine update posts off; see SLACK_UPDATES note
   local script
   for script in sync-meets.js sync-nat-meets.js sync-virus-meets.js; do
     run_step node_job "${dir}" "scripts/${script}"
@@ -221,7 +228,7 @@ complete_ended_meets() {
 
 wso_scrapers() {
   local dir="${SCRAPERS_DIR}/usaw/wso_sheets_scraper"
-  export SLACK_WEBHOOK_URL="${SLACK_WSO_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
+  export SLACK_WEBHOOK_URL=""  # routine update posts off; see SLACK_UPDATES note
   run_step python_job "${dir}" auto_scrapers/scraper_dmv.py --wso "DMV" --sheet-url "https://docs.google.com/spreadsheets/d/1vYD2H6si9FyEO-Tc24DoFZOmST0r5hCn/edit?gid=799684986#gid=799684986"
   run_step python_job "${dir}" auto_scrapers/scraper_florida.py --wso "Florida" --sheet-url "https://docs.google.com/spreadsheets/d/16sNrOTnGrGeXE4L5skgCfE5vLTA7ggpaHWfMQNh0DfQ/view?gid=490899077#gid=490899077"
   run_step python_job "${dir}" auto_scrapers/scraper_tnky.py --wso "Tennessee-Kentucky" --sheet-url "https://docs.google.com/spreadsheets/d/11uUA0t05sEvHRjvDksC0VP1Yr2p_rC0JjHgVPEuYzhU/view?gid=867133960#gid=867133960"
@@ -240,12 +247,12 @@ wso_scrapers() {
 }
 
 results_sport80() {
-  export SLACK_WEBHOOK_URL="${SLACK_RESULTS_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
+  export SLACK_WEBHOOK_URL=""  # routine update posts off; see SLACK_UPDATES note
   python_job "${SCRAPERS_DIR}/usaw/sport80_api" update_supabase_from_sport80.py
 }
 
 usamw_events() {
-  export SLACK_WEBHOOK_URL="${SLACK_MEET_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
+  export SLACK_WEBHOOK_URL=""  # routine update posts off; see SLACK_UPDATES note
   python_job "${SCRAPERS_DIR}/usamw/meets" scrape_events.py
 }
 
@@ -303,7 +310,10 @@ run_selected_job() {
   case "${JOB}" in
     complete-ended-meets) complete_ended_meets ;;
     entries) entry_scrapers ;;
-    intl-rankings) python_job "${SCRAPERS_DIR}/usaw/rankings_scraper" intl_rankings_scraper.py --all ;;
+    intl-rankings)
+      unset SLACK_RANKINGS_WEBHOOK_URL # routine update posts off; see SLACK_UPDATES note
+      python_job "${SCRAPERS_DIR}/usaw/rankings_scraper" intl_rankings_scraper.py --all
+      ;;
     iwf-world-records) python_job "${SCRAPERS_DIR}/iwf/world-records" scraper.py ;;
     meet-automation-approve) meet_automation "$JOB" approve --all-pending ;;
     meet-automation-requests) meet_automation "$JOB" run --requested ;;

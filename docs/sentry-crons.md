@@ -1,7 +1,7 @@
 # Sentry Crons
 
 Every host cron job checks in with [Sentry Crons](https://docs.sentry.io/product/crons/):
-the 19 `scrapers/run_scraper_job.sh <job>` jobs (monitor slug = job name) and
+the 17 `scrapers/run_scraper_job.sh <job>` jobs (monitor slug = job name) and
 `app/scripts/backup_db.sh` (slug `postgres-backup`). Sentry opens an issue when a job
 
 - **fails**: non-zero exit. A second event, `Cron job <slug> failed with exit code N`,
