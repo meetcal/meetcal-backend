@@ -92,6 +92,25 @@ class ReporterTests(unittest.TestCase):
         self.assertIn("Timeout", messages[1])
         self.assertEqual({call.kwargs["logger"] for call in send.call_args_list}, {"urlwatch"})
 
+    def test_one_rejected_page_does_not_drop_the_others(self) -> None:
+        states = [
+            job_state("changed", "Events", "https://x/events", diff="+Camp"),
+            job_state("changed", "Records", "https://x/records", diff="+Record"),
+        ]
+        report = types.SimpleNamespace(get_filtered_job_states=lambda states: iter(states))
+        reporter = self.hooks.SentryReporter(report, {}, states, None)
+        env = {"SENTRY_DSN": "https://k@o1.ingest.us.sentry.io/2"}
+        with mock.patch.dict(os.environ, env), mock.patch.object(
+            sentry_cron, "send_event", side_effect=[OSError("413"), None]
+        ) as send:
+            with self.assertRaisesRegex(RuntimeError, "Events: 413"):
+                reporter.submit()
+        self.assertEqual(send.call_count, 2)
+
+    def test_huge_diff_is_capped_in_extra(self) -> None:
+        event = self.hooks.page_event("changed", "Events", "https://x/events", "x" * 100_000)
+        self.assertEqual(len(event["extra"]["content"]), sentry_cron.MAX_EXTRA_CHARS)
+
     def test_without_dsn_nothing_is_sent(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("SENTRY_DSN", None)

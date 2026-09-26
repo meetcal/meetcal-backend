@@ -29,22 +29,29 @@ export PYTHONPATH="${SCRAPERS_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 # Routine "rows changed" Slack posts are off: Sentry Crons reports failed,
 # missed and hung jobs instead, and urlwatch sends page changes to Sentry
 # (docs/sentry-crons.md). Every scraper skips its post when its webhook is
-# unset. Still posting to Slack: the meet automation review flow (bot token,
-# falling back to SLACK_MEET_WEBHOOK_URL) and /usamw-results replies (falling
-# back to SLACK_RESULTS_WEBHOOK_URL).
-unset SLACK_WEBHOOK_URL SLACK_ENTRY_WEBHOOK_URL SLACK_WSO_WEBHOOK_URL \
-  SLACK_RANKINGS_WEBHOOK_URL SLACK_STANDARDS_WEBHOOK_URL SLACK_RECORDS_WEBHOOK_URL \
-  SLACK_IWF_RECORDS_WEBHOOK_URL SLACK_USAMW_RECORDS_WEBHOOK_URL
+# empty. Set to empty, not unset: the scrapers' load_dotenv() calls would
+# refill an unset variable from .env, but never overwrite one that exists.
+# Still posting to Slack: the meet automation review flow (bot token, falling
+# back to SLACK_MEET_WEBHOOK_URL) and /usamw-results replies (falling back to
+# SLACK_RESULTS_WEBHOOK_URL).
+export SLACK_WEBHOOK_URL="" SLACK_ENTRY_WEBHOOK_URL="" SLACK_WSO_WEBHOOK_URL="" \
+  SLACK_RANKINGS_WEBHOOK_URL="" SLACK_STANDARDS_WEBHOOK_URL="" SLACK_RECORDS_WEBHOOK_URL="" \
+  SLACK_IWF_RECORDS_WEBHOOK_URL="" SLACK_USAMW_RECORDS_WEBHOOK_URL=""
 
 LOCK_DIR="${SCRAPERS_DIR}/.locks"
 SENTRY_CRON="${SCRAPERS_DIR}/common/sentry_cron.py"
 mkdir -p "${LOCK_DIR}"
+# When the lock holder started, so a skipped run can tell a slow job from a
+# hung one. Separate from the lock file, which every attempt truncates.
+STARTED_FILE="${LOCK_DIR}/${JOB}.started"
 exec 9>"${LOCK_DIR}/${JOB}.lock"
 if ! flock -n 9; then
   echo "Job ${JOB} is already running; skipping."
-  python3 "${SENTRY_CRON}" skipped "${JOB}" "run_scraper_job.sh ${JOB}" || true
+  python3 "${SENTRY_CRON}" skipped "${JOB}" "run_scraper_job.sh ${JOB}" \
+    --holder-started-at "$(cat "${STARTED_FILE}" 2>/dev/null || echo 0)" || true
   exit 0
 fi
+date +%s > "${STARTED_FILE}"
 
 # Sentry Crons check-in (no-op without SENTRY_DSN). The log offset lets a
 # failure event carry only this run's output from the cron-redirected log.

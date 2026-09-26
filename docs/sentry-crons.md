@@ -15,8 +15,13 @@ fails, then exit non-zero listing the failed steps, so one broken WSO sheet or e
 page still fails the job without skipping the rest.
 
 Jobs that fire more than hourly (`*/2`, `*/5`) open an issue only after 3 failures in
-a row. A run that finds the previous one still holding the job lock checks in `ok`, so
-a long `meet-automation-requests` run does not count as missed.
+a row. A run that finds the previous one still holding the job lock checks in `ok` while
+that run is under 120 minutes old, so a long `meet-automation-requests` run does not count
+as missed. Past 120 minutes it checks in `error` and sends `Cron job <slug> has been
+running for N minutes`, so a hung job keeps failing instead of looking healthy.
+
+The failure event's log tail has Slack webhook paths, Slack tokens and URL passwords
+replaced with `[redacted]`.
 
 ## urlwatch page changes
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -76,6 +77,16 @@ class MonitorConfigTests(unittest.TestCase):
         self.assertEqual(frequent["failure_issue_threshold"], sentry_cron.FREQUENT_FAILURE_ISSUE_THRESHOLD)
         self.assertEqual(nightly["timezone"], "America/New_York")
         self.assertEqual(nightly["schedule"], {"type": "crontab", "value": "35 23 * * *"})
+
+
+class TimezoneTests(unittest.TestCase):
+    def test_strips_posix_zoneinfo_prefix(self) -> None:
+        with mock.patch.dict(os.environ, {"TZ": ""}), mock.patch.object(
+            sentry_cron.Path, "read_text", side_effect=OSError
+        ), mock.patch.object(
+            sentry_cron.os, "readlink", return_value="/usr/share/zoneinfo/posix/America/Chicago"
+        ):
+            self.assertEqual(sentry_cron.local_timezone(), "America/Chicago")
 
 
 class CommandTests(unittest.TestCase):
@@ -155,10 +166,34 @@ class CommandTests(unittest.TestCase):
         self.assertTrue(check_in["check_in_id"])
 
     def test_skipped_records_an_ok_check_in(self) -> None:
-        sentry_cron.main(["skipped", "meet-automation-requests", "run_scraper_job.sh meet-automation-requests"])
+        started = str(time.time() - 10 * 60)
+        sentry_cron.main(
+            ["skipped", "meet-automation-requests", "run_scraper_job.sh meet-automation-requests",
+             "--holder-started-at", started]
+        )
         [(_url, [body])] = self.sent()
         self.assertEqual(body["status"], "ok")
         self.assertEqual(body["monitor_config"]["failure_issue_threshold"], 3)
+
+    def test_skipped_behind_a_hung_run_reports_it(self) -> None:
+        started = str(time.time() - (sentry_cron.MAX_RUNTIME_MINUTES + 30) * 60)
+        sentry_cron.main(
+            ["skipped", "meet-automation-requests", "run_scraper_job.sh meet-automation-requests",
+             "--holder-started-at", started]
+        )
+        [(_url, [check_in]), (_event_url, [_header, _item, event])] = self.sent()
+        self.assertEqual(check_in["status"], "error")
+        self.assertEqual(event["fingerprint"], ["cron-job-stuck", "meet-automation-requests"])
+        self.assertIn("150 minutes", event["message"]["formatted"])
+
+    def test_unreadable_crontab_still_checks_in(self) -> None:
+        os.environ["SENTRY_CRONS_CRONTAB"] = str(Path(self.tmp.name) / "missing")
+        with mock.patch("builtins.print"), mock.patch.object(sentry_cron, "warn") as warned:
+            sentry_cron.main(["start", "records", "run_scraper_job.sh records"])
+        [(_url, [body])] = self.sent()
+        self.assertEqual(body["status"], "in_progress")
+        self.assertNotIn("monitor_config", body)
+        self.assertIn("could not read the crontab", warned.call_args.args[0])
 
     def test_without_dsn_nothing_is_sent(self) -> None:
         os.environ.pop("SENTRY_DSN")
@@ -189,6 +224,19 @@ class LogSliceTests(unittest.TestCase):
         tail = sentry_cron.read_log_slice(handle.name, 0)
         self.assertEqual(len(tail), sentry_cron.MAX_LOG_TAIL_BYTES)
         self.assertTrue(tail.endswith("END"))
+
+    def test_scrubs_credentials(self) -> None:
+        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as handle:
+            handle.write(
+                "Slack notification failed: POST https://hooks.slack.com/services/T0/B0/abcDEF\n"
+                "token xoxb-123-456-abc\n"
+                "connect postgresql://meetcal:hunter2@localhost:5432/meetcal failed\n"
+            )
+        self.addCleanup(os.unlink, handle.name)
+        tail = sentry_cron.read_log_slice(handle.name, 0)
+        for secret in ("T0/B0/abcDEF", "xoxb-123", "hunter2"):
+            self.assertNotIn(secret, tail)
+        self.assertIn("postgresql://[redacted]@localhost:5432/meetcal", tail)
 
     def test_non_file_stdout_sends_nothing(self) -> None:
         self.assertEqual(sentry_cron.read_log_slice("/dev/null", 0), "")

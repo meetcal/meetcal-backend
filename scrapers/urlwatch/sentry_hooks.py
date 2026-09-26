@@ -11,8 +11,11 @@ Sentry event, sent with the helpers in scrapers/common/sentry_cron.py:
   not alert again every night.
 - new (first run for a page): info level, one issue per page.
 
-With SENTRY_DSN unset nothing is sent. A Sentry failure raises, so urlwatch
-exits non-zero and the cron check-in reports the job as failed.
+With SENTRY_DSN unset nothing is sent. urlwatch has already saved every
+page's new snapshot when reporters run, so a failed send is not retried next
+night: each page is sent on its own, and any failure is raised after the rest
+went out, so urlwatch exits non-zero and the cron failure event (with this
+run's stdout report in its log tail) still carries the change.
 """
 
 from __future__ import annotations
@@ -44,7 +47,7 @@ def page_event(verb: str, name: str, location: str, content: str | None) -> dict
         "level": level,
         "fingerprint": fingerprint,
         "tags": {"source": LOGGER, "urlwatch.verb": verb, "urlwatch.page": name[:200]},
-        "extra": {"url": location, "content": body},
+        "extra": {"url": location, "content": body[-sentry_cron.MAX_EXTRA_CHARS :]},
     }
 
 
@@ -57,6 +60,7 @@ class SentryReporter(reporters.ReporterBase):
         dsn = sentry_cron.dsn_from_env()
         if dsn is None:
             return
+        failures = []
         for job_state in self.report.get_filtered_job_states(self.job_states):
             if job_state.verb == "error":
                 content = job_state.traceback
@@ -64,7 +68,11 @@ class SentryReporter(reporters.ReporterBase):
                 content = job_state.get_diff()
             else:
                 content = None
-            event = page_event(
-                job_state.verb, job_state.job.pretty_name(), job_state.job.get_location(), content
-            )
-            sentry_cron.send_event(dsn, logger=LOGGER, **event)
+            name = job_state.job.pretty_name()
+            event = page_event(job_state.verb, name, job_state.job.get_location(), content)
+            try:
+                sentry_cron.send_event(dsn, logger=LOGGER, **event)
+            except Exception as error:  # noqa: BLE001 - send the other pages first
+                failures.append(f"{name}: {error}")
+        if failures:
+            raise RuntimeError("Sentry rejected urlwatch events: " + "; ".join(failures))

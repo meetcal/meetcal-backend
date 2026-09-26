@@ -10,8 +10,10 @@
 Sentry also alerts when a job never runs or runs past MAX_RUNTIME_MINUTES.
 `finish` closes the check-in as ok or error; on error it also sends an event
 carrying this run's slice of the log, so the alert shows what broke.
-`skipped` records an ok check-in for a run that found the previous one still
-holding the job lock (the stuck run is caught by its own max_runtime).
+`skipped` handles a run that found the previous one still holding the job
+lock: an ok check-in while that run is younger than MAX_RUNTIME_MINUTES, and
+an error check-in plus a "stuck" event once it is older, so skipped runs
+never mark a hung job healthy.
 
 `send_event` is also how scrapers/urlwatch/sentry_hooks.py reports page
 changes.
@@ -51,7 +53,17 @@ FREQUENT_FAILURE_ISSUE_THRESHOLD = 3
 MAX_LOG_TAIL_BYTES = 8000
 # Sentry truncates an event message past 8192 characters.
 MAX_MESSAGE_CHARS = 8000
+# Cap on the urlwatch diff kept in an event's `extra`; envelopes over 1 MB are
+# rejected outright.
+MAX_EXTRA_CHARS = 16000
 SLUG_RE = re.compile(r"^[a-z0-9_-]{1,50}$")
+# Credentials a job may print on failure (a Slack error echoing its webhook
+# URL, a connection string with a password). Scrubbed from the log tail.
+SECRET_PATTERNS = (
+    (re.compile(r"hooks\.slack\.com/services/\S+"), "hooks.slack.com/services/[redacted]"),
+    (re.compile(r"xox[abprs]-[A-Za-z0-9-]+"), "xox?-[redacted]"),
+    (re.compile(r"://[^/\s:@]+:[^/\s@]+@"), "://[redacted]@"),
+)
 
 
 class Dsn:
@@ -124,6 +136,8 @@ def local_timezone() -> str:
     except OSError:
         return "UTC"
     _, sep, name = target.partition("zoneinfo/")
+    for prefix in ("posix/", "right/"):
+        name = name.removeprefix(prefix)
     return name if sep and name else "UTC"
 
 
@@ -164,7 +178,13 @@ def read_log_slice(path: str | None, offset: int) -> str:
         if offset < 0 or offset > size:  # rotated or truncated mid-run
             offset = 0
         handle.seek(max(offset, size - MAX_LOG_TAIL_BYTES))
-        return handle.read().decode("utf-8", errors="replace")
+        return redact(handle.read().decode("utf-8", errors="replace"))
+
+
+def redact(text: str) -> str:
+    for pattern, replacement in SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def send_event(
@@ -227,26 +247,51 @@ def send_failure_event(
     )
 
 
+def with_schedule(payload: dict, match: str) -> dict:
+    """Attach monitor_config from the job's crontab line. An unreadable crontab
+    or no matching line still checks in, just without upserting the monitor."""
+    try:
+        schedule = find_schedule(read_crontab(), match)
+    except (OSError, subprocess.SubprocessError) as error:
+        warn(f"could not read the crontab ({error}); checking in without a schedule")
+        return payload
+    if schedule:
+        return {**payload, "monitor_config": monitor_config(schedule)}
+    warn(f"no crontab line matches {match!r}; checking in without a schedule")
+    return payload
+
+
 def start(dsn: Dsn, slug: str, match: str) -> str:
     check_in_id = uuid.uuid4().hex
     # Printed first: `finish` needs the id even if Sentry is unreachable now.
     print(check_in_id, flush=True)
-    payload: dict = {"check_in_id": check_in_id, "status": "in_progress"}
-    schedule = find_schedule(read_crontab(), match)
-    if schedule:
-        payload["monitor_config"] = monitor_config(schedule)
-    else:
-        warn(f"no crontab line matches {match!r}; checking in without a schedule")
-    send_check_in(dsn, slug, payload)
+    send_check_in(dsn, slug, with_schedule({"check_in_id": check_in_id, "status": "in_progress"}, match))
     return check_in_id
 
 
-def skipped(dsn: Dsn, slug: str, match: str) -> None:
-    payload: dict = {"check_in_id": uuid.uuid4().hex, "status": "ok"}
-    schedule = find_schedule(read_crontab(), match)
-    if schedule:
-        payload["monitor_config"] = monitor_config(schedule)
-    send_check_in(dsn, slug, payload)
+def skipped(dsn: Dsn, slug: str, match: str, holder_started_at: float) -> None:
+    """`holder_started_at` is when the run holding the lock started (epoch
+    seconds, 0 when unknown)."""
+    running_minutes = (time.time() - holder_started_at) / 60 if holder_started_at > 0 else 0.0
+    stuck = running_minutes > MAX_RUNTIME_MINUTES
+    payload = {"check_in_id": uuid.uuid4().hex, "status": "error" if stuck else "ok"}
+    try:
+        send_check_in(dsn, slug, with_schedule(payload, match))
+    finally:
+        if stuck:
+            send_event(
+                dsn,
+                message=(
+                    f"Cron job {slug} has been running for {running_minutes:.0f} minutes; "
+                    "later runs are skipped while it holds the job lock"
+                ),
+                level="error",
+                logger="cron",
+                fingerprint=["cron-job-stuck", slug],
+                tags={"monitor.slug": slug},
+                contexts={"monitor": {"slug": slug}},
+                extra={"running_minutes": round(running_minutes)},
+            )
 
 
 def finish(
@@ -284,6 +329,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         command = commands.add_parser(name)
         command.add_argument("slug")
         command.add_argument("match", help="text identifying the job's crontab line")
+        if name == "skipped":
+            command.add_argument(
+                "--holder-started-at",
+                type=float,
+                default=0.0,
+                help="epoch seconds the lock holder started; 0 when unknown",
+            )
     done = commands.add_parser("finish")
     done.add_argument("slug")
     done.add_argument("check_in_id")
@@ -312,7 +364,7 @@ def main(argv: list[str]) -> int:
         if args.command == "start":
             start(dsn, args.slug, args.match)
         elif args.command == "skipped":
-            skipped(dsn, args.slug, args.match)
+            skipped(dsn, args.slug, args.match, args.holder_started_at)
         else:
             finish(
                 dsn,
