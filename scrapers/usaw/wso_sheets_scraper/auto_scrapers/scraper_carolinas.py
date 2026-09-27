@@ -59,9 +59,8 @@ class WSORecordsCarolinasScraper:
     def setup_slack(self):
         """Set up Slack webhook URL."""
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
-        if not self.slack_webhook_url:
-            raise ValueError("SLACK_WEBHOOK_URL environment variable not set")
-        print("✓ Slack webhook configured")
+        if self.slack_webhook_url:
+            print("✓ Slack webhook configured")
     
     def _map_age_category(self, tab_name: str) -> str:
         """Map tab name to age category."""
@@ -344,6 +343,8 @@ class WSORecordsCarolinasScraper:
     
     def send_slack_notification(self) -> None:
         """Send Slack notification."""
+        if not self.slack_webhook_url:
+            return
         total_inserted = len(self.changes["inserted"])
         total_updated = len(self.changes["updated"])
         

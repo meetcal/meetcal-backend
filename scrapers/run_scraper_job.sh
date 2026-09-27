@@ -24,16 +24,68 @@ source "${ENV_FILE}"
 set +a
 
 export SCRAPER_SECRET="${SCRAPER_SECRET:-${SCAPER_SECRET:-postgres-cron}}"
-export SLACK_IWF_RECORDS_WEBHOOK_URL="${SLACK_IWF_RECORDS_WEBHOOK_URL:-${SLACK_RECORDS_WEBHOOK_URL:-}}"
 export PYTHONPATH="${SCRAPERS_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
+# Routine "rows changed" Slack posts are off: Sentry Crons reports failed,
+# missed and hung jobs instead, and urlwatch sends page changes to Sentry
+# (docs/sentry-crons.md). Every scraper skips its post when its webhook is
+# empty. Set to empty, not unset: the scrapers' load_dotenv() calls would
+# refill an unset variable from .env, but never overwrite one that exists.
+# Still posting to Slack: the meet automation review flow (bot token, falling
+# back to SLACK_MEET_WEBHOOK_URL) and /usamw-results replies (falling back to
+# SLACK_RESULTS_WEBHOOK_URL).
+export SLACK_WEBHOOK_URL="" SLACK_ENTRY_WEBHOOK_URL="" SLACK_WSO_WEBHOOK_URL="" \
+  SLACK_RANKINGS_WEBHOOK_URL="" SLACK_STANDARDS_WEBHOOK_URL="" SLACK_RECORDS_WEBHOOK_URL="" \
+  SLACK_IWF_RECORDS_WEBHOOK_URL="" SLACK_USAMW_RECORDS_WEBHOOK_URL=""
+
 LOCK_DIR="${SCRAPERS_DIR}/.locks"
+SENTRY_CRON="${SCRAPERS_DIR}/common/sentry_cron.py"
 mkdir -p "${LOCK_DIR}"
+# When the lock holder started, so a skipped run can tell a slow job from a
+# hung one. Separate from the lock file, which every attempt truncates.
+STARTED_FILE="${LOCK_DIR}/${JOB}.started"
 exec 9>"${LOCK_DIR}/${JOB}.lock"
 if ! flock -n 9; then
   echo "Job ${JOB} is already running; skipping."
+  python3 "${SENTRY_CRON}" skipped "${JOB}" "run_scraper_job.sh ${JOB}" \
+    --holder-started-at "$(cat "${STARTED_FILE}" 2>/dev/null || echo 0)" || true
   exit 0
 fi
+date +%s > "${STARTED_FILE}"
+
+# Sentry Crons check-in (no-op without SENTRY_DSN). The log offset lets a
+# failure event carry only this run's output from the cron-redirected log.
+SENTRY_LOG="$(readlink -f "/proc/$$/fd/1" 2>/dev/null || true)"
+SENTRY_LOG_OFFSET="$(stat -c %s "${SENTRY_LOG}" 2>/dev/null || echo 0)"
+SECONDS=0
+SENTRY_CHECK_IN_ID="$(python3 "${SENTRY_CRON}" start "${JOB}" "run_scraper_job.sh ${JOB}" || true)"
+# shellcheck disable=SC2329  # invoked from the EXIT trap
+report_to_sentry() {
+  python3 "${SENTRY_CRON}" finish "${JOB}" "${SENTRY_CHECK_IN_ID}" "$1" "${SECONDS}" \
+    --log "${SENTRY_LOG}" --log-offset "${SENTRY_LOG_OFFSET}" || true
+}
+trap 'report_to_sentry "$?"' EXIT
+
+# Multi-step jobs (wso-records, entries, meet-sync) run each independent
+# scraper through run_step: one broken source does not skip the rest, and the
+# job still exits non-zero at the end if any step failed. The step runs in a
+# subshell with errexit on, so a failing command inside python_job/node_job
+# (venv setup, npm ci) fails that step instead of being ignored.
+FAILED_STEPS=()
+run_step() {
+  local status
+  set +e
+  (
+    set -e
+    "$@"
+  )
+  status=$?
+  set -e
+  if [[ "${status}" -ne 0 ]]; then
+    echo >&2 "${JOB}: step failed (exit ${status}): $*"
+    FAILED_STEPS+=("$*")
+  fi
+}
 
 python_job() {
   local dir="$1"
@@ -101,6 +153,13 @@ ensure_postgres_ingest_python() {
   export POSTGRES_INGEST_PYTHON="${venv}/bin/python"
 }
 
+# The URL is unused; it names the step in the failure summary.
+entry_scrape() {
+  local dir="$1"
+  cd "${dir}"
+  node csv_scraper.js
+}
+
 entry_scrapers() {
   ensure_postgres_ingest_python
   local dir="${SCRAPERS_DIR}/usaw/entry_scraper"
@@ -141,28 +200,19 @@ for item in (data if isinstance(data,list) else []):
     )
   fi
 
-  export SLACK_WEBHOOK_URL="${SLACK_ENTRY_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
   for url in "${urls[@]}"; do
     printf '%s\n' "${url}" > "${dir}/target_url.txt"
-    (cd "${dir}" && node csv_scraper.js)
+    run_step entry_scrape "${dir}" "${url}"
   done
 }
 
 meet_sync() {
   ensure_postgres_ingest_python
   local dir="${SCRAPERS_DIR}/usaw/meet_to_supabase"
-  export SLACK_WEBHOOK_URL="${SLACK_MEET_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
-  # Each script runs even when an earlier one failed; the job exits non-zero
-  # if any did, so cron's log and status do not hide a failed first script
-  # behind a successful last one.
-  local status=0 script
+  local script
   for script in sync-meets.js sync-nat-meets.js sync-virus-meets.js; do
-    if ! node_job "${dir}" "scripts/${script}"; then
-      status=1
-      echo >&2 "meet-sync: ${script} failed"
-    fi
+    run_step node_job "${dir}" "scripts/${script}"
   done
-  return "${status}"
 }
 
 complete_ended_meets() {
@@ -185,36 +235,32 @@ complete_ended_meets() {
 
 wso_scrapers() {
   local dir="${SCRAPERS_DIR}/usaw/wso_sheets_scraper"
-  export SLACK_WEBHOOK_URL="${SLACK_WSO_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
-  python_job "${dir}" auto_scrapers/scraper_dmv.py --wso "DMV" --sheet-url "https://docs.google.com/spreadsheets/d/1vYD2H6si9FyEO-Tc24DoFZOmST0r5hCn/edit?gid=799684986#gid=799684986"
-  python_job "${dir}" auto_scrapers/scraper_florida.py --wso "Florida" --sheet-url "https://docs.google.com/spreadsheets/d/16sNrOTnGrGeXE4L5skgCfE5vLTA7ggpaHWfMQNh0DfQ/view?gid=490899077#gid=490899077"
-  python_job "${dir}" auto_scrapers/scraper_tnky.py --wso "Tennessee-Kentucky" --sheet-url "https://docs.google.com/spreadsheets/d/11uUA0t05sEvHRjvDksC0VP1Yr2p_rC0JjHgVPEuYzhU/view?gid=867133960#gid=867133960"
-  python_job "${dir}" auto_scrapers/scraper_carolinas.py --wso "Carolina" --sheet-url "https://docs.google.com/spreadsheets/d/1rKFzpkLCT-FE2SzM0qpUOoZ788YHl7dg/view?gid=1785893123#gid=1785893123"
-  python_job "${dir}" auto_scrapers/scraper_ohio.py --wso "Ohio" --sheet-url "https://docs.google.com/spreadsheets/d/1fX-Ft3PuLn8BCE2thhwPEXFTEUTN7yJGxWi7LMajAD8/view?gid=0#gid=0"
-  python_job "${dir}" auto_scrapers/scraper_newjersey.py --wso "New Jersey" --sheet-url "https://docs.google.com/spreadsheets/d/1y8mXDBLfqmszlzWhv-4wkeWQZS5Kb9Aj4RnB39CBJmw/edit?gid=0#gid=0"
-  python_job "${dir}" auto_scrapers/scraper_ga_pnw.py --wso "Georgia" --sheet-url "https://docs.google.com/spreadsheets/d/1HM1H51pUmhoWDdSUp2RT-mCaUX2a8NB7aUSYVwWT0AU/edit?gid=908416148#gid=908416148"
-  python_job "${dir}" auto_scrapers/scraper_pawv.py --wso "Pennsylvania-West Virginia" --sheet-id "2PACX-1vR8exp9-mwi8dpkZa9-48G-CUVuZ5rAlpOYdMCiNMka25wZ6V2XPLurpgMDtyiarqnQxYrW6dWfQ042"
-  python_job "${dir}" auto_scrapers/scraper_ga_pnw.py --wso "Pacific Northwest" --sheet-url "https://docs.google.com/spreadsheets/d/1pmZ1j3KJyms0Dlk3xz_VVf6mWq6tqdZj/edit?gid=1648178012#gid=1648178012"
-  python_job "${dir}" auto_scrapers/scraper_ga_pnw.py --wso "California North" --sheet-url "https://docs.google.com/spreadsheets/d/1ZAs27jQCPYTVgLuQ-feBHSO-BgGjGCewUs0djG23pXQ/edit?gid=35344992#gid=35344992"
-  python_job "${dir}" auto_scrapers/scraper_newengland_auto.py
-  python_job "${dir}" auto_scrapers/scraper_mountainsouth_auto.py
-  python_job "${dir}" auto_scrapers/scraper_newyork_auto.py
-  python_job "${dir}" auto_scrapers/scraper_illinois_auto.py --apply
-  python_job "${dir}" auto_scrapers/scraper_california_south_auto.py --wso "California South" --sheet-url "https://docs.google.com/spreadsheets/d/1PHYJ-lhkXYMrQIIo6YaipePFxruSfbRw1TEUtIoknR0/edit?usp=sharing"
+  run_step python_job "${dir}" auto_scrapers/scraper_dmv.py --wso "DMV" --sheet-url "https://docs.google.com/spreadsheets/d/1vYD2H6si9FyEO-Tc24DoFZOmST0r5hCn/edit?gid=799684986#gid=799684986"
+  run_step python_job "${dir}" auto_scrapers/scraper_florida.py --wso "Florida" --sheet-url "https://docs.google.com/spreadsheets/d/16sNrOTnGrGeXE4L5skgCfE5vLTA7ggpaHWfMQNh0DfQ/view?gid=490899077#gid=490899077"
+  run_step python_job "${dir}" auto_scrapers/scraper_tnky.py --wso "Tennessee-Kentucky" --sheet-url "https://docs.google.com/spreadsheets/d/11uUA0t05sEvHRjvDksC0VP1Yr2p_rC0JjHgVPEuYzhU/view?gid=867133960#gid=867133960"
+  run_step python_job "${dir}" auto_scrapers/scraper_carolinas.py --wso "Carolina" --sheet-url "https://docs.google.com/spreadsheets/d/1rKFzpkLCT-FE2SzM0qpUOoZ788YHl7dg/view?gid=1785893123#gid=1785893123"
+  run_step python_job "${dir}" auto_scrapers/scraper_ohio.py --wso "Ohio" --sheet-url "https://docs.google.com/spreadsheets/d/1fX-Ft3PuLn8BCE2thhwPEXFTEUTN7yJGxWi7LMajAD8/view?gid=0#gid=0"
+  run_step python_job "${dir}" auto_scrapers/scraper_newjersey.py --wso "New Jersey" --sheet-url "https://docs.google.com/spreadsheets/d/1y8mXDBLfqmszlzWhv-4wkeWQZS5Kb9Aj4RnB39CBJmw/edit?gid=0#gid=0"
+  run_step python_job "${dir}" auto_scrapers/scraper_ga_pnw.py --wso "Georgia" --sheet-url "https://docs.google.com/spreadsheets/d/1HM1H51pUmhoWDdSUp2RT-mCaUX2a8NB7aUSYVwWT0AU/edit?gid=908416148#gid=908416148"
+  run_step python_job "${dir}" auto_scrapers/scraper_pawv.py --wso "Pennsylvania-West Virginia" --sheet-id "2PACX-1vR8exp9-mwi8dpkZa9-48G-CUVuZ5rAlpOYdMCiNMka25wZ6V2XPLurpgMDtyiarqnQxYrW6dWfQ042"
+  run_step python_job "${dir}" auto_scrapers/scraper_ga_pnw.py --wso "Pacific Northwest" --sheet-url "https://docs.google.com/spreadsheets/d/1pmZ1j3KJyms0Dlk3xz_VVf6mWq6tqdZj/edit?gid=1648178012#gid=1648178012"
+  run_step python_job "${dir}" auto_scrapers/scraper_ga_pnw.py --wso "California North" --sheet-url "https://docs.google.com/spreadsheets/d/1ZAs27jQCPYTVgLuQ-feBHSO-BgGjGCewUs0djG23pXQ/edit?gid=35344992#gid=35344992"
+  run_step python_job "${dir}" auto_scrapers/scraper_newengland_auto.py
+  run_step python_job "${dir}" auto_scrapers/scraper_mountainsouth_auto.py
+  run_step python_job "${dir}" auto_scrapers/scraper_newyork_auto.py
+  run_step python_job "${dir}" auto_scrapers/scraper_illinois_auto.py --apply
+  run_step python_job "${dir}" auto_scrapers/scraper_california_south_auto.py --wso "California South" --sheet-url "https://docs.google.com/spreadsheets/d/1PHYJ-lhkXYMrQIIo6YaipePFxruSfbRw1TEUtIoknR0/edit?usp=sharing"
 }
 
 results_sport80() {
-  export SLACK_WEBHOOK_URL="${SLACK_RESULTS_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
   python_job "${SCRAPERS_DIR}/usaw/sport80_api" update_supabase_from_sport80.py
 }
 
 usamw_events() {
-  export SLACK_WEBHOOK_URL="${SLACK_MEET_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}"
   python_job "${SCRAPERS_DIR}/usamw/meets" scrape_events.py
 }
 
 usamw_national_records() {
-  export SLACK_WEBHOOK_URL="${SLACK_USAMW_RECORDS_WEBHOOK_URL:-${SLACK_RECORDS_WEBHOOK_URL:-${SLACK_WEBHOOK_URL:-}}}"
   python_job "${SCRAPERS_DIR}/usamw/records" national_records.py
 }
 
@@ -258,9 +304,9 @@ urlwatch_job() {
   fi
   local runtime="${dir}/.runtime"
   mkdir -p "${runtime}/config/urlwatch" "${runtime}/cache"
-  sed "s|\${SLACK_URLWATCH_WEBHOOK_URL}|${SLACK_URLWATCH_WEBHOOK_URL:-}|g" "${dir}/urlwatch.yaml" > "${runtime}/config/urlwatch/urlwatch.yaml"
-  cp "${dir}/urls.yaml" "${runtime}/config/urlwatch/urls.yaml"
-  XDG_CONFIG_HOME="${runtime}/config" XDG_CACHE_HOME="${runtime}/cache" "${venv}/bin/urlwatch"
+  cp "${dir}/urlwatch.yaml" "${dir}/urls.yaml" "${runtime}/config/urlwatch/"
+  XDG_CONFIG_HOME="${runtime}/config" XDG_CACHE_HOME="${runtime}/cache" \
+    "${venv}/bin/urlwatch" --hooks "${dir}/sentry_hooks.py"
 }
 
 run_selected_job() {
@@ -290,9 +336,11 @@ run_selected_job() {
   esac
 }
 
-if run_selected_job; then
-  exit 0
-else
-  status=$?
-  exit "${status}"
+# Called outside any `if`/`||` so errexit stays in force: a single-step job
+# stops at its first failing command and exits with that status.
+run_selected_job
+if [[ ${#FAILED_STEPS[@]} -gt 0 ]]; then
+  echo >&2 "${JOB}: ${#FAILED_STEPS[@]} step(s) failed:"
+  printf >&2 '  %s\n' "${FAILED_STEPS[@]}"
+  exit 1
 fi

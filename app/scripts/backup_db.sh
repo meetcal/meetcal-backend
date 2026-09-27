@@ -49,6 +49,14 @@ notify_uptime_kuma() {
     >/dev/null || true
 }
 
+# Sentry Crons check-in (no-op without SENTRY_DSN); see scrapers/common/sentry_cron.py.
+SENTRY_CRON="${SCRIPT_DIR}/../../scrapers/common/sentry_cron.py"
+SENTRY_MONITOR="postgres-backup"
+SENTRY_LOG="$(readlink -f "/proc/$$/fd/1" 2>/dev/null || true)"
+SENTRY_LOG_OFFSET="$(stat -c %s "${SENTRY_LOG}" 2>/dev/null || echo 0)"
+SECONDS=0
+SENTRY_CHECK_IN_ID="$(python3 "${SENTRY_CRON}" start "${SENTRY_MONITOR}" backup_db.sh || true)"
+
 on_exit() {
   local exit_code="$1"
 
@@ -57,6 +65,8 @@ on_exit() {
   else
     notify_uptime_kuma down backup_failed
   fi
+  python3 "${SENTRY_CRON}" finish "${SENTRY_MONITOR}" "${SENTRY_CHECK_IN_ID}" "${exit_code}" "${SECONDS}" \
+    --log "${SENTRY_LOG}" --log-offset "${SENTRY_LOG_OFFSET}" || true
 }
 trap 'on_exit "$?"' EXIT
 

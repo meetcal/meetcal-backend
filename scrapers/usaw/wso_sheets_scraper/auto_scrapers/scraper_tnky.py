@@ -46,9 +46,8 @@ class WSORecordsTNKYScraper:
     def setup_slack(self):
         """Set up Slack webhook URL."""
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
-        if not self.slack_webhook_url:
-            raise ValueError("SLACK_WEBHOOK_URL environment variable not set")
-        print("✓ Slack webhook configured")
+        if self.slack_webhook_url:
+            print("✓ Slack webhook configured")
     
     def _normalize_age_category(self, section_header: str) -> tuple:
         """
@@ -249,6 +248,8 @@ class WSORecordsTNKYScraper:
     
     def send_slack_notification(self) -> None:
         """Send Slack notification (same as other scrapers)."""
+        if not self.slack_webhook_url:
+            return
         total_inserted = len(self.changes["inserted"])
         total_updated = len(self.changes["updated"])
         

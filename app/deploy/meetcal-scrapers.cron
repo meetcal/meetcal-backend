@@ -26,4 +26,3 @@ MEETCAL_BACKEND_ROOT=/home/maddisen/dev/meetcal-llc/meetcal-backend
 5 2 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh results-sport80 >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/results-sport80.log 2>&1
 40 2 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh wso-records >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/wso-records.log 2>&1
 25 3 * * * /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh entries >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/entries.log 2>&1
-55 3 * * 1 /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/run_scraper_job.sh upcoming-meets-slack >> /home/maddisen/dev/meetcal-llc/meetcal-backend/scrapers/logs/upcoming-meets-slack.log 2>&1
