@@ -12,19 +12,17 @@ For New Jersey WSO which uses a unique side-by-side layout with:
 
 import os
 import sys
-import json
 import argparse
+import csv
+import io
 import re
 from typing import List, Dict, Any, Optional
-from datetime import datetime
-from collections import defaultdict
 
 import requests
-from common.postgres_ingest import IngestClient
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils import wso_record_ingest_args
+from utils import every_part, fetch_gviz_tabs, sync_wso_records
 
 # Load environment variables
 load_dotenv()
@@ -56,19 +54,12 @@ class WSORecordsNewJerseyScraper:
             "Masters 65": "127836685",  # 65-69 Masters Records
             "Masters 70": "239397826",  # 70-74 Masters Records
             "Masters 75": "2047529058",  # 75-79 Men/ 75+ Women Masters Records
-            "Masters 80": "389932308",  # 80+ Men's Masters Records
+            # The men's 80+ tab (gid 389932308, all vacant) is gone; that gid
+            # is now the welcome page, so it is no longer read.
         }
         
-        self.ingest_client = None
-        self.scraper_secret = None
         self.slack_webhook_url = None
         
-    def setup_ingest_client(self):
-        """Set up Postgres ingest client."""
-        self.ingest_client = IngestClient()
-        self.scraper_secret = os.getenv("SCRAPER_SECRET")
-        print("Postgres ingest client initialized")
-    
     def setup_slack(self):
         """Set up Slack webhook URL."""
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
@@ -87,24 +78,20 @@ class WSORecordsNewJerseyScraper:
             List of records matching DB schema
         """
         sheet_id = self._extract_sheet_id(self.sheet_url)
-        all_records = []
-        
-        # Scrape each tab
+        parts = []
+
+        # The sync is an exact set, so a tab that fails to fetch or parse
+        # stops the run rather than deleting that tab's classes.
+        # No configured tab is the sheet's first, which is what Google answers
+        # a deleted tab's gid with; a tab matching it was deleted or moved.
+        texts = fetch_gviz_tabs(sheet_id, list(self.tabs.values()), first_tab_gid=None)
         for tab_name, gid in self.tabs.items():
-            if gid is None:
-                print(f"⚠️  Skipping {tab_name} - gid not configured")
-                continue
-                
             print(f"\nScraping {tab_name} tab...")
-            try:
-                records = self._scrape_tab(sheet_id, gid, tab_name)
-                all_records.extend(records)
-                print(f"✓ Found {len(records)} records in {tab_name}")
-            except Exception as e:
-                print(f"✗ Error scraping {tab_name}: {e}")
-                import traceback
-                traceback.print_exc()
-        
+            records = self._parse_side_by_side(list(csv.reader(io.StringIO(texts[gid]))), tab_name)
+            print(f"✓ Found {len(records)} records in {tab_name}")
+            parts.append((f"tab {tab_name} (gid {gid})", records))
+        all_records = every_part(self.wso_name, parts)
+
         # Consolidate duplicate weight class records
         consolidated_records = self._consolidate_records(all_records)
         if len(consolidated_records) != len(all_records):
@@ -119,25 +106,6 @@ class WSORecordsNewJerseyScraper:
             raise ValueError("Invalid Google Sheets URL")
         return match.group(1)
     
-    def _scrape_tab(self, sheet_id: str, gid: str, tab_name: str) -> List[Dict[str, Any]]:
-        """Scrape a single tab."""
-        csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid}"
-        response = requests.get(csv_url)
-        
-        if response.status_code != 200:
-            raise Exception(f"Failed to fetch tab: {response.status_code}")
-        
-        # Parse CSV
-        import csv
-        import io
-        csv_reader = csv.reader(io.StringIO(response.text))
-        rows = list(csv_reader)
-        
-        # Parse the side-by-side layout
-        records = self._parse_side_by_side(rows, tab_name)
-        
-        return records
-    
     def _parse_side_by_side(self, rows: List[List[str]], tab_name: str) -> List[Dict[str, Any]]:
         """
         Parse New Jersey's unique side-by-side layout.
@@ -149,8 +117,6 @@ class WSORecordsNewJerseyScraper:
         Column indices:
         - Women: 1 (weight), 2 (athlete), 3 (date), 4 (snatch), 5 (c&j), 6 (total)
         - Men: 8 (weight), 9 (athlete), 10 (date), 11 (snatch), 12 (c&j), 13 (total)
-        
-        Special case: Masters 80 tab only has men's records in the left columns.
         """
         records = []
         age_category = self._map_age_category(tab_name)
@@ -158,9 +124,6 @@ class WSORecordsNewJerseyScraper:
         # Track last weight classes for handling + categories
         last_women_weight = None
         last_men_weight = None
-        
-        # Masters 80 is men-only, data is in left columns but should be treated as men
-        is_masters_80 = tab_name == "Masters 80"
         
         for i, row in enumerate(rows):
             # Skip empty rows or header rows
@@ -171,36 +134,25 @@ class WSORecordsNewJerseyScraper:
             if i == 0:
                 continue
             
-            if is_masters_80:
-                # For Masters 80, left columns are men's records
-                men_record = self._parse_single_side(
-                    row, 1, "Men", age_category, last_men_weight
-                )
-                if men_record:
-                    records.append(men_record)
-                    if men_record['weight_class'] and not men_record['weight_class'].endswith('+'):
-                        last_men_weight = men_record['weight_class']
-            else:
-                # Normal side-by-side layout
-                # Parse women's side (columns 1-6)
-                women_record = self._parse_single_side(
-                    row, 1, "Women", age_category, last_women_weight
-                )
-                if women_record:
-                    records.append(women_record)
-                    # Update last weight class if it's not a + category and not empty
-                    if women_record['weight_class'] and not women_record['weight_class'].endswith('+'):
-                        last_women_weight = women_record['weight_class']
-                
-                # Parse men's side (columns 8-13)
-                men_record = self._parse_single_side(
-                    row, 8, "Men", age_category, last_men_weight
-                )
-                if men_record:
-                    records.append(men_record)
-                    # Update last weight class if it's not a + category and not empty
-                    if men_record['weight_class'] and not men_record['weight_class'].endswith('+'):
-                        last_men_weight = men_record['weight_class']
+            # Parse women's side (columns 1-6)
+            women_record = self._parse_single_side(
+                row, 1, "Women", age_category, last_women_weight
+            )
+            if women_record:
+                records.append(women_record)
+                # Update last weight class if it's not a + category and not empty
+                if women_record['weight_class'] and not women_record['weight_class'].endswith('+'):
+                    last_women_weight = women_record['weight_class']
+            
+            # Parse men's side (columns 8-13)
+            men_record = self._parse_single_side(
+                row, 8, "Men", age_category, last_men_weight
+            )
+            if men_record:
+                records.append(men_record)
+                # Update last weight class if it's not a + category and not empty
+                if men_record['weight_class'] and not men_record['weight_class'].endswith('+'):
+                    last_men_weight = men_record['weight_class']
         
         return records
     
@@ -226,9 +178,6 @@ class WSORecordsNewJerseyScraper:
                 weight_class = last_weight + "+"
             else:
                 return None
-        
-        # Get athlete name
-        athlete = row[col_offset + 1].strip() if len(row) > col_offset + 1 else ""
         
         # Get lift values
         snatch_val = row[col_offset + 3].strip() if len(row) > col_offset + 3 else ""
@@ -317,16 +266,6 @@ class WSORecordsNewJerseyScraper:
         
         return consolidated
     
-    def upsert_records(self, records: List[Dict[str, Any]]) -> None:
-        """Upsert records to Postgres."""
-        # One connection, one transaction: a failing row rolls back the batch.
-        self.ingest_client.actions(
-            "scraperIngestion:ingestWSORecord",
-            [wso_record_ingest_args(record, self.scraper_secret) for record in records],
-        )
-        for record in records:
-            print(f"  ✓ Upserted: {record['age_category']} {record['gender']} {record['weight_class']}")
-    
     def send_slack_notification(self) -> None:
         """Send Slack notification."""
         if not self.slack_webhook_url:
@@ -380,26 +319,27 @@ class WSORecordsNewJerseyScraper:
         except Exception as e:
             print(f"✗ Failed to send Slack notification: {e}")
     
-    def run(self, dry_run: bool = False) -> None:
+    def run(self, dry_run: bool = False, allow_shrink: bool = False) -> None:
         """Main execution flow."""
         print(f"Starting scraper for {self.wso_name}")
         print(f"Sheet URL: {self.sheet_url}")
         
-        self.setup_ingest_client()
-
         if not dry_run:
             self.setup_slack()
         else:
-            print("🧪 DRY RUN MODE - No Slack operations")
+            print("🧪 DRY RUN MODE - No database or Slack operations")
         
         print("Scraping Google Sheet...")
         records = self.scrape_sheet()
         print(f"Found {len(records)} total records")
         
+        if dry_run:
+            for record in records:
+                print(f"  {record['age_category']} {record['gender']} {record['weight_class']}: "
+                      f"{record['snatch_record']}/{record['cj_record']}/{record['total_record']}")
+        sync_wso_records(self.wso_name, records, dry_run=dry_run, allow_shrink=allow_shrink)
+        
         if not dry_run:
-            print("Upserting records to Postgres...")
-            self.upsert_records(records)
-            
             print("Sending Slack notification...")
             self.send_slack_notification()
         
@@ -411,12 +351,13 @@ def main():
     parser = argparse.ArgumentParser(description="WSO Records Scraper (New Jersey Format)")
     parser.add_argument("--wso", required=True, help="WSO name (should be 'New Jersey')")
     parser.add_argument("--sheet-url", required=True, help="Google Sheet URL")
-    parser.add_argument("--dry-run", action="store_true", help="Compare with database without making changes")
+    parser.add_argument("--dry-run", action="store_true", help="Parse and print without touching Postgres")
+    parser.add_argument("--allow-shrink", action="store_true", help="Let the sync delete more than a quarter of the stored classes")
     
     args = parser.parse_args()
     
     scraper = WSORecordsNewJerseyScraper(args.wso, args.sheet_url)
-    scraper.run(dry_run=args.dry_run)
+    scraper.run(dry_run=args.dry_run, allow_shrink=args.allow_shrink)
 
 
 if __name__ == "__main__":

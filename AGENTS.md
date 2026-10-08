@@ -38,7 +38,7 @@ Package manager for JS helpers is **bun**. Do not use npm. Rust uses cargo. Pyth
 | Meet automation tests | `cd scrapers && PYTHONPATH=. python -m unittest discover -s usaw/meet_automation/tests -p 'test_*.py'` |
 | Postgres ingest tests | `cd scrapers && PYTHONPATH=. python -m unittest discover -s common/tests -p 'test_*.py'` (includes `test_normalize`, `test_dedupe_idless_athletes`, `test_complete_ended_meets`) |
 | WSO writer tests | `cd scrapers && PYTHONPATH=. python -m unittest common.test_postgres_writer` |
-| Illinois WSO parser tests | `cd scrapers && PYTHONPATH=. python -m unittest usaw/wso_sheets_scraper/test_files/test_illinois.py` (needs `usaw/wso_sheets_scraper/requirements.txt`) |
+| WSO records scraper tests | `cd scrapers && PYTHONPATH=. python -m unittest discover -s usaw/wso_sheets_scraper/test_files -p 'test_*.py'` (needs `usaw/wso_sheets_scraper/requirements.txt`; offline, network mocked) |
 | Coverage gaps | `bun .codex/skills/review-code-performance-tests/scripts/report-coverage-gaps.ts` |
 | Shellcheck | `shellcheck -x -P app/scripts app/deploy/*.sh app/scripts/*.sh` |
 
@@ -57,7 +57,7 @@ Run this table before opening or updating a PR. Do not push to `master`. Merge o
 | Ingest / writer | `cd scrapers && PYTHONPATH=. python -m unittest discover -s common/tests -p 'test_*.py' && PYTHONPATH=. python -m unittest common.test_postgres_writer` | Exit 0 |
 | Coverage inventory | `bun .codex/skills/review-code-performance-tests/scripts/report-coverage-gaps.ts` | Report written; no new untested auth, Slack, dispatch, writer, or prune holes in files you touched |
 
-CI (`.github/workflows/ci.yml`) runs the Rust job (fmt, clippy, `cargo test --locked`, shellcheck, docker build), the Python job (compileall, the three unittest invocations, and the Illinois WSO parser tests), and `cargo audit`.
+CI (`.github/workflows/ci.yml`) runs the Rust job (fmt, clippy, `cargo test --locked`, shellcheck, docker build), the Python job (compileall, the three unittest invocations, and the WSO records scraper tests), and `cargo audit`.
 
 ## Code Quality
 
@@ -106,6 +106,7 @@ CI (`.github/workflows/ci.yml`) runs the Rust job (fmt, clippy, `cargo test --lo
 - Meet automation: Slack Approve/Reject drops a decision file. The `approve` cron loads the staged bundle and writes athletes + schedule in **one** transaction (`replace` deletes then inserts, then `commit`). The Rust API must not gain DB credentials for that write.
 - `deleteMissingIntlRankingGroups` with an empty `groups` list is a noop on purpose. Never prune when the scrape produced zero groups.
 - `replaceIntlRankingsForGroup` / `replaceWSORecordSet` are exact-set syncs: delete keys that disappeared, upsert the rest. Do not `DELETE` the whole group then insert if a later row can fail.
+- Every WSO records scraper writes through `usaw/wso_sheets_scraper/utils.py` `sync_wso_records`: one `replaceWSORecordSet` per WSO run, never per-row `ingestWSORecord`, so classes a source drops are deleted. A source read in parts (tabs, PDFs) goes through `every_part`, and a part that fails or parses to nothing fails the run rather than syncing a partial set. The writer refuses to delete more than a quarter of a WSO's classes unless the scraper runs with `--allow-shrink`, after checking the source by hand. meetcal-app's Convex scrapers are the reference parse for each WSO.
 - Club/WSO athlete history is registration history, not "current club on completed meets only".
 - Name matching is case- and whitespace-insensitive. Callers may send `ALEXANDER  NORDSTROM`; responses keep the requested key on batch bests.
 - Slack request timestamps older than five minutes are replays. Run ids must be `[A-Za-z0-9._-]`, never path separators.

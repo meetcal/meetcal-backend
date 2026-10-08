@@ -1,26 +1,34 @@
 #!/usr/bin/env python3
 """
-WSO Records Scraper
+WSO Records Scraper - Ohio Format
 
-Scrapes weightlifting records from Google Sheets and upserts to Postgres.
-Sends Slack notifications for changes.
+Scrapes Ohio's weightlifting records from Google Sheets (a tab per age group
+and gender) and syncs them to Postgres. Sends Slack notifications for changes.
 """
 
 import os
 import sys
-import json
 import argparse
+import csv
+import io
 import re
 from typing import List, Dict, Any, Tuple
-from datetime import datetime
+from urllib.parse import quote
 
-import gspread
-from google.oauth2.service_account import Credentials
 import requests
-from common.postgres_ingest import IngestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils import wso_record_ingest_args
+from utils import every_part, sync_wso_records
+
+
+# The tabs read, by name: the same list as meetcal-app's
+# convex/scrapers/parse/wso/ohio.ts (OHIO_TABS).
+OHIO_TABS = (
+    "Youth Women", "Youth Men",
+    "Junior Women", "Junior Men",
+    "Senior Women", "Senior Men",
+    "Masters Women", "Masters Men",
+)
 
 
 class WSORecordsScraper:
@@ -32,40 +40,7 @@ class WSORecordsScraper:
         self.sheet_url = sheet_url
         self.changes = {"inserted": [], "updated": []}
         
-        # Initialize clients
-        self.google_client = None
-        self.ingest_client = None
-        self.scraper_secret = None
         self.slack_webhook_url = None
-        
-    def setup_google_client(self):
-        """Set up Google Sheets client with service account or anonymous access."""
-        service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-        
-        if service_account_json:
-            # Use service account if provided
-            service_account_info = json.loads(service_account_json)
-            scopes = [
-                "https://www.googleapis.com/auth/spreadsheets.readonly",
-                "https://www.googleapis.com/auth/drive.readonly"
-            ]
-            credentials = Credentials.from_service_account_info(
-                service_account_info, scopes=scopes
-            )
-            self.google_client = gspread.authorize(credentials)
-            self.use_public_api = False
-            print("✓ Google Sheets client initialized (authenticated)")
-        else:
-            # Use public API for public sheets
-            self.google_client = None
-            self.use_public_api = True
-            print("✓ Using public Google Sheets API (no authentication)")
-    
-    def setup_ingest_client(self):
-        """Set up Postgres ingest client."""
-        self.ingest_client = IngestClient()
-        self.scraper_secret = os.getenv("SCRAPER_SECRET")
-        print("Postgres ingest client initialized")
     
     def setup_slack(self):
         """Set up Slack webhook URL."""
@@ -75,7 +50,7 @@ class WSORecordsScraper:
     
     def scrape_sheet(self) -> List[Dict[str, Any]]:
         """
-        Scrape data from Google Sheet.
+        Scrape every tab in OHIO_TABS from the public sheet.
         
         Returns:
             List of records with structure:
@@ -92,91 +67,37 @@ class WSORecordsScraper:
         # Extract sheet ID from URL
         sheet_id = self.sheet_url.split('/d/')[1].split('/')[0]
         
-        if self.use_public_api:
-            # Use public API via direct HTTP requests
-            return self._scrape_sheet_public(sheet_id)
-        else:
-            # Use authenticated gspread client
-            return self._scrape_sheet_authenticated(sheet_id)
-    
-    def _scrape_sheet_authenticated(self, sheet_id: str) -> List[Dict[str, Any]]:
-        """Scrape using authenticated gspread client."""
-        # Open the spreadsheet
-        spreadsheet = self.google_client.open_by_key(sheet_id)
+        parts = []
+        served_by = {}  # CSV text -> the tab name that returned it
         
-        # Get all worksheets (tabs)
-        worksheets = spreadsheet.worksheets()
-        
-        all_records = []
-        
-        # Tab names typically follow pattern: "Youth Women", "Youth Men", etc.
-        # Parse each tab
-        for worksheet in worksheets:
-            tab_name = worksheet.title
-            print(f"  Processing tab: {tab_name}")
-            
-            # Parse age category and gender from tab name
+        # The sync is an exact set, so a tab that fails to fetch or parse
+        # stops the run rather than deleting that tab's classes.
+        for tab_name in OHIO_TABS:
+            print(f"  Reading tab: {tab_name}")
             age_category, gender = self._parse_tab_name(tab_name)
-            if not age_category or not gender:
-                continue
             
-            # Get worksheet data
-            all_values = worksheet.get_all_values()
+            text = self._fetch_tab_csv(sheet_id, tab_name)
+            # gviz answers a name the sheet no longer has with its first tab,
+            # so a renamed tab comes back as a copy of another tab's CSV.
+            if text in served_by:
+                raise ValueError(
+                    f"{self.wso_name}: tab {tab_name!r} returned the same CSV as {served_by[text]!r} "
+                    "(tab renamed or removed?)"
+                )
+            served_by[text] = tab_name
             
-            # Parse the tab data
-            records = self._parse_tab_data(all_values, age_category, gender)
-            all_records.extend(records)
+            records = self._parse_tab_data(list(csv.reader(io.StringIO(text))), age_category, gender)
             print(f"    Found {len(records)} records")
+            parts.append((f"tab {tab_name!r}", records))
         
-        return all_records
+        return every_part(self.wso_name, parts)
     
-    def _scrape_sheet_public(self, sheet_id: str) -> List[Dict[str, Any]]:
-        """Scrape using public Google Sheets API."""
-        # Get sheet metadata to find all tabs
-        meta_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit#gid=0"
-        
-        # For now, we'll try common tab names
-        # Public API access requires knowing the sheet names ahead of time
-        tab_names = [
-            "Youth Women", "Youth Men",
-            "Junior Women", "Junior Men",
-            "Senior Women", "Senior Men",
-            "Masters Women", "Masters Men"
-        ]
-        
-        all_records = []
-        
-        for tab_name in tab_names:
-            print(f"  Trying tab: {tab_name}")
-            
-            # Parse age category and gender from tab name
-            age_category, gender = self._parse_tab_name(tab_name)
-            if not age_category or not gender:
-                continue
-            
-            # Fetch data from public API
-            try:
-                # Use CSV export for public sheets
-                csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={tab_name}"
-                response = requests.get(csv_url)
-                
-                if response.status_code == 200:
-                    # Parse CSV data
-                    import csv
-                    import io
-                    csv_data = csv.reader(io.StringIO(response.text))
-                    all_values = list(csv_data)
-                    
-                    # Parse the tab data
-                    records = self._parse_tab_data(all_values, age_category, gender)
-                    all_records.extend(records)
-                    print(f"    Found {len(records)} records")
-                else:
-                    print(f"    Tab not found or not accessible")
-            except Exception as e:
-                print(f"    Error fetching tab: {e}")
-        
-        return all_records
+    def _fetch_tab_csv(self, sheet_id: str, tab_name: str) -> str:
+        """The CSV of one tab by name, through Google's visualization endpoint."""
+        csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={quote(tab_name)}"
+        response = requests.get(csv_url, timeout=60)
+        response.raise_for_status()
+        return response.text
     
     def _parse_tab_name(self, tab_name: str) -> Tuple[str, str]:
         """Parse age category and gender from tab name."""
@@ -398,21 +319,6 @@ class WSORecordsScraper:
         
         return records
     
-    def upsert_records(self, records: List[Dict[str, Any]]) -> None:
-        """
-        Upsert records to Postgres.
-        
-        Args:
-            records: List of records to upsert
-        """
-        # One connection, one transaction: a failing row rolls back the batch.
-        self.ingest_client.actions(
-            "scraperIngestion:ingestWSORecord",
-            [wso_record_ingest_args(record, self.scraper_secret) for record in records],
-        )
-        for record in records:
-            print(f"  ✓ Upserted: {record['age_category']} {record['gender']} {record['weight_class']}")
-    
     def send_slack_notification(self) -> None:
         """Send Slack notification with change summary."""
         if not self.slack_webhook_url:
@@ -466,28 +372,31 @@ class WSORecordsScraper:
         except Exception as e:
             print(f"✗ Failed to send Slack notification: {e}")
     
-    def run(self) -> None:
+    def run(self, dry_run: bool = False, allow_shrink: bool = False) -> None:
         """Main execution flow."""
         print(f"Starting scraper for {self.wso_name}")
         print(f"Sheet URL: {self.sheet_url}")
         
-        # Setup clients
-        self.setup_google_client()
-        self.setup_ingest_client()
-        self.setup_slack()
+        if not dry_run:
+            self.setup_slack()
+        else:
+            print("🧪 DRY RUN MODE - No database or Slack operations")
         
         # Scrape data
         print("Scraping Google Sheet...")
         records = self.scrape_sheet()
         print(f"Found {len(records)} records")
         
-        # Upsert to database
-        print("Upserting records to Postgres...")
-        self.upsert_records(records)
+        if dry_run:
+            for record in records:
+                print(f"  {record['age_category']} {record['gender']} {record['weight_class']}: "
+                      f"{record['snatch_record']}/{record['cj_record']}/{record['total_record']}")
+        sync_wso_records(self.wso_name, records, dry_run=dry_run, allow_shrink=allow_shrink)
         
-        # Send notification
-        print("Sending Slack notification...")
-        self.send_slack_notification()
+        if not dry_run:
+            # Send notification
+            print("Sending Slack notification...")
+            self.send_slack_notification()
         
         print("Done!")
 
@@ -497,11 +406,13 @@ def main():
     parser = argparse.ArgumentParser(description="WSO Records Scraper")
     parser.add_argument("--wso", required=True, help="WSO name (e.g., 'Ohio')")
     parser.add_argument("--sheet-url", required=True, help="Google Sheet URL")
+    parser.add_argument("--dry-run", action="store_true", help="Parse and print without touching Postgres")
+    parser.add_argument("--allow-shrink", action="store_true", help="Let the sync delete more than a quarter of the stored classes")
     
     args = parser.parse_args()
     
     scraper = WSORecordsScraper(args.wso, args.sheet_url)
-    scraper.run()
+    scraper.run(dry_run=args.dry_run, allow_shrink=args.allow_shrink)
 
 
 if __name__ == "__main__":

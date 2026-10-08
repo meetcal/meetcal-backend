@@ -23,122 +23,109 @@ import sys
 from typing import Dict, List, Optional
 
 import requests
-from common.postgres_ingest import IngestClient
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils import wso_record_ingest_args
+from utils import sync_wso_records
 
-load_dotenv()
+FETCH_TIMEOUT_SECONDS = 60
+CJ_LIFTS = ("clean & jerk", "clean and jerk", "c&j", "cleanjerk")
 
 
 class WSORecordsCaliforniaSouthScraper:
     """Scraper for California South WSO weightlifting records."""
 
-    SHEET_ID = "1PHYJ-lhkXYMrQIIo6YaipePFxruSfbRw1TEUtIoknR0"
-
     def __init__(self, wso_name: str, sheet_url: str):
         self.wso_name = wso_name
         self.sheet_url = sheet_url
-        self.ingest_client = None
-
-    def setup_ingest_client(self):
-        self.ingest_client = IngestClient()
-        print("Postgres ingest client initialized")
 
     def _normalize_age_group(self, age_group: str) -> str:
-        """Map sheet ageGroup labels to MeetCal age_category values."""
+        """Map sheet ageGroup labels to MeetCal age_category values, keeping a
+        suffix (" ADAP") so adaptive groups are still recognised and skipped."""
         age = (age_group or "").strip()
         upper = age.upper()
 
         if upper.startswith("JR"):
-            return "Junior"
-        if upper.startswith("OPEN"):
-            return "Senior"
-        match = re.match(r"^[MW](\d+)(.*)$", age, re.IGNORECASE)
+            return age.replace("JR", "Junior", 1).replace("jr", "Junior", 1)
+        match = re.match(r"^(open)(.*)$", age, re.IGNORECASE | re.DOTALL)
         if match:
-            suffix = match.group(2) or ""
-            return f"Masters {match.group(1)}{suffix}"
+            return f"Senior{match.group(2)}"
+        match = re.match(r"^[MW](\d+)(.*)$", age, re.IGNORECASE | re.DOTALL)
+        if match:
+            return f"Masters {match.group(1)}{match.group(2)}"
         return age
 
     def _parse_weight_class(self, weight_min: str, weight_max: str) -> Optional[str]:
         """
         Build a MeetCal weight_class from the body-weight range columns.
 
-        The sheet uses an open lower bound (min=0) for the first real class, so
-        when min is 0 or empty we treat max as the class (e.g. 0-30 -> "30").
-        When min is set, the class is the lower bound (e.g. 30-33 -> "30").
-        An empty max with a min means an open-ended class (e.g. "61" -> "61+").
+        The class is the upper bound (0-30 -> "30", 30-33 -> "33"); an empty
+        max means an open-ended class (61- -> "61+"). Naming a class by its
+        lower bound filed every value one class too light and made 30-33
+        collide with 0-30.
         """
         weight_min = (weight_min or "").strip()
         weight_max = (weight_max or "").strip()
-        if not weight_min and not weight_max:
-            return None
         if not weight_max:
-            return f"{weight_min}+"
-        if weight_max.startswith(">"):
-            return weight_max.lstrip(">") + "+"
-        if not weight_min:
-            return weight_max
-        try:
-            if int(float(weight_min)) <= 0:
-                return weight_max
-        except ValueError:
-            pass
-        return weight_min
+            return f"{weight_min}+" if weight_min else None
+        if ">" in weight_max:
+            return weight_max.replace(">", "") + "+"
+        return weight_max
 
     def scrape_sheet(self) -> List[Dict]:
-        csv_url = (
-            f"https://docs.google.com/spreadsheets/d/{self.SHEET_ID}"
-            f"/gviz/tq?tqx=out:csv"
-        )
-        response = requests.get(csv_url, timeout=60)
+        """The sheet's first tab, one lift per row, the value in "WSO record"
+        (the "American Record" column beside it is not ours)."""
+        sheet_id = self.sheet_url.split("/d/")[1].split("/")[0]
+        csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv"
+        response = requests.get(csv_url, timeout=FETCH_TIMEOUT_SECONDS)
         if response.status_code != 200:
             raise RuntimeError(f"Failed to fetch sheet: HTTP {response.status_code}")
 
         grouped: Dict[tuple, dict] = {}
         for row in csv.DictReader(io.StringIO(response.text)):
-            age_raw = row.get("ageGroup", "").strip()
-            gender_raw = row.get("gender", "").strip()
-            lift_type = row.get("lift", "").strip()
-            wso_record = row.get("WSO record", "").strip()
+            age_raw = (row.get("ageGroup") or "").strip()
+            gender_raw = (row.get("gender") or "").strip()
+            lift_lower = (row.get("lift") or "").strip().lower()
+            wso_record = (row.get("WSO record") or "").strip()
 
-            if not age_raw or not gender_raw or not lift_type:
-                continue
-
-            age_category = self._normalize_age_group(age_raw)
-            if "ADAP" in age_category:
+            if not age_raw or not gender_raw:
                 continue
 
             gender = "Women" if gender_raw == "F" else "Men" if gender_raw == "M" else None
             if not gender:
                 continue
 
+            age_category = self._normalize_age_group(age_raw)
+            if "ADAP" in age_category:
+                continue
+
             weight_class = self._parse_weight_class(
-                row.get("bodyWeightMin", ""),
-                row.get("bodyWeightMax", ""),
+                row.get("bodyWeightMin"),
+                row.get("bodyWeightMax"),
             )
             if not weight_class:
                 continue
 
-            key = (age_category, gender, weight_class)
-            entry = grouped.setdefault(
-                key,
-                {"snatch": None, "cj": None, "total": None},
-            )
+            if lift_lower == "snatch":
+                field = "snatch"
+            elif lift_lower in CJ_LIFTS:
+                field = "cj"
+            elif lift_lower == "total":
+                field = "total"
+            else:
+                # Any other lift never creates its class.
+                continue
 
-            lift_lower = lift_type.lower()
             try:
                 value = int(float(wso_record)) if wso_record else None
             except ValueError:
                 value = None
 
-            if lift_lower == "snatch":
-                entry["snatch"] = value
-            elif lift_lower in ("clean & jerk", "clean and jerk", "c&j", "cleanjerk"):
-                entry["cj"] = value
-            elif lift_lower == "total":
-                entry["total"] = value
+            entry = grouped.setdefault(
+                (age_category, gender, weight_class),
+                {"snatch": None, "cj": None, "total": None},
+            )
+            entry[field] = value
 
         records = []
         for (age_category, gender, weight_class), lifts in grouped.items():
@@ -155,30 +142,23 @@ class WSORecordsCaliforniaSouthScraper:
             )
         return records
 
-    def upsert_records(self, records: List[Dict]) -> None:
-        # One connection, one transaction: a failing row rolls back the batch.
-        self.ingest_client.actions(
-            "scraperIngestion:ingestWSORecord",
-            [wso_record_ingest_args(record) for record in records],
-        )
-        for record in records:
-            print(
-                f"  ✓ Upserted: {record['age_category']} "
-                f"{record['gender']} {record['weight_class']}"
-            )
-
-    def run(self) -> None:
-        print(f"Starting scraper for {self.wso_name}")
+    def run(self, dry_run: bool = False, allow_shrink: bool = False) -> None:
+        print(f"Starting scraper for {self.wso_name}{' (DRY RUN)' if dry_run else ''}")
         print(f"Sheet URL: {self.sheet_url}")
-
-        self.setup_ingest_client()
 
         print("Scraping Google Sheet...")
         records = self.scrape_sheet()
         print(f"Found {len(records)} records")
+        if dry_run:
+            for record in records:
+                print(
+                    f"  {record['age_category']} | {record['gender']} | "
+                    f"{record['weight_class']}: snatch={record['snatch_record']}, "
+                    f"cj={record['cj_record']}, total={record['total_record']}"
+                )
 
-        print("Upserting records to Postgres...")
-        self.upsert_records(records)
+        # One exact-set write: classes the sheet no longer lists are deleted
+        sync_wso_records(self.wso_name, records, dry_run=dry_run, allow_shrink=allow_shrink)
 
         print("Done!")
 
@@ -188,11 +168,21 @@ def main() -> None:
         description="WSO Records Scraper (California South Format)"
     )
     parser.add_argument("--wso", required=True, help="WSO name (should be 'California South')")
-    parser.add_argument("--sheet-url", required=True, help="Google Sheet URL")
+    parser.add_argument("--sheet-url", required=True, help="Google Sheet URL (its first tab is read)")
+    parser.add_argument("--dry-run", action="store_true", help="Parse and print without updating Postgres")
+    parser.add_argument(
+        "--allow-shrink",
+        action="store_true",
+        help="Let the sync delete more than a quarter of the stored classes",
+    )
     args = parser.parse_args()
 
+    # Only a write needs the database settings.
+    if not args.dry_run:
+        load_dotenv()
+
     scraper = WSORecordsCaliforniaSouthScraper(args.wso, args.sheet_url)
-    scraper.run()
+    scraper.run(dry_run=args.dry_run, allow_shrink=args.allow_shrink)
 
 
 if __name__ == "__main__":

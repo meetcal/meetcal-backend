@@ -11,18 +11,16 @@ For Florida WSO which uses a side-by-side layout with:
 
 import os
 import sys
-import json
 import argparse
+import csv
+import io
 import re
 from typing import List, Dict, Any, Optional
-from datetime import datetime
-from collections import defaultdict
 
 import requests
-from common.postgres_ingest import IngestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils import wso_record_ingest_args
+from utils import every_part, fetch_gviz_tabs, sync_wso_records
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -60,16 +58,8 @@ class WSORecordsFloridaScraper:
             "Masters 90": "575067900",  # 90+ Master - need to find GID
         }
         
-        self.ingest_client = None
-        self.scraper_secret = None
         self.slack_webhook_url = None
         
-    def setup_ingest_client(self):
-        """Set up Postgres ingest client."""
-        self.ingest_client = IngestClient()
-        self.scraper_secret = os.getenv("SCRAPER_SECRET")
-        print("Postgres ingest client initialized")
-    
     def setup_slack(self):
         """Set up Slack webhook URL."""
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
@@ -92,23 +82,20 @@ class WSORecordsFloridaScraper:
             List of records matching DB schema
         """
         sheet_id = self._extract_sheet_id(self.sheet_url)
-        all_records = []
-        
-        # Scrape each tab
+        parts = []
+
+        # The sync is an exact set, so a tab that fails to fetch or parse
+        # stops the run rather than deleting that tab's classes.
+        # No configured tab is the sheet's first, which is what Google answers
+        # a deleted tab's gid with; a tab matching it was deleted or moved.
+        texts = fetch_gviz_tabs(sheet_id, list(self.tabs.values()), first_tab_gid=None)
         for tab_name, gid in self.tabs.items():
-            if gid is None:
-                print(f"⚠️  Skipping {tab_name} - gid not configured")
-                continue
-                
             print(f"\nScraping {tab_name} tab...")
-            try:
-                records = self._scrape_tab(sheet_id, gid, tab_name)
-                all_records.extend(records)
-                print(f"✓ Found {len(records)} records in {tab_name}")
-            except Exception as e:
-                print(f"✗ Error scraping {tab_name}: {e}")
-        
-        return all_records
+            records = self._parse_side_by_side(list(csv.reader(io.StringIO(texts[gid]))), tab_name)
+            print(f"✓ Found {len(records)} records in {tab_name}")
+            parts.append((f"tab {tab_name} (gid {gid})", records))
+
+        return every_part(self.wso_name, parts)
     
     def _extract_sheet_id(self, url: str) -> str:
         """Extract sheet ID from URL."""
@@ -116,25 +103,6 @@ class WSORecordsFloridaScraper:
         if not match:
             raise ValueError("Invalid Google Sheets URL")
         return match.group(1)
-    
-    def _scrape_tab(self, sheet_id: str, gid: str, tab_name: str) -> List[Dict[str, Any]]:
-        """Scrape a single tab."""
-        csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid}"
-        response = requests.get(csv_url)
-        
-        if response.status_code != 200:
-            raise Exception(f"Failed to fetch tab: {response.status_code}")
-        
-        # Parse CSV
-        import csv
-        import io
-        csv_reader = csv.reader(io.StringIO(response.text))
-        rows = list(csv_reader)
-        
-        # Parse the side-by-side layout
-        records = self._parse_side_by_side(rows, tab_name)
-        
-        return records
     
     def _parse_side_by_side(self, rows: List[List[str]], tab_name: str) -> List[Dict[str, Any]]:
         """
@@ -303,16 +271,6 @@ class WSORecordsFloridaScraper:
         except ValueError:
             return None
     
-    def upsert_records(self, records: List[Dict[str, Any]]) -> None:
-        """Upsert records to Postgres."""
-        # One connection, one transaction: a failing row rolls back the batch.
-        self.ingest_client.actions(
-            "scraperIngestion:ingestWSORecord",
-            [wso_record_ingest_args(record, self.scraper_secret) for record in records],
-        )
-        for record in records:
-            print(f"  ✓ Upserted: {record['age_category']} {record['gender']} {record['weight_class']}")
-    
     def send_slack_notification(self) -> None:
         """Send Slack notification."""
         if not self.slack_webhook_url:
@@ -366,29 +324,30 @@ class WSORecordsFloridaScraper:
         except Exception as e:
             print(f"✗ Failed to send Slack notification: {e}")
     
-    def run(self, dry_run: bool = False) -> None:
+    def run(self, dry_run: bool = False, allow_shrink: bool = False) -> None:
         """Main execution flow."""
         print(f"Starting scraper for {self.wso_name}")
         print(f"Sheet URL: {self.sheet_url}")
-        
-        self.setup_ingest_client()
 
         if not dry_run:
             self.setup_slack()
         else:
-            print("🧪 DRY RUN MODE - No Slack operations")
-        
+            print("🧪 DRY RUN MODE - No database or Slack operations")
+
         print("Scraping Google Sheet...")
         records = self.scrape_sheet()
         print(f"Found {len(records)} total records")
-        
+
+        if dry_run:
+            for record in records:
+                print(f"  {record['age_category']} {record['gender']} {record['weight_class']}: "
+                      f"{record['snatch_record']}/{record['cj_record']}/{record['total_record']}")
+        sync_wso_records(self.wso_name, records, dry_run=dry_run, allow_shrink=allow_shrink)
+
         if not dry_run:
-            print("Upserting records to Postgres...")
-            self.upsert_records(records)
-            
             print("Sending Slack notification...")
             self.send_slack_notification()
-        
+
         print("Done!")
 
 
@@ -397,12 +356,13 @@ def main():
     parser = argparse.ArgumentParser(description="WSO Records Scraper (Florida Format)")
     parser.add_argument("--wso", required=True, help="WSO name (should be 'Florida')")
     parser.add_argument("--sheet-url", required=True, help="Google Sheet URL")
-    parser.add_argument("--dry-run", action="store_true", help="Compare with database without making changes")
-    
+    parser.add_argument("--dry-run", action="store_true", help="Parse and print without touching Postgres")
+    parser.add_argument("--allow-shrink", action="store_true", help="Let the sync delete more than a quarter of the stored classes")
+
     args = parser.parse_args()
-    
+
     scraper = WSORecordsFloridaScraper(args.wso, args.sheet_url)
-    scraper.run(dry_run=args.dry_run)
+    scraper.run(dry_run=args.dry_run, allow_shrink=args.allow_shrink)
 
 
 if __name__ == "__main__":

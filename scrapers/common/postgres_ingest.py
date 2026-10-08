@@ -44,7 +44,12 @@ def dispatch(conn, path: str, args: dict[str, Any]) -> dict[str, Any]:
     if path == "scraperIngestion:ingestWSORecord":
         return pg.upsert_wso_record(conn, args)
     if path == "scraperIngestion:replaceWSORecordSet":
-        return pg.replace_wso_records(conn, args.get("wso", ""), args.get("records", []))
+        return pg.replace_wso_records(
+            conn,
+            args.get("wso", ""),
+            args.get("records", []),
+            allow_shrink=bool(args.get("allowShrink")),
+        )
     if path == "scraperIngestion:ingestMeet":
         return pg.upsert_meet(conn, args)
     if path == "scraperIngestion:ingestIntlRanking":

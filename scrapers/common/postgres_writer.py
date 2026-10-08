@@ -968,13 +968,29 @@ def replace_records(conn, record_type: str, rows: Iterable[dict[str, Any]]) -> d
     return {"deleted": True, "inserted": inserted}
 
 
-def replace_wso_records(conn, wso: str, rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+# An exact-set sync that would delete more than this share of a WSO's stored
+# classes (and more than MIN_WSO_SHRINK_ALLOWED) looks like a source that
+# broke rather than one that restructured; it fails unless allowed. Same
+# limits as meetcal-app's convex/ingest.ts replaceWsoRecordSet.
+MAX_WSO_SHRINK_SHARE = 0.25
+MIN_WSO_SHRINK_ALLOWED = 20
+
+
+def replace_wso_records(
+    conn, wso: str, rows: Iterable[dict[str, Any]], allow_shrink: bool = False
+) -> dict[str, Any]:
     """Exact-set sync of one WSO's record set.
 
     Refuses an empty ``wso`` so the scan always has a key, and an empty payload
     because an exact-set sync treats "no incoming rows" as "every existing row
     disappeared" -- a failed PDF parse would silently delete the WSO's whole
-    record set. Same rule ``replace_records`` enforces.
+    record set. Same rule ``replace_records`` enforces. Refuses to delete more
+    than ``MAX_WSO_SHRINK_SHARE`` of the stored classes unless ``allow_shrink``
+    (a source checked by hand to have really dropped them).
+
+    A class stored more than once (rows from before the scrapers synced exact
+    sets) keeps one row, the one with the class's stable id if there is one,
+    and the copies are deleted.
     """
     require_text(wso, "wso")
     prepared_rows = [{**row, "wso": wso} for row in rows]
@@ -990,10 +1006,20 @@ def replace_wso_records(conn, wso: str, rows: Iterable[dict[str, Any]]) -> dict[
         (wso,),
     ).fetchall()
     existing_by_id = {row["convex_id"]: row for row in existing_rows}
-    existing_by_key = {
-        (row["wso"], row["age_category"], row["gender"], row["weight_class"]): row
-        for row in existing_rows
-    }
+    existing_by_key: dict[Any, dict[str, Any]] = {}
+    copies: list[dict[str, Any]] = []
+    for row in existing_rows:
+        key = (row["wso"], row["age_category"], row["gender"], row["weight_class"])
+        kept = existing_by_key.get(key)
+        if kept is None:
+            existing_by_key[key] = row
+        elif row["convex_id"] == stable_id("wso_record", *key):
+            copies.append(kept)
+            existing_by_key[key] = row
+        else:
+            copies.append(row)
+    for row in copies:
+        existing_by_id.pop(row["convex_id"], None)
 
     def prepare():
         for row in prepared_rows:
@@ -1020,14 +1046,22 @@ def replace_wso_records(conn, wso: str, rows: Iterable[dict[str, Any]]) -> dict[
     rows_to_write, rows_to_delete, counts = _plan_exact_set_sync(
         existing_by_id, existing_by_key, prepare(), "Duplicate WSO record in payload"
     )
-    for row in rows_to_delete:
+    dropped = len(rows_to_delete)
+    limit = max(MIN_WSO_SHRINK_ALLOWED, len(existing_by_key) * MAX_WSO_SHRINK_SHARE)
+    if dropped > limit and not allow_shrink:
+        raise ValueError(
+            f"refusing to delete {dropped} of {wso}'s {len(existing_by_key)} WSO record "
+            "classes (the source may be partly broken); if it really dropped them, "
+            "rerun the scraper with --allow-shrink"
+        )
+    for row in rows_to_delete + copies:
         conn.execute(
             "DELETE FROM wso_records WHERE convex_id = %s",
             (row["convex_id"],),
         )
     for row in rows_to_write:
         upsert_wso_record(conn, row)
-    return counts
+    return {**counts, "deleted": dropped + len(copies)}
 
 
 def replace_intl_rankings_group(conn, args: dict[str, Any]) -> dict[str, Any]:
