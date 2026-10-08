@@ -154,20 +154,36 @@ class IllinoisOctober2026Tests(unittest.TestCase):
         self.assertEqual(records[0]["snatch_record"], 42)
         self.assertEqual(records[1]["total_record"], 0)
 
-    def test_stores_a_stray_digit_total_as_the_lift_sum_and_logs_any_other_excess(self):
+    def test_corrects_only_a_checked_total_and_logs_any_other_excess(self):
         # Written 1580; she made 66 + 84 = 150 at the 2026 Mid American Championships.
         rosario = self.by_class[("Masters 40", "Women", "69")]
         self.assertEqual((rosario["snatch_record"], rosario["cj_record"], rosario["total_record"]), (66, 84, 150))
-        # Kept: the PDF doesn't say whether the total or a lift is the slip.
+        # Kept: the PDF doesn't say whether the total or a lift is the slip
+        # (Lund's lift is; Wegrzyn's total is).
         self.assertEqual(self.by_class[("Masters 50", "Men", "110+")]["total_record"], 147)
         self.assertEqual(self.by_class[("U17", "Women", "61")]["total_record"], 104)
         self.assertEqual(
             self.scraper.parse_warnings,
             [
                 "Source total (104) is above snatch + clean & jerk (86); kept as written: U17 Women 61",
-                "Source total (1580) is snatch + clean & jerk with a stray digit; stored 150: Masters 40 Women 69",
+                "Corrected source total 1580 to 150 (checked against results): Masters 40 Women 69",
                 "Source total (147) is above snatch + clean & jerk (146); kept as written: Masters 50 Men 110+",
             ],
+        )
+
+    def test_applies_a_correction_only_while_the_pdf_has_the_checked_value(self):
+        for written, stored in (("150", 150), ("1590", 1590)):
+            records = self.scraper.parse_pdf_text(
+                self.lines_with("W40 F 69 Total 1580 kg", f"W40 F 69 Total {written} kg")
+            )
+            rosario = next(
+                r for r in records
+                if (r["age_category"], r["gender"], r["weight_class"]) == ("Masters 40", "Women", "69")
+            )
+            self.assertEqual(rosario["total_record"], stored)
+        self.assertIn(
+            "Source total (1590) is above snatch + clean & jerk (150); kept as written: Masters 40 Women 69",
+            self.scraper.parse_warnings,
         )
 
     def lines_with(self, old: str, new: str) -> str:
@@ -185,6 +201,17 @@ class IllinoisOctober2026Tests(unittest.TestCase):
             if (r["age_category"], r["gender"], r["weight_class"]) == ("Masters 50", "Men", "110+")
         )
         self.assertEqual((lund["cj_record"], lund["total_record"]), (8, 147))
+        # 170 with a digit dropped is 62 + 8: still kept.
+        text = (
+            self.lines_with("JR F 77 Snatch 92 kg", "JR F 77 Snatch 62 kg")
+            .replace("JR F 77 Clean & Jerk 115 kg", "JR F 77 Clean & Jerk 8 kg")
+            .replace("JR F 77 Total 207 kg", "JR F 77 Total 170 kg")
+        )
+        junior = next(
+            r for r in self.scraper.parse_pdf_text(text)
+            if (r["age_category"], r["gender"], r["weight_class"]) == ("Junior", "Women", "77")
+        )
+        self.assertEqual(junior["total_record"], 170)
 
     def test_month_like_first_name_run_into_the_date(self):
         records = self.scraper.parse_pdf_text(
@@ -201,6 +228,38 @@ class IllinoisOctober2026Tests(unittest.TestCase):
             text = "\n".join(line for line in file if not line.startswith("W55 F "))
         with self.assertRaisesRegex(ValueError, "missing Women age groups: Masters 55"):
             self.scraper.parse_pdf_text(text)
+
+    def without_page(self, n: int) -> str:
+        """The fixture without page n: its lines up to and including its footer."""
+        with open(OCTOBER_2026, encoding="utf-8") as file:
+            lines = file.read().splitlines()
+        footer = lambda page: next(
+            i for i, line in enumerate(lines) if line.startswith(f"{page} of 15 ")
+        )
+        start = 0 if n == 1 else footer(n - 1) + 1
+        return "\n".join(lines[:start] + lines[footer(n) + 1 :])
+
+    def test_rejects_a_page_missing_by_its_footers(self):
+        for page in (1, 4):
+            with self.assertRaisesRegex(ValueError, f"missing pages {page} \\(by its page footers\\)"):
+                self.scraper.parse_pdf_text(self.without_page(page))
+        # The last records page (the end of Men U11, all of Men U17): its
+        # footer is the last, so the classes don't match.
+        with self.assertRaisesRegex(ValueError, "has 8 Women and 2 Men U11 classes"):
+            self.scraper.parse_pdf_text(self.without_page(14))
+
+    def test_rejects_a_group_read_for_one_gender_but_takes_one_gone_from_both(self):
+        with open(OCTOBER_2026, encoding="utf-8") as file:
+            lines = file.read().splitlines()
+        with self.assertRaisesRegex(ValueError, "has 0 Women and 8 Men U11 classes"):
+            self.scraper.parse_pdf_text(
+                "\n".join(line for line in lines if not line.startswith("U11 F "))
+            )
+        # How the October PDF dropped U13 and U15.
+        records = self.scraper.parse_pdf_text(
+            "\n".join(line for line in lines if not line.startswith("U11 "))
+        )
+        self.assertEqual(len(records), 240)
 
     def test_rejects_one_genders_worth_of_classes(self):
         with open(OCTOBER_2026, encoding="utf-8") as file:
@@ -226,7 +285,7 @@ class IllinoisPdfLinkTests(unittest.TestCase):
         )
         self.assertEqual(find_pdf_href(self.page("/s/records-oct.pdf")), "/s/records-oct.pdf")
 
-    def test_prefers_the_records_file_and_fails_without_one(self):
+    def test_reads_from_the_heading_on_and_fails_without_one(self):
         html = (
             '<a href="/other.pdf">View Records</a> Illinois State Records <p>..</p>'
             '<a class="b" href="/s/IL-WSO-Records-20260913.pdf">View the Records</a>'
@@ -234,6 +293,60 @@ class IllinoisPdfLinkTests(unittest.TestCase):
         self.assertEqual(find_pdf_href(html), "/s/IL-WSO-Records-20260913.pdf")
         with self.assertRaisesRegex(ValueError, "Could not find"):
             find_pdf_href("<p>nothing</p>")
+
+    def test_reads_the_records_sections_buttons_only_the_newest_by_date(self):
+        # Squarespace's page: the banner and each block in its own <section>.
+        def sections(*bodies: str) -> str:
+            return "".join(f'<section class="page-section">{body}</section>' for body in bodies)
+
+        def button(href: str) -> str:
+            return f'<a href="{href}" class="sqs-block-button-element"> View the Records </a>'
+
+        banner = '<p>Illinois State Records are updated!</p><a href="/s/club.pdf">View Records</a>'
+        heading = (
+            "<h2>Illinois State Records</h2>"
+            "<h3>Records are updated to reflect the new IWF Categories!</h3>"
+        )
+        self.assertEqual(
+            find_pdf_href(sections(banner, heading + button("/s/records-oct.pdf"))),
+            "/s/records-oct.pdf",
+        )
+        self.assertEqual(
+            find_pdf_href(
+                sections(button("/s/IL-WSO-Records-20260913.pdf"), heading + button("/s/records-oct.pdf"))
+            ),
+            "/s/records-oct.pdf",
+        )
+        self.assertEqual(
+            find_pdf_href(
+                sections(
+                    heading
+                    + button("/s/IL-WSO-Records-20260913.pdf")
+                    + button("/s/IL-WSO-Records-20261004.pdf")
+                )
+            ),
+            "/s/IL-WSO-Records-20261004.pdf",
+        )
+        # Without sections: from the heading on, so a button above it is not taken.
+        self.assertEqual(
+            find_pdf_href(banner + heading + button("/s/records-oct.pdf")), "/s/records-oct.pdf"
+        )
+        with self.assertRaisesRegex(ValueError, "Could not find the Illinois records PDF URL"):
+            find_pdf_href(sections(banner, heading))
+
+    def test_finds_the_link_on_the_live_page_layout(self):
+        # The Squarespace structure of illinoisweightlifting.com on 2026-10-07, trimmed.
+        html = (
+            '<section data-test="page-section"><p>Illinois State Records are updated!</p></section>'
+            '<section data-test="page-section"><a href="https://assets.example/2025_USAW_Guide_to_Membership.pdf">'
+            "View Records</a></section>"
+            '<section data-test="page-section"><h2 style="text-align:center">Illinois State Records</h2>'
+            "<h3>Records are updated to reflect the new IWF Categories!</h3>"
+            '<a href="/s/IL-WSO-Records-20261004.pdf" class="sqs-block-button-element--medium" '
+            'data-sqsp-button target="_blank" > View the Records </a></section>'
+            "<section><h2>USAW Illinois Weightlifting WSO</h2></section>"
+        )
+        self.assertEqual(find_pdf_href(html), "/s/IL-WSO-Records-20261004.pdf")
 
 
 if __name__ == "__main__":

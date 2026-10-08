@@ -26,31 +26,44 @@ from scraper_pdf_illinois import WSORecordsIllinoisScraper
 VIEW_RECORDS_LINK = re.compile(
     r'<a[^>]+href="([^"]+\.pdf)"[^>]*>\s*View(?:\s+the)?\s+Records\s*</a>', re.IGNORECASE
 )
-PDF_LINK = re.compile(r'href="([^"]+\.pdf)"', re.IGNORECASE)
-RECORDS_FILE = re.compile(
-    r"(?:IL[-_ ]?WSO[-_ ]?Records|Illinois[-_ ]?State[-_ ]?Records)[^/]*\.pdf$", re.IGNORECASE
+RECORDS_HEADING = re.compile(
+    r"<h[1-6][^>]*>\s*Illinois State Records\s*</h[1-6]>", re.IGNORECASE
 )
+FILE_DATE = re.compile(r"(20\d{6})[^/]*\.pdf$", re.IGNORECASE)
 
 
 def find_pdf_href(page_html: str) -> str:
-    """The records PDF the page links: its "View (the) Records" button, the
-    one whose file is named for the records if there are several, else the
-    first after the "Illinois State Records" heading. That text also opens a
-    banner further up ("Illinois State Records are updated!"), so the button
-    can't be looked for only within a stretch after its first mention.
+    """The records PDF: the "View (the) Records" button in the page section
+    (the <section>, or the rest of the page after the heading if there is
+    none) that holds the "Illinois State Records" heading; the newest by the
+    date in its file name if there are several. The same words open a banner
+    in another section ("Illinois State Records are updated!"), so the heading
+    is the heading element, or else the words' last mention. No button there
+    fails rather than guessing at the page's other PDFs. Same rule as
+    meetcal-app's convex/scrapers/parse/wso/illinois.ts.
     """
-    buttons = [(m.start(), m.group(1)) for m in VIEW_RECORDS_LINK.finditer(page_html)]
-    heading = page_html.find("Illinois State Records")
-    for _, href in buttons:
-        if RECORDS_FILE.search(href):
-            return href
-    for at, href in buttons:
-        if at > heading:
-            return href
-    for match in PDF_LINK.finditer(page_html):
-        if RECORDS_FILE.search(match.group(1)):
-            return match.group(1)
-    raise ValueError("Could not find the Illinois records PDF URL on the page")
+    heading_match = RECORDS_HEADING.search(page_html)
+    heading = heading_match.start() if heading_match else page_html.rfind("Illinois State Records")
+    if heading == -1:
+        raise ValueError("Could not find the Illinois State Records section on the page")
+    opening = page_html.rfind("<section", 0, heading)
+    closing = page_html.find("</section>", heading)
+    section = page_html[
+        heading if opening == -1 else opening : None if closing == -1 else closing
+    ]
+    hrefs = [match.group(1) for match in VIEW_RECORDS_LINK.finditer(section)]
+    if not hrefs:
+        raise ValueError("Could not find the Illinois records PDF URL on the page")
+
+    def date_of(href: str) -> str:
+        match = FILE_DATE.search(href)
+        return match.group(1) if match else ""
+
+    newest = hrefs[0]
+    for href in hrefs[1:]:
+        if date_of(href) > date_of(newest):
+            newest = href
+    return newest
 
 
 class IllinoisAutoScraper:
