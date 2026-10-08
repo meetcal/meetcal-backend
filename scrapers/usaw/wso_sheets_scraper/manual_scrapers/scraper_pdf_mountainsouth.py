@@ -11,24 +11,22 @@ PDF Format:
 - Age/gender categories in section headers (e.g., "OPEN MEN", "JUNIOR MEN U20", "MASTERS MEN 35-39")
 - Separate PDFs for Men and Women
 
+Parse-only: one PDF holds only some of Mountain South's classes, and Postgres is
+synced with the WSO's whole set at once, so the writes go through
+``auto_scrapers/scraper_mountainsouth_auto.py``, which reads every PDF.
+
 USAGE:
-  Dry-run (test without making changes):
+  Parse one PDF and print its records:
     source venv/bin/activate && python scraper_pdf_mountainsouth.py --wso "Mountain South" --pdf-url "https://mountainsouth.org/wp-content/uploads/2025/10/Mountain-South-WSO-Records-2025-10-19-MEN.pdf" --dry-run
 """
 
 import os
-import sys
 import argparse
+import tempfile
 import requests
 import pdfplumber
 from typing import List, Dict, Any, Optional
-from datetime import datetime
 from dotenv import load_dotenv
-
-from common.postgres_ingest import IngestClient, RowFailure
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils import wso_record_ingest_args
 
 
 class WSORecordsMountainSouthScraper:
@@ -44,21 +42,8 @@ class WSORecordsMountainSouthScraper:
         """
         self.wso_name = wso_name
         self.pdf_url = pdf_url
-        self.ingest_client: Optional[IngestClient] = None
-        self.slack_webhook_url: Optional[str] = None
-        self.pdf_path = "temp_wso_records.pdf"
+        self.pdf_path: Optional[str] = None
 
-    def setup_ingest_client(self):
-        """Initialize Postgres ingest client."""
-        self.ingest_client = IngestClient()
-        print("Postgres ingest client initialized")
-    
-    def setup_slack(self):
-        """Initialize Slack webhook."""
-        self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
-        if self.slack_webhook_url:
-            print("✓ Slack webhook configured")
-    
     def download_pdf(self):
         """Download PDF from URL."""
         print(f"Downloading PDF from {self.pdf_url}...")
@@ -70,7 +55,9 @@ class WSORecordsMountainSouthScraper:
         response = requests.get(self.pdf_url, headers=headers, timeout=30)
         response.raise_for_status()
         
-        with open(self.pdf_path, 'wb') as f:
+        # A temp file of its own, so PDFs read one after another never share a path.
+        fd, self.pdf_path = tempfile.mkstemp(prefix="wso_records_", suffix=".pdf")
+        with os.fdopen(fd, 'wb') as f:
             f.write(response.content)
         
         print(f"✓ PDF downloaded to {self.pdf_path}")
@@ -149,86 +136,91 @@ class WSORecordsMountainSouthScraper:
         Returns:
             List of record dictionaries
         """
+        with pdfplumber.open(self.pdf_path) as pdf:
+            pages = []
+            for page_num, page in enumerate(pdf.pages, 1):
+                print(f"  Processing page {page_num}...")
+                pages.append(page.extract_text() or "")
+        
+        return self.parse_pages(pages)
+
+    def parse_pages(self, pages: List[str]) -> List[Dict[str, Any]]:
+        """Records of the PDF's pages, as pdfplumber extracts their text."""
         records = []
         current_records = {}  # Key: (age_cat, gender, weight_class), Value: {snatch, cj, total}
         
-        with pdfplumber.open(self.pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages, 1):
-                print(f"  Processing page {page_num}...")
+        for text in pages:
+            if not text:
+                continue
+            
+            lines = text.split('\n')
+            
+            current_age_category = None
+            current_gender = None
+            current_lift_type = None  # "SNATCH", "CLEAN & JERK", or "TOTAL"
+            
+            for line in lines:
+                line = line.strip()
                 
-                # Extract text to find section headers
-                text = page.extract_text()
-                if not text:
+                # Check for section headers (e.g., "OPEN MEN - SNATCH")
+                if " - SNATCH" in line or " - CLEAN & JERK" in line or " - TOTAL" in line:
+                    age_cat, gender = self._parse_section_header(line)
+                    if age_cat and gender:
+                        current_age_category = age_cat
+                        current_gender = gender
+                        
+                        if "SNATCH" in line:
+                            current_lift_type = "SNATCH"
+                        elif "CLEAN" in line:
+                            current_lift_type = "CLEAN_JERK"
+                        elif "TOTAL" in line:
+                            current_lift_type = "TOTAL"
                     continue
                 
-                lines = text.split('\n')
+                # Skip header lines
+                if "CAT" in line and "ATHLETE" in line:
+                    continue
+                if "Beginning 6/1/2025" in line:
+                    continue
                 
-                current_age_category = None
-                current_gender = None
-                current_lift_type = None  # "SNATCH", "CLEAN & JERK", or "TOTAL"
-                
-                for line in lines:
-                    line = line.strip()
-                    
-                    # Check for section headers (e.g., "OPEN MEN - SNATCH")
-                    if " - SNATCH" in line or " - CLEAN & JERK" in line or " - TOTAL" in line:
-                        age_cat, gender = self._parse_section_header(line)
-                        if age_cat and gender:
-                            current_age_category = age_cat
-                            current_gender = gender
-                            
-                            if "SNATCH" in line:
-                                current_lift_type = "SNATCH"
-                            elif "CLEAN" in line:
-                                current_lift_type = "CLEAN_JERK"
-                            elif "TOTAL" in line:
-                                current_lift_type = "TOTAL"
-                        continue
-                    
-                    # Skip header lines
-                    if "CAT" in line and "ATHLETE" in line:
-                        continue
-                    if "Beginning 6/1/2025" in line:
-                        continue
-                    
-                    # Parse data lines (weight class followed by optional record data)
-                    # Format: "60 FirstName LastName STATE KG DATE EVENT LOCATION"
-                    # or just: "60" (empty record)
-                    parts = line.split()
-                    if len(parts) > 0 and current_age_category and current_gender and current_lift_type:
-                        # First part should be weight class
-                        weight_class_str = parts[0]
-                        if weight_class_str.replace("+", "").isdigit():
-                            weight_class = self._normalize_weight_class(weight_class_str)
-                            
-                            # Initialize record if not exists
-                            key = (current_age_category, current_gender, weight_class)
-                            if key not in current_records:
-                                current_records[key] = {
-                                    'snatch': None,
-                                    'cj': None,
-                                    'total': None
-                                }
-                            
-                            # Try to extract KG value (4th element typically)
-                            kg_value = None
-                            if len(parts) >= 4:
-                                # Try to find the KG value (should be a number)
-                                for i in range(1, min(len(parts), 6)):
-                                    try:
-                                        kg_value = self._parse_int(parts[i])
-                                        if kg_value:
-                                            break
-                                    except:
-                                        continue
-                            
-                            # Store value in appropriate lift type
-                            if current_lift_type == "SNATCH":
-                                current_records[key]['snatch'] = kg_value
-                            elif current_lift_type == "CLEAN_JERK":
-                                current_records[key]['cj'] = kg_value
-                            elif current_lift_type == "TOTAL":
-                                current_records[key]['total'] = kg_value
+                # Parse data lines (weight class followed by optional record data)
+                # Format: "60 FirstName LastName STATE KG DATE EVENT LOCATION"
+                # or just: "60" (empty record)
+                parts = line.split()
+                if len(parts) > 0 and current_age_category and current_gender and current_lift_type:
+                    # First part should be weight class
+                    weight_class_str = parts[0]
+                    if weight_class_str.replace("+", "").isdigit():
+                        weight_class = self._normalize_weight_class(weight_class_str)
+                        
+                        # Initialize record if not exists
+                        key = (current_age_category, current_gender, weight_class)
+                        if key not in current_records:
+                            current_records[key] = {
+                                'snatch': None,
+                                'cj': None,
+                                'total': None
+                            }
+                        
+                        # Try to extract KG value (4th element typically)
+                        kg_value = None
+                        if len(parts) >= 4:
+                            # Try to find the KG value (should be a number)
+                            for i in range(1, min(len(parts), 6)):
+                                try:
+                                    kg_value = self._parse_int(parts[i])
+                                    if kg_value:
+                                        break
+                                except:
+                                    continue
+                        
+                        # Store value in appropriate lift type
+                        if current_lift_type == "SNATCH":
+                            current_records[key]['snatch'] = kg_value
+                        elif current_lift_type == "CLEAN_JERK":
+                            current_records[key]['cj'] = kg_value
+                        elif current_lift_type == "TOTAL":
+                            current_records[key]['total'] = kg_value
         
         # Convert to list of records
         for (age_cat, gender, weight_class), values in current_records.items():
@@ -245,101 +237,20 @@ class WSORecordsMountainSouthScraper:
         
         return records
     
-    def upsert_to_postgres(self, records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-        """Upsert records to Postgres via scraperIngestion:ingestWSORecord."""
-        if not self.ingest_client:
-            raise ValueError("Ingest client not initialized")
-
-        inserted = []
-        updated = []
-
-        # One connection. Each record is independent, so a bad one is
-        # reported and skipped (its own savepoint) rather than costing the rest.
-        results = self.ingest_client.actions_skipping_errors(
-            "scraperIngestion:ingestWSORecord",
-            [wso_record_ingest_args(record) for record in records],
-        )
-        for record, result in zip(records, results):
-            if isinstance(result, RowFailure):
-                print(f"  ✗ Error: {record['age_category']} {record['gender']} {record['weight_class']}: {result.error}")
-            elif result.get('wasInsert'):
-                inserted.append(record)
-                print(f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}")
-            elif result.get('wasChanged'):
-                updated.append(record)
-                print(f"  ✓ Updated: {record['age_category']} {record['gender']} {record['weight_class']}")
-            else:
-                print(f"  - Unchanged: {record['age_category']} {record['gender']} {record['weight_class']}")
-
-        return {'inserted': inserted, 'updated': updated}
-    
-    def send_slack_notification(self, inserted: List[Dict[str, Any]], updated: List[Dict[str, Any]]):
-        """Send Slack notification with upsert summary."""
-        if not self.slack_webhook_url:
-            print("⚠ Slack webhook not configured, skipping notification")
-            return
-        
-        # Build message
-        title = f"{self.wso_name} WSO Records Postgres Update (PDF)"
-        total_changes = len(inserted) + len(updated)
-        
-        if total_changes == 0:
-            return
-        else:
-            message = f"*{title}*\n\n*{len(inserted)}* new records, *{len(updated)}* updated records"
-        
-        if inserted:
-            message += f"\n\n*New Records ({len(inserted)}):*\n"
-            inserted_text = "\n".join([
-                f"• {r['age_category']} {r['gender']} {r['weight_class']}"
-                for r in inserted[:10]
-            ])
-            message += inserted_text
-            if len(inserted) > 10:
-                message += f"\n... and {len(inserted) - 10} more"
-        
-        if updated:
-            message += f"\n\n*Updated Records ({len(updated)}):*\n"
-            updated_text = "\n".join([
-                f"• {r['age_category']} {r['gender']} {r['weight_class']}"
-                for r in updated[:10]
-            ])
-            message += updated_text
-            if len(updated) > 10:
-                message += f"\n... and {len(updated) - 10} more"
-        
-        payload = {"text": message}
-        
-        response = requests.post(self.slack_webhook_url, json=payload, timeout=10)
-        response.raise_for_status()
-        print("✓ Slack notification sent")
-    
     def cleanup(self):
         """Remove temporary PDF file."""
-        if os.path.exists(self.pdf_path):
+        if self.pdf_path and os.path.exists(self.pdf_path):
             os.remove(self.pdf_path)
             print(f"✓ Cleaned up {self.pdf_path}")
+        self.pdf_path = None
     
-    def dry_run_compare(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Show what would be upserted without making changes."""
-        print(f"Would upsert {len(records)} records to Postgres")
-        return {
-            'to_insert': records,
-            'to_update': [],
-            'unchanged': []
-        }
-    
-    def run(self, dry_run: bool = False):
-        """Main execution method."""
+    def run(self):
+        """Parse the PDF and print its records."""
         try:
             print(f"{'='*80}")
             print(f"WSO PDF SCRAPER - {self.wso_name}")
             print(f"{'='*80}")
             print(f"PDF URL: {self.pdf_url}\n")
-            
-            self.setup_ingest_client()
-            if not dry_run:
-                self.setup_slack()
             
             self.download_pdf()
             
@@ -347,44 +258,13 @@ class WSORecordsMountainSouthScraper:
             records = self.scrape_pdf()
             print(f"Found {len(records)} total records")
             
-            if dry_run:
-                print("\n" + "="*80)
-                print("DRY RUN MODE - Comparing with database")
-                print("="*80)
-                
-                comparison = self.dry_run_compare(records)
-                
-                print(f"\nTo INSERT: {len(comparison['to_insert'])} records")
-                print(f"To UPDATE: {len(comparison['to_update'])} records")
-                print(f"Unchanged: {len(comparison['unchanged'])} records")
-                
-                if comparison['to_insert']:
-                    print("\n--- Records to INSERT ---")
-                    for rec in comparison['to_insert'][:20]:
-                        print(f"  {rec['age_category']:15} | {rec['gender']:6} | {rec['weight_class']:5} | "
-                              f"Snatch: {str(rec.get('snatch_record') or '-'):4} | "
-                              f"C&J: {str(rec.get('cj_record') or '-'):4} | "
-                              f"Total: {str(rec.get('total_record') or '-'):4}")
-                    if len(comparison['to_insert']) > 20:
-                        print(f"  ... and {len(comparison['to_insert']) - 20} more")
-                
-                if comparison['to_update']:
-                    print("\n--- Records to UPDATE ---")
-                    for item in comparison['to_update']:
-                        rec = item['record']
-                        print(f"  {rec['age_category']:15} | {rec['gender']:6} | {rec['weight_class']:5}")
-                        for field, old_val, new_val in item['changes']:
-                            print(f"    → {field}: {old_val} → {new_val}")
-            else:
-                print("\nUpserting records to Postgres...")
-                result = self.upsert_to_postgres(records)
-                
-                print("\nSending Slack notification...")
-                self.send_slack_notification(result['inserted'], result['updated'])
-                
-                print("\n✅ Done!")
-                print(f"  Inserted: {len(result['inserted'])} records")
-                print(f"  Updated: {len(result['updated'])} records")
+            for rec in records[:20]:
+                print(f"  {rec['age_category']:15} | {rec['gender']:6} | {rec['weight_class']:5} | "
+                      f"Snatch: {str(rec.get('snatch_record') or '-'):4} | "
+                      f"C&J: {str(rec.get('cj_record') or '-'):4} | "
+                      f"Total: {str(rec.get('total_record') or '-'):4}")
+            if len(records) > 20:
+                print(f"  ... and {len(records) - 20} more")
             
         finally:
             self.cleanup()
@@ -393,19 +273,23 @@ class WSORecordsMountainSouthScraper:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="PDF Scraper for Mountain South WSO Records",
-        epilog="Example: python scraper_pdf_mountainsouth.py --wso 'Mountain South' --pdf-url 'https://mountainsouth.org/wp-content/uploads/2025/10/Mountain-South-WSO-Records-2025-10-19-MEN.pdf' --dry-run"
+        description="PDF Scraper for Mountain South WSO Records (parse and print only)",
+        epilog="Example: python scraper_pdf_mountainsouth.py --wso 'Mountain South' --pdf-url 'https://example.com/records.pdf' --dry-run"
     )
     parser.add_argument("--wso", required=True, help="WSO name (should be 'Mountain South')")
     parser.add_argument("--pdf-url", required=True, help="URL to the PDF file")
-    parser.add_argument("--dry-run", action="store_true", help="Compare with database without making changes")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Accepted for compatibility: this scraper never writes; scraper_mountainsouth_auto.py syncs every PDF together",
+    )
     
     args = parser.parse_args()
     
     load_dotenv()
     
     scraper = WSORecordsMountainSouthScraper(args.wso, args.pdf_url)
-    scraper.run(dry_run=args.dry_run)
+    scraper.run()
 
 
 if __name__ == "__main__":

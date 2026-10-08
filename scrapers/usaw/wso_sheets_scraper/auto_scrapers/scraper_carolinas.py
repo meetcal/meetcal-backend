@@ -11,19 +11,15 @@ For Carolinas WSO which uses a side-by-side layout with:
 
 import os
 import sys
-import json
 import argparse
 import re
 from typing import List, Dict, Any, Optional
-from datetime import datetime
-from collections import defaultdict
 
 import requests
-from common.postgres_ingest import IngestClient
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils import wso_record_ingest_args
+from utils import every_part, sync_wso_records
 
 # Load environment variables
 load_dotenv()
@@ -46,16 +42,8 @@ class WSORecordsCarolinasScraper:
             "MASTER": "448005775"
         }
         
-        self.ingest_client = None
-        self.scraper_secret = None
         self.slack_webhook_url = None
         
-    def setup_ingest_client(self):
-        """Set up Postgres ingest client."""
-        self.ingest_client = IngestClient()
-        self.scraper_secret = os.getenv("SCRAPER_SECRET")
-        print("Postgres ingest client initialized")
-    
     def setup_slack(self):
         """Set up Slack webhook URL."""
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
@@ -88,23 +76,17 @@ class WSORecordsCarolinasScraper:
             List of records matching DB schema
         """
         sheet_id = self._extract_sheet_id(self.sheet_url)
-        all_records = []
-        
-        # Scrape each tab
+        parts = []
+
+        # The sync is an exact set, so a tab that fails to fetch or parse
+        # stops the run rather than deleting that tab's classes.
         for tab_name, gid in self.tabs.items():
-            if gid is None:
-                print(f"⚠️  Skipping {tab_name} - gid not configured")
-                continue
-                
             print(f"\nScraping {tab_name} tab...")
-            try:
-                records = self._scrape_tab(sheet_id, gid, tab_name)
-                all_records.extend(records)
-                print(f"✓ Found {len(records)} records in {tab_name}")
-            except Exception as e:
-                print(f"✗ Error scraping {tab_name}: {e}")
-        
-        return all_records
+            records = self._scrape_tab(sheet_id, gid, tab_name)
+            print(f"✓ Found {len(records)} records in {tab_name}")
+            parts.append((f"tab {tab_name} (gid {gid})", records))
+
+        return every_part(self.wso_name, parts)
     
     def _extract_sheet_id(self, url: str) -> str:
         """Extract sheet ID from URL."""
@@ -116,7 +98,7 @@ class WSORecordsCarolinasScraper:
     def _scrape_tab(self, sheet_id: str, gid: str, tab_name: str) -> List[Dict[str, Any]]:
         """Scrape a single tab."""
         csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid}"
-        response = requests.get(csv_url)
+        response = requests.get(csv_url, timeout=60)
         
         if response.status_code != 200:
             raise Exception(f"Failed to fetch tab: {response.status_code}")
@@ -331,16 +313,6 @@ class WSORecordsCarolinasScraper:
         except ValueError:
             return None
     
-    def upsert_records(self, records: List[Dict[str, Any]]) -> None:
-        """Upsert records to Postgres."""
-        # One connection, one transaction: a failing row rolls back the batch.
-        self.ingest_client.actions(
-            "scraperIngestion:ingestWSORecord",
-            [wso_record_ingest_args(record, self.scraper_secret) for record in records],
-        )
-        for record in records:
-            print(f"  ✓ Upserted: {record['age_category']} {record['gender']} {record['weight_class']}")
-    
     def send_slack_notification(self) -> None:
         """Send Slack notification."""
         if not self.slack_webhook_url:
@@ -394,26 +366,27 @@ class WSORecordsCarolinasScraper:
         except Exception as e:
             print(f"✗ Failed to send Slack notification: {e}")
     
-    def run(self, dry_run: bool = False) -> None:
+    def run(self, dry_run: bool = False, allow_shrink: bool = False) -> None:
         """Main execution flow."""
         print(f"Starting scraper for {self.wso_name}")
         print(f"Sheet URL: {self.sheet_url}")
         
-        self.setup_ingest_client()
-
         if not dry_run:
             self.setup_slack()
         else:
-            print("🧪 DRY RUN MODE - No Slack operations")
+            print("🧪 DRY RUN MODE - No database or Slack operations")
         
         print("Scraping Google Sheet...")
         records = self.scrape_sheet()
         print(f"Found {len(records)} total records")
         
+        if dry_run:
+            for record in records:
+                print(f"  {record['age_category']} {record['gender']} {record['weight_class']}: "
+                      f"{record['snatch_record']}/{record['cj_record']}/{record['total_record']}")
+        sync_wso_records(self.wso_name, records, dry_run=dry_run, allow_shrink=allow_shrink)
+        
         if not dry_run:
-            print("Upserting records to Postgres...")
-            self.upsert_records(records)
-            
             print("Sending Slack notification...")
             self.send_slack_notification()
         
@@ -425,12 +398,13 @@ def main():
     parser = argparse.ArgumentParser(description="WSO Records Scraper (Carolinas Format)")
     parser.add_argument("--wso", required=True, help="WSO name (should be 'Carolinas')")
     parser.add_argument("--sheet-url", required=True, help="Google Sheet URL")
-    parser.add_argument("--dry-run", action="store_true", help="Compare with database without making changes")
+    parser.add_argument("--dry-run", action="store_true", help="Parse and print without touching Postgres")
+    parser.add_argument("--allow-shrink", action="store_true", help="Let the sync delete more than a quarter of the stored classes")
     
     args = parser.parse_args()
     
     scraper = WSORecordsCarolinasScraper(args.wso, args.sheet_url)
-    scraper.run(dry_run=args.dry_run)
+    scraper.run(dry_run=args.dry_run, allow_shrink=args.allow_shrink)
 
 
 if __name__ == "__main__":

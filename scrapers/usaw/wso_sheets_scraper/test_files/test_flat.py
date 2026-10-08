@@ -1,258 +1,184 @@
 #!/usr/bin/env python3
-"""
-Local test script for Flat Format WSO Records Scraper
+"""Flat-format scraper (Georgia, Pacific Northwest, California North).
 
-For Georgia, DMV, and Pacific Northwest WSOs
-
-Usage:
-    python test_flat.py                    # Default: fetch test
-    python test_flat.py --test dry-run     # Preview database changes
-    python test_flat.py --test upsert      # Test database upsert
-    python test_flat.py --test full        # Full flow with Discord
+Run: cd scrapers && PYTHONPATH=. python -m unittest usaw/wso_sheets_scraper/test_files/test_flat.py
 """
 
 import os
 import sys
-import json
-import argparse
-from dotenv import load_dotenv
+import unittest
+from unittest import mock
 
-# Add parent directory to path to import scrapers
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRAPER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(SCRAPER_DIR, "auto_scrapers"))
 
-# Load environment variables
-load_dotenv()
+import scraper_ga_pnw
+from scraper_ga_pnw import WSORecordsFlatScraper
 
-# Import the scraper
-from auto_scrapers.scraper_ga_pnw import WSORecordsFlatScraper
+CALIFORNIA_NORTH_URL = (
+    "https://docs.google.com/spreadsheets/d/1ZAs27jQCPYTVgLuQ-feBHSO-BgGjGCewUs0djG23pXQ"
+    "/edit?gid=35344992#gid=35344992"
+)
 
+# California North's gid=35344992 tab (the flat data), trailing blank columns cut.
+CALIFORNIA_NORTH_GID_TAB = "\n".join(
+    [
+        '"startDate","endDate","federation","recordName","ageGroup","gender","ageMin","ageMax","bodyWeightMin","bodyWeightMax","lift","record","name","date","place"',
+        '"2025-05-30","2026-08-01","Norcal","California North Central","U11","F","0","11","0","30","Snatch","20","Avery Gillum","2025-10-18","62nd Don Wilson\'s GOLDEN WEST 2025"',
+        '"2025-05-30","2026-08-01","Norcal","California North Central","U11","F","0","11","0","30","Clean & Jerk","30","Avery Gillum","2025-10-18","62nd Don Wilson\'s GOLDEN WEST 2025"',
+        '"2025-05-30","2026-08-01","Norcal","California North Central","U11","F","0","11","0","30","Total","50","Avery Gillum","2025-10-18","62nd Don Wilson\'s GOLDEN WEST 2025"',
+        '"2025-05-30","2026-08-01","Norcal","California North Central","U11","F","0","11","63",">63","Snatch","52","STANDARD","",""',
+        '"2025-05-30","2026-08-01","Norcal","California North Central","U11","F","0","11","63",">63","Clean & Jerk","68","STANDARD","",""',
+        '"2025-05-30","2026-08-01","Norcal","California North Central","U11","F","0","11","63",">63","Total","120","STANDARD","",""',
+        '"2025-05-30","2026-08-01","Norcal","California North Central","Open","M","0","999","56","60","Snatch","107","STANDARD","",""',
+        '"2025-05-30","2026-08-01","Norcal","California North Central","Open","M","0","999","56","60","Clean & Jerk","149","STANDARD","",""',
+    ]
+)
 
-def test_fetch_data(wso_name: str, sheet_url: str):
-    """Test: Fetch data from Google Sheet and display it."""
-    print("=" * 80)
-    print("TEST: FETCHING DATA FROM GOOGLE SHEET")
-    print("=" * 80)
-    
-    scraper = WSORecordsFlatScraper(wso_name, sheet_url)
-    
-    # Scrape the sheet
-    print("\nScraping sheet...")
-    records = scraper.scrape_sheet()
-    
-    print(f"\n✓ Successfully fetched {len(records)} records\n")
-    
-    # Display first 10 records
-    print("Sample of records (first 10):")
-    print("-" * 80)
-    for i, record in enumerate(records[:10], 1):
-        print(f"\n{i}. {record['wso']} | {record['age_category']} | {record['gender']} | {record['weight_class']}")
-        print(f"   Snatch: {record.get('snatch_record')} kg")
-        print(f"   C&J: {record.get('cj_record')} kg")
-        print(f"   Total: {record.get('total_record')} kg")
-    
-    if len(records) > 10:
-        print(f"\n... and {len(records) - 10} more records")
-    
-    # Save to JSON for inspection
-    output_file = f"test_{wso_name.lower().replace(' ', '_')}_data.json"
-    with open(output_file, 'w') as f:
-        json.dump(records, f, indent=2)
-    print(f"\n✓ Full data saved to: {output_file}")
-    
-    return records
+# California North's "Current Records" tab since mid-2026: a human-readable
+# layout with none of the flat columns.
+CALIFORNIA_NORTH_NAMED_TAB = "\n".join(
+    [
+        '"Category","Gender","Age Range","Weight Class","Lift","Weight","Athlete Name","Date Set","Event"',
+        '"Under 11","Girls","0 - 11","30kg","Snatch","20 kg","Avery Gillum","2025-10-18","62nd Don Wilson\'s GOLDEN WEST 2025"',
+        '"Under 11","Girls","0 - 11","30kg","Clean & Jerk","30 kg","Avery Gillum","2025-10-18","62nd Don Wilson\'s GOLDEN WEST 2025"',
+    ]
+)
 
 
-def test_dry_run(wso_name: str, sheet_url: str):
-    """Test: Preview what would be upserted without making changes."""
-    print("=" * 80)
-    print("TEST: DRY RUN - PREVIEW DATABASE CHANGES")
-    print("=" * 80)
-    
-    scraper = WSORecordsFlatScraper(wso_name, sheet_url)
-    scraper.setup_supabase_client()
-    
-    # Scrape the sheet
-    print("\nScraping sheet...")
-    records = scraper.scrape_sheet()
-    print(f"✓ Fetched {len(records)} records\n")
-    
-    # Query existing records from database
-    print("Querying existing records from database...")
-    existing = scraper.supabase_client.table('wso_records').select('*').eq('wso', wso_name).execute()
-    existing_records = {
-        (r['wso'], r['age_category'], r['gender'], r['weight_class']): r 
-        for r in existing.data
-    }
-    print(f"✓ Found {len(existing_records)} existing records in database\n")
-    
-    # Compare and categorize changes
-    new_records = []
-    updated_records = []
-    unchanged_records = []
-    
-    for record in records:
-        key = (record['wso'], record['age_category'], record['gender'], record['weight_class'])
-        existing_record = existing_records.get(key)
-        
-        if not existing_record:
-            new_records.append(record)
-        else:
-            # Check if any values changed
-            changed = False
-            changes = []
-            
-            for field in ['snatch_record', 'cj_record', 'total_record']:
-                old_val = existing_record.get(field)
-                new_val = record.get(field)
-                if old_val != new_val:
-                    changed = True
-                    changes.append(f"{field}: {old_val} → {new_val}")
-            
-            if changed:
-                updated_records.append((record, changes))
-            else:
-                unchanged_records.append(record)
-    
-    # Display summary
-    print("=" * 80)
-    print("DRY RUN SUMMARY")
-    print("=" * 80)
-    print(f"📊 New records to insert: {len(new_records)}")
-    print(f"🔄 Records to update: {len(updated_records)}")
-    print(f"✓ Unchanged records: {len(unchanged_records)}")
-    print(f"📝 Total records: {len(records)}")
-    
-    # Show samples
-    if new_records:
-        print("\n" + "=" * 80)
-        print("SAMPLE NEW RECORDS (first 5)")
-        print("=" * 80)
-        for record in new_records[:5]:
-            print(f"\n{record['age_category']} | {record['gender']} | {record['weight_class']}")
-            print(f"  Snatch: {record.get('snatch_record')}, C&J: {record.get('cj_record')}, Total: {record.get('total_record')}")
-        if len(new_records) > 5:
-            print(f"\n... and {len(new_records) - 5} more new records")
-    
-    if updated_records:
-        print("\n" + "=" * 80)
-        print("SAMPLE UPDATED RECORDS (first 5)")
-        print("=" * 80)
-        for record, changes in updated_records[:5]:
-            print(f"\n{record['age_category']} | {record['gender']} | {record['weight_class']}")
-            for change in changes:
-                print(f"  {change}")
-        if len(updated_records) > 5:
-            print(f"\n... and {len(updated_records) - 5} more updated records")
-    
-    print("\n" + "=" * 80)
-    print("⚠️  DRY RUN - No changes were made to the database")
-    print("=" * 80)
+def response(text, status_code=200):
+    return mock.Mock(status_code=status_code, text=text)
 
 
-def test_upsert(wso_name: str, sheet_url: str):
-    """Test: Upsert data to database."""
-    print("=" * 80)
-    print("TEST: UPSERT DATA TO DATABASE")
-    print("=" * 80)
-    
-    scraper = WSORecordsFlatScraper(wso_name, sheet_url)
-    scraper.setup_supabase_client()
-    
-    # Scrape and upsert
-    print("\nScraping sheet...")
-    records = scraper.scrape_sheet()
-    print(f"✓ Fetched {len(records)} records\n")
-    
-    print("Upserting to database...")
-    scraper.upsert_records(records)
-    
-    print("\n✅ Upsert completed!")
-    print(f"📊 New records: {len(scraper.changes['inserted'])}")
-    print(f"🔄 Updated records: {len(scraper.changes['updated'])}")
+class FlatSheetTabTests(unittest.TestCase):
+    def test_reads_the_tab_the_url_points_at(self):
+        scraper = WSORecordsFlatScraper("California North", CALIFORNIA_NORTH_URL)
+        with mock.patch.object(
+            scraper_ga_pnw.requests, "get", return_value=response(CALIFORNIA_NORTH_GID_TAB)
+        ) as get:
+            records = scraper.scrape_sheet()
+
+        get.assert_called_once()
+        url = get.call_args.args[0]
+        self.assertEqual(
+            url,
+            "https://docs.google.com/spreadsheets/d/1ZAs27jQCPYTVgLuQ-feBHSO-BgGjGCewUs0djG23pXQ"
+            "/gviz/tq?tqx=out:csv&gid=35344992",
+        )
+        self.assertNotIn("sheet=", url)
+        self.assertEqual(len(records), 3)
+
+    def test_falls_back_to_the_current_records_tab_without_a_gid(self):
+        scraper = WSORecordsFlatScraper(
+            "Georgia", "https://docs.google.com/spreadsheets/d/abc123/edit"
+        )
+        with mock.patch.object(
+            scraper_ga_pnw.requests, "get", return_value=response(CALIFORNIA_NORTH_GID_TAB)
+        ) as get:
+            scraper.scrape_sheet()
+
+        self.assertEqual(
+            get.call_args.args[0],
+            "https://docs.google.com/spreadsheets/d/abc123/gviz/tq?tqx=out:csv"
+            "&sheet=Current%20Records",
+        )
+
+    def test_http_error_fails(self):
+        scraper = WSORecordsFlatScraper("California North", CALIFORNIA_NORTH_URL)
+        with mock.patch.object(scraper_ga_pnw.requests, "get", return_value=response("", 500)):
+            with self.assertRaises(Exception):
+                scraper.scrape_sheet()
 
 
-def test_full(wso_name: str, sheet_url: str):
-    """Test: Full flow with Discord notification."""
-    print("=" * 80)
-    print("TEST: FULL FLOW (SCRAPE + UPSERT + DISCORD)")
-    print("=" * 80)
-    
-    scraper = WSORecordsFlatScraper(wso_name, sheet_url)
-    scraper.setup_supabase_client()
-    scraper.setup_discord()
-    
-    # Scrape
-    print("\nScraping sheet...")
-    records = scraper.scrape_sheet()
-    print(f"✓ Fetched {len(records)} records\n")
-    
-    # Upsert
-    print("Upserting to database...")
-    scraper.upsert_records(records)
-    print(f"✓ Upserted {len(scraper.changes['inserted'])} new, {len(scraper.changes['updated'])} updated\n")
-    
-    # Send Discord notification
-    print("Sending Discord notification...")
-    scraper.send_discord_notification()
-    print("✓ Discord notification sent!\n")
-    
-    print("✅ Full flow completed successfully!")
+class FlatSheetParseTests(unittest.TestCase):
+    def parse(self, text):
+        scraper = WSORecordsFlatScraper("California North", CALIFORNIA_NORTH_URL)
+        with mock.patch.object(scraper_ga_pnw.requests, "get", return_value=response(text)):
+            return scraper.scrape_sheet()
+
+    def test_groups_lifts_by_class_named_by_upper_bound(self):
+        records = self.parse(CALIFORNIA_NORTH_GID_TAB)
+
+        self.assertEqual(
+            records,
+            [
+                {
+                    "wso": "California North",
+                    "age_category": "U11",
+                    "gender": "Women",
+                    "weight_class": "30",
+                    "snatch_record": 20,
+                    "cj_record": 30,
+                    "total_record": 50,
+                },
+                {
+                    "wso": "California North",
+                    "age_category": "U11",
+                    "gender": "Women",
+                    "weight_class": "63+",
+                    "snatch_record": 52,
+                    "cj_record": 68,
+                    "total_record": 120,
+                },
+                {
+                    "wso": "California North",
+                    "age_category": "Senior",
+                    "gender": "Men",
+                    "weight_class": "60",
+                    "snatch_record": 107,
+                    "cj_record": 149,
+                    "total_record": None,
+                },
+            ],
+        )
+
+    def test_human_readable_layout_parses_to_nothing(self):
+        self.assertEqual(self.parse(CALIFORNIA_NORTH_NAMED_TAB), [])
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Test WSO Records Scraper (Flat Format)')
-    parser.add_argument('--test', choices=['fetch', 'dry-run', 'upsert', 'full'], 
-                       default='fetch', help='Test mode to run')
-    parser.add_argument('--wso', default='Georgia', help='WSO name to test')
-    args = parser.parse_args()
-    
-    # WSO sheet URLs
-    wso_urls = {
-        'Georgia': 'https://docs.google.com/spreadsheets/d/1HM1H51pUmhoWDdSUp2RT-mCaUX2a8NB7aUSYVwWT0AU/edit?gid=908416148#gid=908416148',
-        'DMV': 'https://docs.google.com/spreadsheets/d/1vYD2H6si9FyEO-Tc24DoFZOmST0r5hCn/edit?gid=799684986#gid=799684986',
-        'Pacific Northwest': 'https://docs.google.com/spreadsheets/d/1pmZ1j3KJyms0Dlk3xz_VVf6mWq6tqdZj/edit?gid=1648178012#gid=1648178012'
-    }
-    
-    wso_name = args.wso
-    sheet_url = wso_urls.get(wso_name)
-    
-    if not sheet_url:
-        print(f"Error: Unknown WSO '{wso_name}'. Available: {', '.join(wso_urls.keys())}")
-        sys.exit(1)
-    
-    print("\n🧪 WSO RECORDS SCRAPER - LOCAL TEST (FLAT FORMAT)")
-    print(f"WSO: {wso_name}")
-    print(f"Sheet: {sheet_url}")
-    print(f"Mode: {args.test}\n")
-    
-    try:
-        if args.test == 'fetch':
-            test_fetch_data(wso_name, sheet_url)
-            print("\n✅ Test completed successfully!")
-            print("\nNext steps:")
-            print("1. Review the output above and check the JSON file")
-            print("2. Run: python test_flat.py --test dry-run")
-        elif args.test == 'dry-run':
-            test_dry_run(wso_name, sheet_url)
-            print("\n✅ Dry run completed!")
-            print("\nNext steps:")
-            print("1. Review the changes above")
-            print("2. Run: python test_flat.py --test upsert")
-        elif args.test == 'upsert':
-            test_upsert(wso_name, sheet_url)
-            print("\n✅ Upsert completed!")
-            print("\nNext steps:")
-            print("1. Verify data in Supabase")
-            print("2. Run: python test_flat.py --test full")
-        elif args.test == 'full':
-            test_full(wso_name, sheet_url)
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+class FlatRunTests(unittest.TestCase):
+    def setUp(self):
+        self.scraper = WSORecordsFlatScraper("California North", CALIFORNIA_NORTH_URL)
+
+    def test_run_syncs_every_record_once(self):
+        with mock.patch.object(
+            scraper_ga_pnw.requests, "get", return_value=response(CALIFORNIA_NORTH_GID_TAB)
+        ), mock.patch.object(scraper_ga_pnw, "sync_wso_records") as sync, mock.patch(
+            "builtins.print"
+        ):
+            self.scraper.run(allow_shrink=True)
+
+        sync.assert_called_once()
+        wso, records = sync.call_args.args
+        self.assertEqual(wso, "California North")
+        self.assertEqual(len(records), 3)
+        self.assertEqual(sync.call_args.kwargs, {"dry_run": False, "allow_shrink": True})
+
+    def test_zero_records_fail_the_run(self):
+        with mock.patch.object(
+            scraper_ga_pnw.requests, "get", return_value=response(CALIFORNIA_NORTH_NAMED_TAB)
+        ), mock.patch("common.postgres_ingest.IngestClient") as client, mock.patch(
+            "builtins.print"
+        ):
+            with self.assertRaisesRegex(ValueError, "parsed 0 records"):
+                self.scraper.run()
+
+        client.assert_not_called()
+
+    def test_dry_run_cli_does_no_database_work(self):
+        argv = ["scraper_ga_pnw.py", "--wso", "California North", "--sheet-url", CALIFORNIA_NORTH_URL, "--dry-run"]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(
+            scraper_ga_pnw.requests, "get", return_value=response(CALIFORNIA_NORTH_GID_TAB)
+        ), mock.patch("common.postgres_ingest.IngestClient") as client, mock.patch(
+            "builtins.print"
+        ) as printed:
+            scraper_ga_pnw.main()
+
+        client.assert_not_called()
+        output = "\n".join(str(call.args[0]) for call in printed.call_args_list if call.args)
+        self.assertIn("Dry run: would sync 3 California North classes", output)
+        self.assertIn("U11 | Women | 63+", output)
 
 
 if __name__ == "__main__":
-    main()
-
+    unittest.main()

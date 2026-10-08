@@ -5,11 +5,16 @@ New York WSO Records - Automated Multi-PDF Scraper
 This script automatically scrapes the New York WSO records page,
 extracts PDF URLs from the "Current Records" section, and processes them using the PDF scraper.
 
+Every PDF is read before anything is written: Postgres gets the WSO's whole
+set in one exact-set sync (``utils.sync_wso_records``), so a PDF that fails
+to download or parses to nothing fails the run instead of deleting its
+classes.
+
 USAGE:
   Dry-run (test without making changes):
     source venv/bin/activate && python scraper_newyork_auto.py --dry-run
 
-  Live run (upsert to database):
+  Live run (replace the WSO's Postgres records with every PDF's records):
     source venv/bin/activate && python scraper_newyork_auto.py
 """
 
@@ -19,34 +24,33 @@ import re
 
 # Import the PDF scraper
 import sys
-from datetime import datetime
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import requests
 from dotenv import load_dotenv
 
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "manual_scrapers"
-    ),
-)
-from scraper_pdf_newyork import WSORecordsNewYorkScraper
+SCRAPER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(SCRAPER_DIR, "manual_scrapers"))
+sys.path.insert(0, SCRAPER_DIR)
+from utils import every_part, sync_wso_records  # noqa: E402
+from scraper_pdf_newyork import WSORecordsNewYorkScraper  # noqa: E402
 
 
 class NewYorkAutoScraper:
     """Automated scraper that fetches all PDF URLs and processes them."""
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, allow_shrink: bool = False):
         """
         Initialize auto scraper.
 
         Args:
-            dry_run: If True, compare with database without making changes
+            dry_run: If True, parse and print without touching Postgres
+            allow_shrink: Let the sync delete more than a quarter of the stored classes
         """
         self.records_page_url = "https://www.nywso.com/state-records"
         self.wso_name = "New York"
         self.dry_run = dry_run
+        self.allow_shrink = allow_shrink
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
 
     def fetch_pdf_urls(self) -> List[Dict[str, str]]:
@@ -218,26 +222,59 @@ class NewYorkAutoScraper:
 
         return None
 
-    def send_summary_notification(self, total_pdfs: int, results: List[Dict]):
-        """Send a summary Slack notification for all PDFs processed."""
+    def scrape_records(self) -> List[Dict[str, Any]]:
+        """
+        Download and parse every records PDF on the page.
+
+        Returns:
+            The records of all PDFs together: the WSO's whole set
+
+        Raises if the page links no PDF, or if any PDF fails to download or
+        parse, or parses to nothing; one missing PDF would otherwise delete
+        its classes in the sync.
+        """
+        pdf_info = self.fetch_pdf_urls()
+        if not pdf_info:
+            raise ValueError(f"{self.wso_name}: no records PDFs found on {self.records_page_url}")
+
+        print()
+        print("PDFs to process:")
+        for info in pdf_info:
+            print(f"  • {info['category']}: {info['url']}")
+
+        parts = []
+        for i, info in enumerate(pdf_info, 1):
+            print(f"\n{'=' * 80}")
+            print(f"Processing {i}/{len(pdf_info)}: {info['category']}")
+            print(f"{'=' * 80}\n")
+
+            scraper = WSORecordsNewYorkScraper(self.wso_name, info["url"])
+            try:
+                scraper.download_pdf()
+                records = scraper.scrape_pdf()
+            finally:
+                scraper.cleanup()
+            print(f"Found {len(records)} records")
+            parts.append((f"{info['category']} ({info['url']})", records))
+
+        return every_part(self.wso_name, parts)
+
+    def send_summary_notification(self, result: Dict[str, int], record_count: int):
+        """Send a summary Slack notification for the sync."""
+        if result["inserted"] + result["updated"] + result["deleted"] == 0:
+            return
+
         if not self.slack_webhook_url:
             print("⚠ Slack webhook not configured, skipping notification")
             return
 
-        total_inserted = sum(len(r.get("inserted", [])) for r in results)
-        total_updated = sum(len(r.get("updated", [])) for r in results)
-
-        # Build message
         title = f"{self.wso_name} WSO Records Postgres - Automated Scrape Complete"
-
-        if self.dry_run:
-            message = f"*{title}*\n\n*DRY RUN* - Processed {total_pdfs} PDF files"
-        else:
-            message = (
-                f"*{title}*\n\n"
-                f"Processed *{total_pdfs}* PDF files\n"
-                f"*{total_inserted}* new records, *{total_updated}* updated records"
-            )
+        message = (
+            f"*{title}*\n\n"
+            f"Processed *{record_count}* record rows\n"
+            f"*{result['inserted']}* inserted, *{result['updated']}* updated, "
+            f"*{result['deleted']}* deleted, *{result['unchanged']}* unchanged"
+        )
 
         payload = {"text": message}
 
@@ -255,110 +292,31 @@ class NewYorkAutoScraper:
         print("=" * 80)
         print()
 
-        # Fetch all PDF URLs
-        pdf_info = self.fetch_pdf_urls()
+        records = self.scrape_records()
 
-        if not pdf_info:
-            print("⚠ No PDF URLs found on the records page")
-            return
-
-        print()
-        print("PDFs to process:")
-        for info in pdf_info:
-            print(f"  • {info['category']}: {info['url']}")
-        print()
-
-        # Process each PDF
-        results = []
-        for i, info in enumerate(pdf_info, 1):
-            category = info["category"]
-            pdf_url = info["url"]
-
-            print(f"\n{'=' * 80}")
-            print(f"Processing {i}/{len(pdf_info)}: {category}")
-            print(f"{'=' * 80}\n")
-
-            try:
-                scraper = WSORecordsNewYorkScraper(self.wso_name, pdf_url)
-                scraper.setup_ingest_client()
-
-                # Don't set up Discord for individual PDFs (we'll send one summary)
-
-                scraper.download_pdf()
-
-                print(f"Scraping PDF: {category}...")
-                records = scraper.scrape_pdf()
-                print(f"Found {len(records)} records")
-
-                if self.dry_run:
-                    comparison = scraper.dry_run_compare(records)
-                    results.append(
-                        {
-                            "category": category,
-                            "to_insert": len(comparison["to_insert"]),
-                            "to_update": len(comparison["to_update"]),
-                            "unchanged": len(comparison["unchanged"]),
-                        }
-                    )
-
-                    print(f"\n  To INSERT: {len(comparison['to_insert'])} records")
-                    print(f"  To UPDATE: {len(comparison['to_update'])} records")
-                    print(f"  Unchanged: {len(comparison['unchanged'])} records")
-                else:
-                    result = scraper.upsert_to_postgres(records)
-                    results.append(
-                        {
-                            "category": category,
-                            "inserted": result["inserted"],
-                            "updated": result["updated"],
-                        }
-                    )
-
-                    print(f"\n  ✓ Inserted: {len(result['inserted'])} records")
-                    print(f"  ✓ Updated: {len(result['updated'])} records")
-
-                scraper.cleanup()
-
-            except Exception as e:
-                print(f"✗ Error processing {category}: {e}")
-                import traceback
-
-                traceback.print_exc()
-                results.append({"category": category, "error": str(e)})
-
-        # Send summary notification
-        if not self.dry_run:
-            print(f"\n{'=' * 80}")
-            print("Sending summary notification...")
-            print(f"{'=' * 80}\n")
-            self.send_summary_notification(len(pdf_info), results)
-
-        # Print final summary
         print(f"\n{'=' * 80}")
         print("FINAL SUMMARY")
         print(f"{'=' * 80}")
-        print(f"Total PDFs processed: {len(pdf_info)}")
+        print(f"Parsed {len(records)} records")
 
         if self.dry_run:
-            total_insert = sum(r.get("to_insert", 0) for r in results)
-            total_update = sum(r.get("to_update", 0) for r in results)
-            total_unchanged = sum(r.get("unchanged", 0) for r in results)
-            print(f"Would INSERT: {total_insert} records")
-            print(f"Would UPDATE: {total_update} records")
-            print(f"Unchanged: {total_unchanged} records")
-        else:
-            total_inserted = sum(len(r.get("inserted", [])) for r in results)
-            total_updated = sum(len(r.get("updated", [])) for r in results)
-            print(f"Total INSERTED: {total_inserted} records")
-            print(f"Total UPDATED: {total_updated} records")
+            for rec in records[:20]:
+                print(
+                    f"  {rec['age_category']:15} | {rec['gender']:6} | {rec['weight_class']:5} | "
+                    f"Snatch: {str(rec.get('snatch_record') or '-'):4} | "
+                    f"C&J: {str(rec.get('cj_record') or '-'):4} | "
+                    f"Total: {str(rec.get('total_record') or '-'):4}"
+                )
+            if len(records) > 20:
+                print(f"  ... and {len(records) - 20} more")
 
-        errors = [r for r in results if "error" in r]
-        if errors:
-            print(f"\n⚠ Errors: {len(errors)}")
-            for err in errors:
-                print(f"  • {err['category']}: {err['error']}")
+        result = sync_wso_records(
+            self.wso_name, records, dry_run=self.dry_run, allow_shrink=self.allow_shrink
+        )
+        if result is not None:
+            self.send_summary_notification(result, len(records))
 
-        print(f"\n✅ Complete!")
+        print("\n✅ Complete!")
 
 
 def main():
@@ -370,14 +328,21 @@ def main():
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Compare with database without making changes",
+        help="Parse and print without touching Postgres",
+    )
+    parser.add_argument(
+        "--allow-shrink",
+        action="store_true",
+        help="Let the sync delete more than a quarter of the stored classes",
     )
 
     args = parser.parse_args()
 
     load_dotenv()
 
-    scraper = NewYorkAutoScraper(dry_run=args.dry_run)
+    scraper = NewYorkAutoScraper(
+        dry_run=args.dry_run, allow_shrink=args.allow_shrink
+    )
     scraper.run()
 
 

@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import unittest
+from unittest.mock import MagicMock, patch
+
+
+SCRAPER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(SCRAPER_DIR, "manual_scrapers"))
+sys.path.insert(0, os.path.join(SCRAPER_DIR, "auto_scrapers"))
+
+import scraper_mountainsouth_auto  # noqa: E402
+from scraper_mountainsouth_auto import MountainSouthAutoScraper  # noqa: E402
+from scraper_pdf_mountainsouth import WSORecordsMountainSouthScraper  # noqa: E402
+
+
+def record(weight_class, snatch=50):
+    return {
+        "wso": "Mountain South",
+        "age_category": "Senior",
+        "gender": "Men",
+        "weight_class": weight_class,
+        "snatch_record": snatch,
+        "cj_record": None,
+        "total_record": None,
+    }
+
+
+# The top of page 1 of the live MEN PDF (August 2026) as pdfplumber's
+# extract_text() reads it, cut to two classes per lift.
+MEN_PAGE = "\n".join([
+    "MOUNTAIN SOUTH WSO RECORDS",
+    "Beginning 8/1/2026 through 8/1/2026",
+    "CAT ATHLETE STATE KG DATE EVENT LOCATION",
+    "OPEN MEN - SNATCH",
+    "60 Ashton McAllister AZ 77 6/22/25 Youth Nationals Colorado Springs, CO",
+    "110+ Kaiser Witte AZ 180 6/28/26 National Championship Colorado Springs, CO",
+    "OPEN MEN - CLEAN & JERK",
+    "60 Ashton McAllister AZ 101 6/22/25 Youth Nationals Colorado Springs, CO",
+    "110+ Kaiser Witte AZ 211 6/28/26 National Championship Colorado Springs, CO",
+    "OPEN MEN - TOTAL",
+    "60 Ashton McAllister AZ 178 6/22/25 Youth Nationals Colorado Springs, CO",
+    "110+ Kaiser Witte AZ 391 6/28/26 National Championship Colorado Springs, CO",
+])
+
+
+class MountainSouthParserTests(unittest.TestCase):
+    def test_gathers_each_classs_lifts_from_the_three_sections(self):
+        scraper = WSORecordsMountainSouthScraper("Mountain South", "https://example.com/men.pdf")
+        records = scraper.parse_pages([MEN_PAGE])
+
+        self.assertEqual(
+            [(r["age_category"], r["gender"], r["weight_class"], r["snatch_record"], r["cj_record"], r["total_record"]) for r in records],
+            [("Senior", "Men", "60", 77, 101, 178), ("Senior", "Men", "110+", 180, 211, 391)],
+        )
+
+
+class FakePdf:
+    """Stands in for WSORecordsMountainSouthScraper: one PDF's records by URL."""
+
+    parsed = {}
+    cleaned = []
+
+    def __init__(self, wso_name, pdf_url):
+        self.pdf_url = pdf_url
+
+    def download_pdf(self):
+        if self.parsed[self.pdf_url] is None:
+            raise OSError("download failed")
+
+    def scrape_pdf(self):
+        return self.parsed[self.pdf_url]
+
+    def cleanup(self):
+        FakePdf.cleaned.append(self.pdf_url)
+
+
+PDFS = [
+    {"category": "A", "url": "https://example.com/a.pdf"},
+    {"category": "B", "url": "https://example.com/b.pdf"},
+]
+
+
+class MountainSouthAutoTests(unittest.TestCase):
+    def scrape(self, parsed):
+        FakePdf.parsed = parsed
+        FakePdf.cleaned = []
+        scraper = MountainSouthAutoScraper(dry_run=True)
+        with patch.object(scraper_mountainsouth_auto, "WSORecordsMountainSouthScraper", FakePdf), \
+                patch.object(scraper, "fetch_pdf_urls", return_value=PDFS):
+            return scraper.scrape_records()
+
+    def test_returns_every_pdfs_records(self):
+        records = self.scrape({PDFS[0]["url"]: [record("60")], PDFS[1]["url"]: [record("65")]})
+        self.assertEqual([r["weight_class"] for r in records], ["60", "65"])
+        self.assertEqual(FakePdf.cleaned, [PDFS[0]["url"], PDFS[1]["url"]])
+
+    def test_a_pdf_parsed_to_nothing_fails_the_run(self):
+        with self.assertRaisesRegex(ValueError, "b.pdf"):
+            self.scrape({PDFS[0]["url"]: [record("60")], PDFS[1]["url"]: []})
+
+    def test_a_failed_download_fails_the_run_and_is_cleaned_up(self):
+        with self.assertRaises(OSError):
+            self.scrape({PDFS[0]["url"]: None, PDFS[1]["url"]: [record("65")]})
+        self.assertEqual(FakePdf.cleaned, [PDFS[0]["url"]])
+
+    def test_no_pdfs_fails_the_run(self):
+        scraper = MountainSouthAutoScraper(dry_run=True)
+        with patch.object(scraper, "fetch_pdf_urls", return_value=[]):
+            with self.assertRaisesRegex(ValueError, "no records PDFs"):
+                scraper.scrape_records()
+
+    def test_run_syncs_the_whole_wso_once(self):
+        records = [record("60"), record("65")]
+        scraper = MountainSouthAutoScraper(allow_shrink=True)
+        result = {"inserted": 0, "updated": 0, "deleted": 0, "unchanged": 2}
+        with patch.object(scraper, "scrape_records", return_value=records), \
+                patch.object(scraper_mountainsouth_auto, "sync_wso_records", return_value=result) as sync:
+            scraper.run()
+        sync.assert_called_once_with("Mountain South", records, dry_run=False, allow_shrink=True)
+
+    def test_dry_run_flag_does_no_database_work(self):
+        records = [record("60")]
+        with patch.object(sys, "argv", ["scraper_mountainsouth_auto.py", "--dry-run"]), \
+                patch.object(scraper_mountainsouth_auto, "load_dotenv"), \
+                patch.object(MountainSouthAutoScraper, "scrape_records", return_value=records), \
+                patch("common.postgres_ingest.IngestClient") as ingest:
+            scraper_mountainsouth_auto.main()
+        ingest.assert_not_called()
+
+    def test_no_flags_syncs_as_the_cron_runs_it(self):
+        with patch.object(sys, "argv", ["scraper_mountainsouth_auto.py"]), \
+                patch.object(scraper_mountainsouth_auto, "load_dotenv"), \
+                patch.object(MountainSouthAutoScraper, "run", MagicMock()) as run, \
+                patch.object(MountainSouthAutoScraper, "__init__", return_value=None) as init:
+            scraper_mountainsouth_auto.main()
+        init.assert_called_once_with(dry_run=False, allow_shrink=False)
+        run.assert_called_once_with()
+
+
+if __name__ == "__main__":
+    unittest.main()

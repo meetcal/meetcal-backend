@@ -5,18 +5,14 @@ WSO Records Scraper - TN-KY Format
 
 import os
 import sys
-import json
 import argparse
 import re
 from typing import List, Dict, Any
-from datetime import datetime
-from collections import defaultdict
 
 import requests
-from common.postgres_ingest import IngestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils import wso_record_ingest_args
+from utils import every_part, sync_wso_records
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -32,17 +28,8 @@ class WSORecordsTNKYScraper:
         self.sheet_url = sheet_url
         self.changes = {"inserted": [], "updated": []}
         
-        # Initialize clients
-        self.ingest_client = None
-        self.scraper_secret = None
         self.slack_webhook_url = None
         
-    def setup_ingest_client(self):
-        """Set up Postgres ingest client."""
-        self.ingest_client = IngestClient()
-        self.scraper_secret = os.getenv("SCRAPER_SECRET")
-        print("Postgres ingest client initialized")
-    
     def setup_slack(self):
         """Set up Slack webhook URL."""
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
@@ -119,7 +106,7 @@ class WSORecordsTNKYScraper:
         
         # Fetch CSV data
         csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={sheet_name}"
-        response = requests.get(csv_url)
+        response = requests.get(csv_url, timeout=60)
         
         if response.status_code != 200:
             raise Exception(f"Failed to fetch sheet: {response.status_code}")
@@ -193,7 +180,8 @@ class WSORecordsTNKYScraper:
             
             i += 1
         
-        return records
+        # One tab, but refused when empty like every other part: the sync is an exact set.
+        return every_part(self.wso_name, [(f"tab gid {sheet_name}", records)])
     
     def _parse_weight_classes(self, row: List[str]) -> List[str]:
         """Extract weight classes from header row."""
@@ -235,16 +223,6 @@ class WSORecordsTNKYScraper:
                         pass
         
         return result
-    
-    def upsert_records(self, records: List[Dict[str, Any]]) -> None:
-        """Upsert records to Postgres."""
-        # One connection, one transaction: a failing row rolls back the batch.
-        self.ingest_client.actions(
-            "scraperIngestion:ingestWSORecord",
-            [wso_record_ingest_args(record, self.scraper_secret) for record in records],
-        )
-        for record in records:
-            print(f"  ✓ Upserted: {record['age_category']} {record['gender']} {record['weight_class']}")
     
     def send_slack_notification(self) -> None:
         """Send Slack notification (same as other scrapers)."""
@@ -299,26 +277,28 @@ class WSORecordsTNKYScraper:
         except Exception as e:
             print(f"✗ Failed to send Slack notification: {e}")
     
-    def run(self, dry_run: bool = False) -> None:
+    def run(self, dry_run: bool = False, allow_shrink: bool = False) -> None:
         """Main execution flow."""
         print(f"Starting scraper for {self.wso_name}")
         print(f"Sheet URL: {self.sheet_url}")
         
-        self.setup_ingest_client()
-
         if not dry_run:
             self.setup_slack()
         else:
-            print("🧪 DRY RUN MODE - No Slack operations")
+            print("🧪 DRY RUN MODE - No database or Slack operations")
         
         print("Scraping Google Sheet...")
         records = self.scrape_sheet()
         print(f"Found {len(records)} records")
         
+        if dry_run:
+            for record in records:
+                print(f"  {record['age_category']} {record['gender']} {record['weight_class']}: "
+                      f"{record['snatch_record']}/{record['cj_record']}/{record['total_record']}")
+        # The sheet lists Senior Women 77 twice; the sync keeps the last, as the row-by-row upsert did.
+        sync_wso_records(self.wso_name, records, dry_run=dry_run, allow_shrink=allow_shrink)
+        
         if not dry_run:
-            print("Upserting records to Postgres...")
-            self.upsert_records(records)
-            
             print("Sending Slack notification...")
             self.send_slack_notification()
         
@@ -330,12 +310,13 @@ def main():
     parser = argparse.ArgumentParser(description="WSO Records Scraper (TN-KY Format)")
     parser.add_argument("--wso", required=True, help="WSO name (should be 'Tennessee-Kentucky')")
     parser.add_argument("--sheet-url", required=True, help="Google Sheet URL")
-    parser.add_argument("--dry-run", action="store_true", help="Compare with database without making changes")
+    parser.add_argument("--dry-run", action="store_true", help="Parse and print without touching Postgres")
+    parser.add_argument("--allow-shrink", action="store_true", help="Let the sync delete more than a quarter of the stored classes")
     
     args = parser.parse_args()
     
     scraper = WSORecordsTNKYScraper(args.wso, args.sheet_url)
-    scraper.run(dry_run=args.dry_run)
+    scraper.run(dry_run=args.dry_run, allow_shrink=args.allow_shrink)
 
 
 if __name__ == "__main__":

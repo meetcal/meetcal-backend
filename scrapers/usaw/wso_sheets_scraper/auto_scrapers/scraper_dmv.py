@@ -8,18 +8,45 @@ For DMV WSO which uses a flat CSV format with different column names
 
 import os
 import sys
-import json
 import argparse
 import re
-from typing import List, Dict, Any
-from datetime import datetime
+from typing import List, Dict, Any, Optional
 from collections import defaultdict
+from urllib.parse import quote
 
 import requests
-from common.postgres_ingest import IngestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils import wso_record_ingest_args
+from utils import sync_wso_records
+
+SHEET_NAME = "Current Records"
+FETCH_TIMEOUT_SECONDS = 60
+
+
+def gid_of(sheet_url: str) -> Optional[str]:
+    """The tab (gid) a Google Sheets URL points at, if it names one."""
+    match = re.search(r"[?&#]gid=(\d+)", sheet_url)
+    return match.group(1) if match else None
+
+
+def sheet_csv_url(sheet_url: str) -> str:
+    """CSV of the tab the URL points at, else of the "Current Records" tab
+    (meetcal-app's convex/scrapers/wsoRecords.ts flat() reads the same one)."""
+    sheet_id = sheet_url.split('/d/')[1].split('/')[0]
+    base = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv"
+    gid = gid_of(sheet_url)
+    if gid:
+        return f"{base}&gid={gid}"
+    return f"{base}&sheet={quote(SHEET_NAME, safe='')}"
+
+
+def print_records(records: List[Dict[str, Any]]) -> None:
+    for record in records:
+        print(
+            f"  {record['age_category']} | {record['gender']} | {record['weight_class']}: "
+            f"snatch={record['snatch_record']}, cj={record['cj_record']}, "
+            f"total={record['total_record']}"
+        )
 
 
 class WSORecordsDMVScraper:
@@ -30,18 +57,8 @@ class WSORecordsDMVScraper:
         self.wso_name = wso_name
         self.sheet_url = sheet_url
         self.changes = {"inserted": [], "updated": []}
-        
-        # Initialize clients
-        self.ingest_client = None
-        self.scraper_secret = None
         self.slack_webhook_url = None
         
-    def setup_ingest_client(self):
-        """Set up Postgres ingest client."""
-        self.ingest_client = IngestClient()
-        self.scraper_secret = os.getenv("SCRAPER_SECRET")
-        print("Postgres ingest client initialized")
-    
     def setup_slack(self):
         """Set up Slack webhook URL."""
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
@@ -69,7 +86,6 @@ class WSORecordsDMVScraper:
         # Handle Open/OPEN -> Senior (case-insensitive)
         if age_group_upper.startswith('OPEN'):
             # Preserve suffix (e.g., " ADAP") if present
-            import re
             match = re.match(r'^(open)(.*)$', age_group, re.IGNORECASE)
             if match:
                 suffix = match.group(2)
@@ -77,7 +93,6 @@ class WSORecordsDMVScraper:
         
         # Handle M35, M40, W35, W40, etc. -> Masters 35, Masters 40
         # Pattern: M/W followed by digits
-        import re
         match = re.match(r'^[MW](\d+)(.*)$', age_group, re.IGNORECASE)
         if match:
             age_num = match.group(1)
@@ -103,19 +118,7 @@ class WSORecordsDMVScraper:
                 'total_record': int or None
             }
         """
-        # Extract sheet ID from URL
-        sheet_id = self.sheet_url.split('/d/')[1].split('/')[0]
-        
-        # Try to get sheet name from URL or use default
-        if 'gid=' in self.sheet_url:
-            # For now, we'll use "Current Records" as default
-            sheet_name = "Current Records"
-        else:
-            sheet_name = "Current Records"
-        
-        # Fetch CSV data
-        csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
-        response = requests.get(csv_url)
+        response = requests.get(sheet_csv_url(self.sheet_url), timeout=FETCH_TIMEOUT_SECONDS)
         
         if response.status_code != 200:
             raise Exception(f"Failed to fetch sheet: {response.status_code}")
@@ -201,21 +204,6 @@ class WSORecordsDMVScraper:
         
         return records
     
-    def upsert_records(self, records: List[Dict[str, Any]]) -> None:
-        """
-        Upsert records to Postgres.
-        
-        Args:
-            records: List of records to upsert
-        """
-        # One connection, one transaction: a failing row rolls back the batch.
-        self.ingest_client.actions(
-            "scraperIngestion:ingestWSORecord",
-            [wso_record_ingest_args(record, self.scraper_secret) for record in records],
-        )
-        for record in records:
-            print(f"  ✓ Upserted: {record['age_category']} {record['gender']} {record['weight_class']}")
-    
     def send_slack_notification(self) -> None:
         """Send Slack notification with change summary."""
         if not self.slack_webhook_url:
@@ -269,27 +257,27 @@ class WSORecordsDMVScraper:
         except Exception as e:
             print(f"✗ Failed to send Slack notification: {e}")
     
-    def run(self) -> None:
+    def run(self, dry_run: bool = False, allow_shrink: bool = False) -> None:
         """Main execution flow."""
-        print(f"Starting scraper for {self.wso_name}")
+        print(f"Starting scraper for {self.wso_name}{' (DRY RUN)' if dry_run else ''}")
         print(f"Sheet URL: {self.sheet_url}")
         
-        # Setup clients
-        self.setup_ingest_client()
-        self.setup_slack()
+        if not dry_run:
+            self.setup_slack()
         
         # Scrape data
         print("Scraping Google Sheet...")
         records = self.scrape_sheet()
         print(f"Found {len(records)} records")
+        if dry_run:
+            print_records(records)
         
-        # Upsert to database
-        print("Upserting records to Postgres...")
-        self.upsert_records(records)
+        # One exact-set write: classes the sheet no longer lists are deleted
+        sync_wso_records(self.wso_name, records, dry_run=dry_run, allow_shrink=allow_shrink)
         
-        # Send notification
-        print("Sending Slack notification...")
-        self.send_slack_notification()
+        if not dry_run:
+            print("Sending Slack notification...")
+            self.send_slack_notification()
         
         print("Done!")
 
@@ -298,12 +286,18 @@ def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="WSO Records Scraper (DMV Format)")
     parser.add_argument("--wso", required=True, help="WSO name (should be 'DMV')")
-    parser.add_argument("--sheet-url", required=True, help="Google Sheet URL")
+    parser.add_argument("--sheet-url", required=True, help="Google Sheet URL (its gid picks the tab)")
+    parser.add_argument("--dry-run", action="store_true", help="Parse and print without updating Postgres")
+    parser.add_argument(
+        "--allow-shrink",
+        action="store_true",
+        help="Let the sync delete more than a quarter of the stored classes",
+    )
     
     args = parser.parse_args()
     
     scraper = WSORecordsDMVScraper(args.wso, args.sheet_url)
-    scraper.run()
+    scraper.run(dry_run=args.dry_run, allow_shrink=args.allow_shrink)
 
 
 if __name__ == "__main__":

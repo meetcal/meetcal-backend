@@ -1,55 +1,115 @@
 #!/usr/bin/env python3
-"""
-Basic test script for Florida WSO scraper
-"""
+"""Florida WSO records scraper: every tab is read or the run fails, then one exact-set sync."""
 
-import sys
+import contextlib
+import io
 import os
-import json
+import sys
+import unittest
+from unittest import mock
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRAPER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(SCRAPER_DIR, "auto_scrapers"))
 
-from auto_scrapers.scraper_florida import WSORecordsFloridaScraper
+import scraper_florida  # noqa: E402
 
-def main():
-    print("\n🧪 Testing Florida Scraper")
-    print("WSO: Florida")
-    print("Sheet: https://docs.google.com/spreadsheets/d/16sNrOTnGrGeXE4L5skgCfE5vLTA7ggpaHWfMQNh0DfQ/view?gid=490899077#gid=490899077")
-    
-    scraper = WSORecordsFloridaScraper(
-        "Florida",
-        "https://docs.google.com/spreadsheets/d/16sNrOTnGrGeXE4L5skgCfE5vLTA7ggpaHWfMQNh0DfQ/view?gid=490899077#gid=490899077"
-    )
-    
-    print("\nScraping sheet...")
-    records = scraper.scrape_sheet()
-    
-    print(f"\n✓ Successfully fetched {len(records)} records")
-    
-    # Show sample records
-    print(f"\nSample records (first 10):")
-    print("=" * 80)
-    for i, rec in enumerate(records[:10], 1):
-        print(f"{i}. {rec['age_category']:15} | {rec['gender']:6} | {rec['weight_class']:5}")
-        print(f"   Snatch: {rec.get('snatch_record')}, C&J: {rec.get('cj_record')}, Total: {rec.get('total_record')}")
-    
-    if len(records) > 10:
-        print(f"\n... and {len(records) - 10} more records")
-    
-    # Show breakdown by age category
-    from collections import Counter
-    age_counts = Counter(r['age_category'] for r in records)
-    print(f"\nBreakdown by age category:")
-    for age, count in sorted(age_counts.items()):
-        print(f"  {age}: {count} records")
-    
-    # Save to file for inspection
-    output_file = "test_florida_data.json"
-    with open(output_file, 'w') as f:
-        json.dump(records, f, indent=2)
-    print(f"\n✓ Saved to {output_file}")
+SHEET_URL = "https://docs.google.com/spreadsheets/d/16sNrOTnGrGeXE4L5skgCfE5vLTA7ggpaHWfMQNh0DfQ/view?gid=490899077#gid=490899077"
+
+# The Senior tab (gid 662417948) as gviz serves it, first two classes, trailing blank columns cut.
+SENIOR_CSV = """\
+"Senior State Records ","","","","","","","","","","",""
+"60","Snatch","102","Michael Tucciarone","6/20/26","","48","Snatch","69","STANDARD","6/1/25",""
+"","Clean and Jerk","128","Samuel Lewis","6/20/26","","","Clean & Jerk","88","STANDARD","6/1/25",""
+"","Total","229","Samuel Lewis","6/20/26","","","Total","158","STANDARD","6/1/25",""
+"65","Snatch","125","Bryson Brown","6/26/26","","53","Snatch","80","Asia Gonzalez","7/13/25",""
+"","Clean and Jerk","147","Bryson Brown","4/10/26","","","Clean & Jerk","103","Asia Gonzalez","7/13/25",""
+"","Total","265","Bryson Brown","6/26/26","","","Total","183","Asia Gonzalez","7/13/25",""
+"""
+
+
+class FakeResponse:
+    def __init__(self, text: str, status_code: int = 200):
+        self.text = text
+        self.status_code = status_code
+
+
+def serve(overrides=None):
+    """A requests.get stand-in: every tab serves SENIOR_CSV unless its gid is overridden."""
+    overrides = overrides or {}
+    requested = []
+
+    def get(url, timeout=None):
+        gid = url.rsplit("gid=", 1)[1]
+        requested.append(gid)
+        return overrides.get(gid, FakeResponse(SENIOR_CSV))
+
+    get.requested = requested
+    return get
+
+
+def quietly(fn, *args, **kwargs):
+    with contextlib.redirect_stdout(io.StringIO()):
+        return fn(*args, **kwargs)
+
+
+class FloridaScraperTests(unittest.TestCase):
+    def setUp(self):
+        self.scraper = scraper_florida.WSORecordsFloridaScraper("Florida", SHEET_URL)
+
+    def scrape(self, get):
+        with mock.patch.object(scraper_florida.requests, "get", side_effect=get):
+            return quietly(self.scraper.scrape_sheet)
+
+    def test_reads_every_tab(self):
+        get = serve()
+        records = self.scrape(get)
+
+        self.assertEqual(get.requested, list(self.scraper.tabs.values()))
+        self.assertEqual(len(records), 4 * len(self.scraper.tabs))
+        self.assertEqual({r["age_category"] for r in records}, set(self.scraper.tabs))
+        senior_men_60 = next(
+            r for r in records
+            if (r["age_category"], r["gender"], r["weight_class"]) == ("Senior", "Men", "60")
+        )
+        self.assertEqual(
+            (senior_men_60["snatch_record"], senior_men_60["cj_record"], senior_men_60["total_record"]),
+            (102, 128, 229),
+        )
+
+    def test_failing_tab_raises(self):
+        with self.assertRaisesRegex(Exception, "500"):
+            self.scrape(serve({"1300164988": FakeResponse("", status_code=500)}))
+
+    def test_empty_tab_raises(self):
+        with self.assertRaisesRegex(ValueError, "Masters 90"):
+            self.scrape(serve({"575067900": FakeResponse('"Masters 90 State Records "\n')}))
+
+    def test_run_syncs_once_with_every_record(self):
+        argv = ["scraper_florida.py", "--wso", "Florida", "--sheet-url", SHEET_URL, "--allow-shrink"]
+        with mock.patch.object(sys, "argv", argv), \
+                mock.patch.dict(os.environ, {"SLACK_WEBHOOK_URL": ""}), \
+                mock.patch.object(scraper_florida.requests, "get", side_effect=serve()), \
+                mock.patch.object(scraper_florida, "sync_wso_records") as sync:
+            quietly(scraper_florida.main)
+
+        sync.assert_called_once()
+        (wso, records), kwargs = sync.call_args
+        self.assertEqual(wso, "Florida")
+        self.assertEqual(len(records), 4 * len(self.scraper.tabs))
+        self.assertEqual(kwargs, {"dry_run": False, "allow_shrink": True})
+
+    def test_dry_run_touches_no_database(self):
+        argv = ["scraper_florida.py", "--wso", "Florida", "--sheet-url", SHEET_URL, "--dry-run"]
+        with mock.patch.object(sys, "argv", argv), \
+                mock.patch.object(scraper_florida.requests, "get", side_effect=serve()), \
+                mock.patch("common.postgres_ingest.IngestClient") as ingest_client:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                scraper_florida.main()
+
+        ingest_client.assert_not_called()
+        self.assertIn("Dry run: would sync 68 Florida classes", output.getvalue())
+
 
 if __name__ == "__main__":
-    main()
-
+    unittest.main()

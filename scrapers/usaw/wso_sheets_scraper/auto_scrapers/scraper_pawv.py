@@ -16,6 +16,9 @@ PA/WV format characteristics:
 - Three rows per weight class: Snatch, Clean & Jerk, Total
 - Columns: Lift, Name, Team, Weight, Date, Meet, Location
 - Weight value is in the "Weight" column (not embedded in row label)
+
+The tabs are synced to Postgres together as the WSO's exact set of records
+(``utils.sync_wso_records``), so a tab that parses to nothing fails the run.
 """
 
 import os
@@ -24,13 +27,10 @@ import csv
 import argparse
 import requests
 from typing import List, Dict, Any, Optional
-from datetime import datetime
 from dotenv import load_dotenv
 
-from common.postgres_ingest import IngestClient
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils import wso_record_ingest_args
+from utils import every_part, sync_wso_records  # noqa: E402
 
 
 class WSORecordsPAWVScraper:
@@ -46,8 +46,6 @@ class WSORecordsPAWVScraper:
         """
         self.wso_name = wso_name
         self.base_sheet_id = base_sheet_id
-        self.ingest_client: Optional[IngestClient] = None
-        self.scraper_secret: Optional[str] = None
         self.slack_webhook_url: Optional[str] = None
         
         # Tab configuration: gender + base age category + GID
@@ -62,12 +60,6 @@ class WSORecordsPAWVScraper:
             ("Men", "Masters", "14757518"),     # Masters Men
             ("Women", "Masters", "846901037"),  # Masters Women
         ]
-    
-    def setup_ingest_client(self):
-        """Initialize Postgres ingest client."""
-        self.ingest_client = IngestClient()
-        self.scraper_secret = os.getenv("SCRAPER_SECRET")
-        print("Postgres ingest client initialized")
     
     def setup_slack(self):
         """Initialize Slack webhook."""
@@ -177,7 +169,10 @@ class WSORecordsPAWVScraper:
         Returns:
             List of record dictionaries
         """
-        csv_text = self.fetch_csv_data(gid)
+        return self.parse_tab(self.fetch_csv_data(gid), gender, base_age_category)
+
+    def parse_tab(self, csv_text: str, gender: str, base_age_category: str) -> List[Dict[str, Any]]:
+        """Records of one tab's CSV export."""
         lines = csv_text.strip().split('\n')
         reader = csv.reader(lines)
         rows = list(reader)
@@ -208,6 +203,18 @@ class WSORecordsPAWVScraper:
                 # This is a section header
                 age_cat = self._normalize_age_category(first_col, base_age_category)
                 if age_cat:
+                    # The class before a header is its section's heaviest
+                    # ("110+kg"): no class row follows it to save it.
+                    if current_weight_class and current_age_category:
+                        records.append({
+                            'wso': self.wso_name,
+                            'age_category': current_age_category,
+                            'gender': gender,
+                            'weight_class': current_weight_class,
+                            'snatch_record': current_snatch,
+                            'cj_record': current_cj,
+                            'total_record': current_total
+                        })
                     current_age_category = age_cat
                     # Reset weight class tracking
                     current_weight_class = None
@@ -278,106 +285,49 @@ class WSORecordsPAWVScraper:
         return records
     
     def scrape_all_tabs(self) -> List[Dict[str, Any]]:
-        """Scrape all tabs and return combined records."""
-        all_records = []
+        """Scrape all tabs and return combined records, refusing a tab that
+        parsed to nothing (the sync would delete its classes)."""
+        parts = []
         
         for gender, base_age, gid in self.tabs:
             print(f"  Scraping {gender} {base_age} (gid={gid})...")
             tab_records = self.scrape_tab(gender, base_age, gid)
-            all_records.extend(tab_records)
+            parts.append((f"tab {gender} {base_age} (gid={gid})", tab_records))
             print(f"    Found {len(tab_records)} records")
         
-        return all_records
+        return every_part(self.wso_name, parts)
     
-    def upsert_to_postgres(self, records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        Upsert records to Postgres.
-        
-        Returns:
-            Dictionary with 'inserted' and 'updated' lists (for notification tracking)
-        """
-        if not self.ingest_client:
-            raise ValueError("Ingest client not initialized")
-        
-        inserted = []
-        updated = []
+    def send_slack_notification(self, result: Dict[str, int], record_count: int):
+        """Send Slack notification with the sync summary."""
+        if result["inserted"] + result["updated"] + result["deleted"] == 0:
+            return
 
-        # One connection, one transaction: a failing row rolls back the batch.
-        results = self.ingest_client.actions(
-            "scraperIngestion:ingestWSORecord",
-            [wso_record_ingest_args(record, self.scraper_secret) for record in records],
-        )
-        for record, result in zip(records, results):
-            if result.get('wasInsert'):
-                inserted.append(record)
-                print(f"  ✓ Inserted: {record['age_category']} {record['gender']} {record['weight_class']}")
-            elif result.get('wasChanged'):
-                updated.append(record)
-                print(f"  ✓ Updated: {record['age_category']} {record['gender']} {record['weight_class']}")
-            else:
-                print(f"  - Unchanged: {record['age_category']} {record['gender']} {record['weight_class']}")
-
-        return {'inserted': inserted, 'updated': updated}
-    
-    def send_slack_notification(self, inserted: List[Dict[str, Any]], updated: List[Dict[str, Any]]):
-        """Send Slack notification with upsert summary."""
         if not self.slack_webhook_url:
             print("⚠ Slack webhook not configured, skipping notification")
             return
-        
-        # Build message for Slack (not Discord embeds)
-        total_changes = len(inserted) + len(updated)
-        
-        if total_changes == 0:
-            return
-        else:
-            message = f"*{self.wso_name} WSO Records Postgres Update*\n\n*Summary:*\n• {len(inserted)} new record(s) inserted\n• {len(updated)} record(s) updated"
-            
-            # Inserted records
-            if inserted:
-                message += "\n\n🆕 *New Records*\n"
-                for record in inserted[:10]:
-                    lifts = []
-                    if record.get("snatch_record"):
-                        lifts.append(f"Snatch: {record['snatch_record']}kg")
-                    if record.get("cj_record"):
-                        lifts.append(f"C&J: {record['cj_record']}kg")
-                    if record.get("total_record"):
-                        lifts.append(f"Total: {record['total_record']}kg")
-                    
-                    lifts_str = ", ".join(lifts) if lifts else "No records"
-                    message += f"• *{record['age_category']}* | {record['gender']} | {record['weight_class']}\n  {lifts_str}\n"
-                
-                if len(inserted) > 10:
-                    message += f"_...and {len(inserted) - 10} more_\n"
-            
-            # Updated records
-            if updated:
-                message += "\n📝 *Updated Records*\n"
-                for record in updated[:10]:
-                    message += f"• *{record['age_category']}* | {record['gender']} | {record['weight_class']}\n"
-                
-                if len(updated) > 10:
-                    message += f"_...and {len(updated) - 10} more_\n"
-            
-            payload = {"text": message}
-        
-        response = requests.post(self.slack_webhook_url, json=payload, timeout=10)
+
+        message = (
+            f"*{self.wso_name} WSO Records Postgres Update*\n\n"
+            f"Processed *{record_count}* record rows\n"
+            f"*{result['inserted']}* inserted, *{result['updated']}* updated, "
+            f"*{result['deleted']}* deleted, *{result['unchanged']}* unchanged"
+        )
+
+        response = requests.post(self.slack_webhook_url, json={"text": message}, timeout=10)
         response.raise_for_status()
         print("✓ Slack notification sent")
     
-    def run(self, dry_run: bool = False):
+    def run(self, dry_run: bool = False, allow_shrink: bool = False):
         """
         Main execution method.
         
         Args:
-            dry_run: If True, scrape but don't upsert
+            dry_run: If True, scrape but don't touch Postgres
+            allow_shrink: Let the sync delete more than a quarter of the stored classes
         """
         print(f"Starting scraper for {self.wso_name}")
         print(f"Base sheet ID: {self.base_sheet_id}")
         
-        # Setup
-        self.setup_ingest_client()
         if not dry_run:
             self.setup_slack()
         
@@ -388,9 +338,8 @@ class WSORecordsPAWVScraper:
         
         if dry_run:
             print("\n" + "="*80)
-            print("DRY RUN MODE - Skipping upsert")
+            print("DRY RUN MODE - Skipping sync")
             print("="*80)
-            print(f"\nWould upsert: {len(records)} records")
             for rec in records[:20]:
                 print(f"  {rec['age_category']:15} | {rec['gender']:6} | {rec['weight_class']:5} | "
                       f"Snatch: {str(rec.get('snatch_record') or '-'):4} | "
@@ -399,13 +348,14 @@ class WSORecordsPAWVScraper:
             if len(records) > 20:
                 print(f"  ... and {len(records) - 20} more")
         else:
-            # Real upsert
-            print("Upserting records to Postgres...")
-            result = self.upsert_to_postgres(records)
-            
+            print("Syncing records to Postgres...")
+
+        result = sync_wso_records(
+            self.wso_name, records, dry_run=dry_run, allow_shrink=allow_shrink
+        )
+        if result is not None:
             print("Sending Slack notification...")
-            self.send_slack_notification(result['inserted'], result['updated'])
-            
+            self.send_slack_notification(result, len(records))
             print("Done!")
 
 
@@ -414,7 +364,12 @@ def main():
     parser = argparse.ArgumentParser(description="WSO Records Scraper (PA/WV Format)")
     parser.add_argument("--wso", required=True, help="WSO name (should be 'Pennsylvania-West Virginia')")
     parser.add_argument("--sheet-id", required=True, help="Published sheet ID (from pubhtml URL)")
-    parser.add_argument("--dry-run", action="store_true", help="Compare with database without making changes")
+    parser.add_argument("--dry-run", action="store_true", help="Parse and print without touching Postgres")
+    parser.add_argument(
+        "--allow-shrink",
+        action="store_true",
+        help="Let the sync delete more than a quarter of the stored classes",
+    )
     
     args = parser.parse_args()
     
@@ -422,7 +377,7 @@ def main():
     load_dotenv()
     
     scraper = WSORecordsPAWVScraper(args.wso, args.sheet_id)
-    scraper.run(dry_run=args.dry_run)
+    scraper.run(dry_run=args.dry_run, allow_shrink=args.allow_shrink)
 
 
 if __name__ == "__main__":
