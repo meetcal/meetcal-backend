@@ -11,7 +11,13 @@ from unittest import mock
 SCRAPER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(SCRAPER_DIR, "auto_scrapers"))
 
+import requests  # noqa: E402
+
 import scraper_carolinas  # noqa: E402
+from utils import UNKNOWN_GID  # noqa: E402
+
+# What gviz answers an unknown gid with: the sheet's first tab.
+FIRST_TAB_CSV = '"The sheet\'s first tab"\n'
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1rKFzpkLCT-FE2SzM0qpUOoZ788YHl7dg/view?gid=1785893123#gid=1785893123"
 
@@ -32,6 +38,10 @@ class FakeResponse:
         self.text = text
         self.status_code = status_code
 
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code} Server Error")
+
 
 def serve(overrides=None):
     """A requests.get stand-in: every tab serves SENIOR_CSV unless its gid is overridden."""
@@ -40,6 +50,8 @@ def serve(overrides=None):
 
     def get(url, timeout=None):
         gid = url.rsplit("gid=", 1)[1]
+        if gid == UNKNOWN_GID:
+            return overrides.get(gid, FakeResponse(FIRST_TAB_CSV))
         requested.append(gid)
         return overrides.get(gid, FakeResponse(SENIOR_CSV))
 
@@ -84,6 +96,19 @@ class CarolinasScraperTests(unittest.TestCase):
     def test_empty_tab_raises(self):
         with self.assertRaisesRegex(ValueError, "MASTER"):
             self.scrape(serve({"448005775": FakeResponse('"Masters WSO Records"\n')}))
+
+    def test_deleted_tab_served_as_the_first_tab_raises(self):
+        # Google answers a deleted tab's gid with the sheet's first tab, HTTP 200.
+        with self.assertRaisesRegex(ValueError, "tab gid 1157313505 returned the sheet's first tab"):
+            self.scrape(serve({"1157313505": FakeResponse(FIRST_TAB_CSV)}))
+
+    def test_youth_tab_may_be_the_first_tab(self):
+        # The Youth tab is the sheet's first, so it matches the unknown-gid answer.
+        get = serve({UNKNOWN_GID: FakeResponse(SENIOR_CSV)})
+        with self.assertRaisesRegex(ValueError, "tab gid 1157313505 returned the sheet's first tab"):
+            self.scrape(get)
+        youth_only = serve({UNKNOWN_GID: FakeResponse(SENIOR_CSV.replace("Senior", "Youth")), "1785893123": FakeResponse(SENIOR_CSV.replace("Senior", "Youth"))})
+        self.assertEqual(len(self.scrape(youth_only)), 4 * len(self.scraper.tabs))
 
     def test_run_syncs_once_with_every_record(self):
         argv = ["scraper_carolinas.py", "--wso", "Carolina", "--sheet-url", SHEET_URL, "--allow-shrink"]

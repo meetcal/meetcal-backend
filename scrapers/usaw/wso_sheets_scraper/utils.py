@@ -11,6 +11,8 @@ instead of writing. Same policy as meetcal-app's convex/scrapers/wsoRecords.ts.
 
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import requests
+
 from common.postgres_writer import normalize_age_category, normalize_gender
 
 LIFT_FIELDS = (
@@ -18,6 +20,40 @@ LIFT_FIELDS = (
     ("cj_record", "cjRecord"),
     ("total_record", "totalRecord"),
 )
+
+
+# Google's gviz CSV endpoint answers a gid the sheet no longer has with the
+# sheet's first tab (HTTP 200, not an error), so a deleted or moved tab reads
+# as a copy of that tab: youth rows stored under another age group. No sheet
+# has this gid, so its answer is the first tab to compare against.
+UNKNOWN_GID = "1999999999"
+SHEET_TIMEOUT_SECONDS = 60
+
+
+def fetch_gviz_tabs(
+    sheet_id: str, gids: Sequence[str], *, first_tab_gid: Optional[str] = None
+) -> Dict[str, str]:
+    """Each gid's CSV, refusing a gid answered with the sheet's first tab
+    unless it is that tab (``first_tab_gid``)."""
+
+    def fetch(gid: str) -> str:
+        response = requests.get(
+            f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid}",
+            timeout=SHEET_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return response.text
+
+    first_tab = fetch(UNKNOWN_GID)
+    texts: Dict[str, str] = {}
+    for gid in gids:
+        text = fetch(gid)
+        if text == first_tab and gid != first_tab_gid:
+            raise ValueError(
+                f"tab gid {gid} returned the sheet's first tab instead (tab deleted or moved?)"
+            )
+        texts[gid] = text
+    return texts
 
 
 def every_part(wso: str, parts: Sequence[Tuple[str, List[Dict[str, Any]]]]) -> List[Dict[str, Any]]:

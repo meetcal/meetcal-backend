@@ -87,6 +87,7 @@ class NewYorkAutoTests(unittest.TestCase):
         FakePdf.parsed = parsed
         FakePdf.cleaned = []
         scraper = NewYorkAutoScraper(dry_run=True)
+        scraper.EXPECTED_PDFS = len(PDFS)
         with patch.object(scraper_newyork_auto, "WSORecordsNewYorkScraper", FakePdf), \
                 patch.object(scraper, "fetch_pdf_urls", return_value=PDFS):
             return scraper.scrape_records()
@@ -108,8 +109,35 @@ class NewYorkAutoTests(unittest.TestCase):
     def test_no_pdfs_fails_the_run(self):
         scraper = NewYorkAutoScraper(dry_run=True)
         with patch.object(scraper, "fetch_pdf_urls", return_value=[]):
-            with self.assertRaisesRegex(ValueError, "no records PDFs"):
+            with self.assertRaisesRegex(ValueError, "found 0 distinct records PDFs"):
                 scraper.scrape_records()
+
+    def test_a_missing_or_repeated_pdf_fails_the_run(self):
+        scraper = NewYorkAutoScraper(dry_run=True)
+        scraper.EXPECTED_PDFS = len(PDFS)
+        for links in (PDFS[:1], [PDFS[0], PDFS[0]]):
+            with patch.object(scraper, "fetch_pdf_urls", return_value=links):
+                with self.assertRaisesRegex(ValueError, f"expected {len(PDFS)}"):
+                    scraper.scrape_records()
+
+    def test_reads_each_pdf_in_the_section_once(self):
+        # The second link has no heading nearby; the old picker skipped it
+        # and read the last PDF twice. Every PDF is read, once.
+        urls = [f"https://www.nywso.com/_files/ugd/aba8a0_{c * 32}.pdf" for c in "abcde"]
+        link = lambda url: f'<a href="{url}">Download</a>'
+        gap = "<p>" + "." * 1600 + "</p>"
+        page = (
+            '<h2 id="current-records">Current Records</h2><p>Youth</p>' + link(urls[0]) + gap
+            + link(urls[1]) + gap
+            + "<p>Senior</p>" + link(urls[2]) + "<p>Masters Men</p>" + link(urls[3])
+            + "<p>Masters Women</p>" + link(urls[4])
+            + "<h2>State Meet Records</h2>"
+            + '<a href="https://www.nywso.com/_files/ugd/aba8a0_ffffffffffffffffffffffffffffffff.pdf">old</a>'
+        )
+        response = MagicMock(text=page)
+        with patch.object(scraper_newyork_auto.requests, "get", return_value=response):
+            pdf_info = NewYorkAutoScraper(dry_run=True).fetch_pdf_urls()
+        self.assertEqual([info["url"] for info in pdf_info], urls)
 
     def test_run_syncs_the_whole_wso_once(self):
         records = [record("60"), record("65")]

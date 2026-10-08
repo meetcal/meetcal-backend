@@ -11,7 +11,13 @@ from unittest import mock
 SCRAPER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(SCRAPER_DIR, "auto_scrapers"))
 
+import requests  # noqa: E402
+
 import scraper_newjersey  # noqa: E402
+from utils import UNKNOWN_GID  # noqa: E402
+
+# What gviz answers an unknown gid with: the sheet's first tab.
+FIRST_TAB_CSV = '"The sheet\'s first tab"\n'
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1y8mXDBLfqmszlzWhv-4wkeWQZS5Kb9Aj4RnB39CBJmw/edit?gid=0#gid=0"
 
@@ -33,6 +39,10 @@ class FakeResponse:
         self.text = text
         self.status_code = status_code
 
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code} Server Error")
+
 
 def serve(overrides=None):
     """A requests.get stand-in: every tab serves SENIOR_CSV unless its gid is overridden."""
@@ -41,6 +51,8 @@ def serve(overrides=None):
 
     def get(url, timeout=None):
         gid = url.rsplit("gid=", 1)[1]
+        if gid == UNKNOWN_GID:
+            return overrides.get(gid, FakeResponse(FIRST_TAB_CSV))
         requested.append(gid)
         return overrides.get(gid, FakeResponse(SENIOR_CSV))
 
@@ -96,6 +108,11 @@ class NewJerseyScraperTests(unittest.TestCase):
         welcome = '"Senior Records (all ages)","","","The records begin on July 9, 2018.","","",""\n'
         with self.assertRaisesRegex(ValueError, "Masters 75"):
             self.scrape(serve({"2047529058": FakeResponse(welcome)}))
+
+    def test_deleted_tab_served_as_the_first_tab_raises(self):
+        # Google answers a deleted tab's gid with the sheet's first tab, HTTP 200.
+        with self.assertRaisesRegex(ValueError, "tab gid 2116279815 returned the sheet's first tab"):
+            self.scrape(serve({"2116279815": FakeResponse(FIRST_TAB_CSV)}))
 
     def test_run_syncs_once_with_every_record(self):
         argv = ["scraper_newjersey.py", "--wso", "New Jersey", "--sheet-url", SHEET_URL, "--allow-shrink"]

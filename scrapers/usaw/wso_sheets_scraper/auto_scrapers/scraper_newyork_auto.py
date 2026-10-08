@@ -39,6 +39,11 @@ from scraper_pdf_newyork import WSORecordsNewYorkScraper  # noqa: E402
 class NewYorkAutoScraper:
     """Automated scraper that fetches all PDF URLs and processes them."""
 
+    # The records PDFs the page links (Youth, Junior, Senior, Masters Men and Masters Women). The sync is an exact set, so
+    # a run that finds a different number fails rather than syncing a WSO
+    # with a PDF missing; after checking the page by hand, update this.
+    EXPECTED_PDFS = 5
+
     def __init__(self, dry_run: bool = False, allow_shrink: bool = False):
         """
         Initialize auto scraper.
@@ -113,35 +118,13 @@ class NewYorkAutoScraper:
                 seen_urls.add(url)
                 unique_urls.append(url)
 
-        # Map each URL to a category
+        # Every PDF in the section, labelled where its heading can be told
+        # apart (the label is only for the log; the parser reads each PDF's
+        # own age groups). scrape_records checks the count.
         pdf_info = []
-        target_categories = [
-            "Youth",
-            "Junior",
-            "Senior",
-            "Masters Men",
-            "Masters Women",
-        ]
-
-        for url in unique_urls:
+        for i, url in enumerate(unique_urls, 1):
             category = self._categorize_pdf_in_section(url, current_records_section)
-            if category:
-                pdf_info.append({"category": category, "url": url})
-
-            # Stop once we have all 5 categories
-            if len(pdf_info) >= 5:
-                break
-
-        # If we didn't get exactly 5, assign remaining PDFs to remaining categories
-        if len(pdf_info) < 5 and len(unique_urls) >= 5:
-            assigned_categories = [p["category"] for p in pdf_info]
-            remaining_categories = [
-                c for c in target_categories if c not in assigned_categories
-            ]
-
-            for i, url in enumerate(unique_urls[len(pdf_info) :]):
-                if i < len(remaining_categories):
-                    pdf_info.append({"category": remaining_categories[i], "url": url})
+            pdf_info.append({"category": category or f"PDF {i}", "url": url})
 
         print(f"✓ Found {len(pdf_info)} PDF URLs from Current Records section")
         return pdf_info
@@ -234,8 +217,12 @@ class NewYorkAutoScraper:
         its classes in the sync.
         """
         pdf_info = self.fetch_pdf_urls()
-        if not pdf_info:
-            raise ValueError(f"{self.wso_name}: no records PDFs found on {self.records_page_url}")
+        urls = {info["url"] for info in pdf_info}
+        if len(pdf_info) != self.EXPECTED_PDFS or len(urls) != len(pdf_info):
+            raise ValueError(
+                f"{self.wso_name}: found {len(urls)} distinct records PDFs ({len(pdf_info)} links) "
+                f"on {self.records_page_url}, expected {self.EXPECTED_PDFS} (page changed?)"
+            )
 
         print()
         print("PDFs to process:")

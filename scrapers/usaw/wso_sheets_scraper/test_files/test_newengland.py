@@ -107,6 +107,7 @@ class NewEnglandAutoTests(unittest.TestCase):
         FakePdf.parsed = parsed
         FakePdf.cleaned = []
         scraper = NewEnglandAutoScraper(dry_run=True)
+        scraper.EXPECTED_PDFS = len(PDFS)
         with patch.object(scraper_newengland_auto, "WSORecordsNewEnglandScraper", FakePdf), \
                 patch.object(scraper, "fetch_pdf_urls", return_value=PDFS):
             return scraper.scrape_records()
@@ -128,8 +129,16 @@ class NewEnglandAutoTests(unittest.TestCase):
     def test_no_pdfs_fails_the_run(self):
         scraper = NewEnglandAutoScraper(dry_run=True)
         with patch.object(scraper, "fetch_pdf_urls", return_value=[]):
-            with self.assertRaisesRegex(ValueError, "no records PDFs"):
+            with self.assertRaisesRegex(ValueError, "found 0 distinct records PDFs"):
                 scraper.scrape_records()
+
+    def test_a_missing_or_repeated_pdf_fails_the_run(self):
+        scraper = NewEnglandAutoScraper(dry_run=True)
+        scraper.EXPECTED_PDFS = len(PDFS)
+        for links in (PDFS[:1], [PDFS[0], PDFS[0]]):
+            with patch.object(scraper, "fetch_pdf_urls", return_value=links):
+                with self.assertRaisesRegex(ValueError, f"expected {len(PDFS)}"):
+                    scraper.scrape_records()
 
     def test_run_syncs_the_whole_wso_once(self):
         records = [record("60"), record("65")]

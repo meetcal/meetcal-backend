@@ -40,6 +40,11 @@ from scraper_pdf_mountainsouth import WSORecordsMountainSouthScraper  # noqa: E4
 class MountainSouthAutoScraper:
     """Automated scraper that fetches PDF URLs and processes them."""
 
+    # The records PDFs the page links (Men and Women). The sync is an exact set, so
+    # a run that finds a different number fails rather than syncing a WSO
+    # with a PDF missing; after checking the page by hand, update this.
+    EXPECTED_PDFS = 2
+
     def __init__(self, dry_run: bool = False, allow_shrink: bool = False):
         """
         Initialize auto scraper.
@@ -184,8 +189,12 @@ class MountainSouthAutoScraper:
         its classes in the sync.
         """
         pdf_info = self.fetch_pdf_urls()
-        if not pdf_info:
-            raise ValueError(f"{self.wso_name}: no records PDFs found on {self.records_page_url}")
+        urls = {info["url"] for info in pdf_info}
+        if len(pdf_info) != self.EXPECTED_PDFS or len(urls) != len(pdf_info):
+            raise ValueError(
+                f"{self.wso_name}: found {len(urls)} distinct records PDFs ({len(pdf_info)} links) "
+                f"on {self.records_page_url}, expected {self.EXPECTED_PDFS} (page changed?)"
+            )
 
         print()
         print("PDFs to process:")

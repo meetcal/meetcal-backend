@@ -13,6 +13,8 @@ For New Jersey WSO which uses a unique side-by-side layout with:
 import os
 import sys
 import argparse
+import csv
+import io
 import re
 from typing import List, Dict, Any, Optional
 
@@ -20,7 +22,7 @@ import requests
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils import every_part, sync_wso_records
+from utils import every_part, fetch_gviz_tabs, sync_wso_records
 
 # Load environment variables
 load_dotenv()
@@ -80,9 +82,12 @@ class WSORecordsNewJerseyScraper:
 
         # The sync is an exact set, so a tab that fails to fetch or parse
         # stops the run rather than deleting that tab's classes.
+        # No configured tab is the sheet's first, which is what Google answers
+        # a deleted tab's gid with; a tab matching it was deleted or moved.
+        texts = fetch_gviz_tabs(sheet_id, list(self.tabs.values()), first_tab_gid=None)
         for tab_name, gid in self.tabs.items():
             print(f"\nScraping {tab_name} tab...")
-            records = self._scrape_tab(sheet_id, gid, tab_name)
+            records = self._parse_side_by_side(list(csv.reader(io.StringIO(texts[gid]))), tab_name)
             print(f"✓ Found {len(records)} records in {tab_name}")
             parts.append((f"tab {tab_name} (gid {gid})", records))
         all_records = every_part(self.wso_name, parts)
@@ -100,25 +105,6 @@ class WSORecordsNewJerseyScraper:
         if not match:
             raise ValueError("Invalid Google Sheets URL")
         return match.group(1)
-    
-    def _scrape_tab(self, sheet_id: str, gid: str, tab_name: str) -> List[Dict[str, Any]]:
-        """Scrape a single tab."""
-        csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid}"
-        response = requests.get(csv_url, timeout=60)
-        
-        if response.status_code != 200:
-            raise Exception(f"Failed to fetch tab: {response.status_code}")
-        
-        # Parse CSV
-        import csv
-        import io
-        csv_reader = csv.reader(io.StringIO(response.text))
-        rows = list(csv_reader)
-        
-        # Parse the side-by-side layout
-        records = self._parse_side_by_side(rows, tab_name)
-        
-        return records
     
     def _parse_side_by_side(self, rows: List[List[str]], tab_name: str) -> List[Dict[str, Any]]:
         """
