@@ -179,6 +179,90 @@ class ReplaceWsoRecordsGuardTests(unittest.TestCase):
         self.assertEqual(connection.deleted_ids, [])
 
 
+def stored_class(convex_id, weight_class, snatch=50, wso="Pacific Northwest"):
+    return {
+        "convex_id": convex_id,
+        "wso": wso,
+        "age_category": "Senior",
+        "gender": "Women",
+        "weight_class": weight_class,
+        "snatch_record": snatch,
+        "cj_record": None,
+        "total_record": None,
+    }
+
+
+def incoming_class(weight_class, snatch=50):
+    return {
+        "ageCategory": "Senior",
+        "gender": "Women",
+        "weightClass": weight_class,
+        "snatchRecord": snatch,
+    }
+
+
+class ReplaceWsoRecordsCopiesAndShrinkTests(unittest.TestCase):
+    def test_deletes_copies_of_a_class_keeping_the_stable_id_row(self):
+        stable = postgres_writer.stable_id(
+            "wso_record", "Pacific Northwest", "Senior", "Women", "48"
+        )
+        connection = FakeConnection(
+            [
+                stored_class("old-import-copy", "48", snatch=60),
+                stored_class(stable, "48"),
+                stored_class("other-copy", "48", snatch=61),
+            ]
+        )
+
+        with patch.object(postgres_writer, "upsert_wso_record") as upsert:
+            result = postgres_writer.replace_wso_records(
+                connection, "Pacific Northwest", [incoming_class("48")]
+            )
+
+        self.assertEqual(sorted(connection.deleted_ids), ["old-import-copy", "other-copy"])
+        self.assertEqual(result, {"inserted": 0, "updated": 0, "unchanged": 1, "deleted": 2})
+        upsert.assert_not_called()
+
+    def test_refuses_to_delete_more_than_a_quarter_of_the_classes_unless_allowed(self):
+        stored = [stored_class(f"id-{n}", str(n)) for n in range(100)]
+        # 26 of 100 classes gone: over the 25% (and 20-class) limit.
+        incoming = [incoming_class(str(n)) for n in range(74)]
+
+        with patch.object(postgres_writer, "upsert_wso_record"):
+            with self.assertRaisesRegex(ValueError, "refusing to delete 26 of Pacific Northwest's 100"):
+                postgres_writer.replace_wso_records(FakeConnection(stored), "Pacific Northwest", incoming)
+            connection = FakeConnection(stored)
+            result = postgres_writer.replace_wso_records(
+                connection, "Pacific Northwest", incoming, allow_shrink=True
+            )
+
+        self.assertEqual(result["deleted"], 26)
+        self.assertEqual(len(connection.deleted_ids), 26)
+
+    def test_allows_small_drops_and_copies_without_the_flag(self):
+        # 20 classes gone is within the minimum allowance; copies don't count.
+        stored = [stored_class(f"id-{n}", str(n)) for n in range(30)]
+        stored.append(stored_class("copy-of-0", "0"))
+        incoming = [incoming_class(str(n)) for n in range(10)]
+        connection = FakeConnection(stored)
+
+        with patch.object(postgres_writer, "upsert_wso_record"):
+            result = postgres_writer.replace_wso_records(connection, "Pacific Northwest", incoming)
+
+        self.assertEqual(result["deleted"], 21)
+
+    def test_ingest_dispatch_passes_allow_shrink(self):
+        from common import postgres_ingest
+
+        with patch.object(postgres_ingest.pg, "replace_wso_records", return_value={}) as replace:
+            postgres_ingest.dispatch(
+                None,
+                "scraperIngestion:replaceWSORecordSet",
+                {"wso": "Ohio", "records": [{"x": 1}], "allowShrink": True},
+            )
+        replace.assert_called_once_with(None, "Ohio", [{"x": 1}], allow_shrink=True)
+
+
 class ReplaceIntlRankingsTests(unittest.TestCase):
     def test_exact_set_sync_counts_and_writes_only_changes(self):
         existing_rows = [

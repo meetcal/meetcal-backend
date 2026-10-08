@@ -67,10 +67,11 @@ def find_pdf_href(page_html: str) -> str:
 
 
 class IllinoisAutoScraper:
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, allow_shrink: bool = False):
         self.records_page_url = "https://www.illinoisweightlifting.com/"
         self.wso_name = "Illinois"
         self.dry_run = dry_run
+        self.allow_shrink = allow_shrink
 
     def fetch_pdf_url(self) -> str:
         print(f"Fetching records page: {self.records_page_url}")
@@ -95,7 +96,7 @@ class IllinoisAutoScraper:
 
         pdf_url = self.fetch_pdf_url()
         scraper = WSORecordsIllinoisScraper(self.wso_name, pdf_url)
-        scraper.run(dry_run=self.dry_run)
+        scraper.run(dry_run=self.dry_run, allow_shrink=self.allow_shrink)
 
 
 def main():
@@ -111,13 +112,18 @@ def main():
         action="store_true",
         help="Replace the Illinois Postgres records with the parsed PDF records",
     )
+    parser.add_argument(
+        "--allow-shrink",
+        action="store_true",
+        help="Let the sync delete more than a quarter of the stored classes",
+    )
     args = parser.parse_args()
 
     load_dotenv()
 
     if not args.apply:
         print("Illinois database write approval gate is active; running dry-run only")
-    scraper = IllinoisAutoScraper(dry_run=not args.apply)
+    scraper = IllinoisAutoScraper(dry_run=not args.apply, allow_shrink=args.allow_shrink)
     scraper.run()
 
 

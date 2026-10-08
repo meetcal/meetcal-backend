@@ -30,6 +30,8 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from utils import sync_wso_records  # noqa: E402
+
 
 # Totals the PDF has wrong, each checked against the athlete's meet results:
 # (age category, gender, weight class, total as written, total). One applies
@@ -78,18 +80,11 @@ class WSORecordsIllinoisScraper:
     def __init__(self, wso_name: str, pdf_url: str):
         self.wso_name = wso_name
         self.pdf_url = pdf_url
-        self.ingest_client: Optional[Any] = None
         self.slack_webhook_url: Optional[str] = None
         self.pdf_path = "temp_illinois_wso_records.pdf"
         self.parse_warnings: List[str] = []
         # Who holds each kept lift value, by (class key, field), for the total check.
         self._holders: Dict[Tuple[Tuple[str, str, str], str], str] = {}
-
-    def setup_ingest_client(self):
-        from common.postgres_ingest import IngestClient
-
-        self.ingest_client = IngestClient()
-        print("Postgres ingest client initialized")
 
     def setup_slack(self):
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
@@ -364,30 +359,10 @@ class WSORecordsIllinoisScraper:
             print(f"Parser warning: {warning}")
         return records
 
-    def replace_in_postgres(self, records: List[Dict[str, Any]]) -> Dict[str, int]:
-        if not self.ingest_client:
-            raise ValueError("Ingest client not initialized")
-
-        payload_records = []
-        for record in records:
-            payload_record = {
-                "ageCategory": record["age_category"],
-                "gender": record["gender"],
-                "weightClass": record["weight_class"],
-            }
-            if record.get("snatch_record") is not None:
-                payload_record["snatchRecord"] = record["snatch_record"]
-            if record.get("cj_record") is not None:
-                payload_record["cjRecord"] = record["cj_record"]
-            if record.get("total_record") is not None:
-                payload_record["totalRecord"] = record["total_record"]
-            payload_records.append(payload_record)
-
-        payload = {
-            "wso": self.wso_name,
-            "records": payload_records,
-        }
-        return self.ingest_client.action("scraperIngestion:replaceWSORecordSet", payload)
+    def replace_in_postgres(
+        self, records: List[Dict[str, Any]], allow_shrink: bool = False
+    ) -> Dict[str, int]:
+        return sync_wso_records(self.wso_name, records, allow_shrink=allow_shrink)
 
     def send_slack_notification(self, result: Dict[str, int], record_count: int):
         if result["inserted"] + result["updated"] + result["deleted"] == 0:
@@ -418,7 +393,7 @@ class WSORecordsIllinoisScraper:
             os.remove(self.pdf_path)
             print(f"Cleaned up {self.pdf_path}")
 
-    def run(self, dry_run: bool = False):
+    def run(self, dry_run: bool = False, allow_shrink: bool = False):
         try:
             print("=" * 80)
             print(f"ILLINOIS WSO PDF SCRAPER{' (DRY RUN)' if dry_run else ''}")
@@ -427,7 +402,6 @@ class WSORecordsIllinoisScraper:
             print()
 
             if not dry_run:
-                self.setup_ingest_client()
                 self.setup_slack()
 
             self.download_pdf()
@@ -454,11 +428,7 @@ class WSORecordsIllinoisScraper:
                     print(f"  ... and {len(records) - 10} more")
                 return
 
-            result = self.replace_in_postgres(records)
-            print(
-                f"Sync result: inserted={result['inserted']}, updated={result['updated']}, "
-                f"deleted={result['deleted']}, unchanged={result['unchanged']}"
-            )
+            result = self.replace_in_postgres(records, allow_shrink=allow_shrink)
             self.send_slack_notification(result, len(records))
         finally:
             self.cleanup()
@@ -469,12 +439,17 @@ def main():
     parser.add_argument("--wso", required=True, help="WSO name")
     parser.add_argument("--pdf-url", required=True, help="PDF URL")
     parser.add_argument("--dry-run", action="store_true", help="Parse without updating Postgres")
+    parser.add_argument(
+        "--allow-shrink",
+        action="store_true",
+        help="Let the sync delete more than a quarter of the stored classes",
+    )
     args = parser.parse_args()
 
     load_dotenv()
 
     scraper = WSORecordsIllinoisScraper(args.wso, args.pdf_url)
-    scraper.run(dry_run=args.dry_run)
+    scraper.run(dry_run=args.dry_run, allow_shrink=args.allow_shrink)
 
 
 if __name__ == "__main__":
