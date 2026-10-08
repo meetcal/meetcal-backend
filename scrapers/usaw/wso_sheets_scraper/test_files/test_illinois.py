@@ -3,17 +3,20 @@
 import os
 import sys
 import unittest
+from collections import Counter
 
 
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "manual_scrapers",
-    ),
-)
+SCRAPER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(SCRAPER_DIR, "manual_scrapers"))
+sys.path.insert(0, os.path.join(SCRAPER_DIR, "auto_scrapers"))
 
 from scraper_pdf_illinois import WSORecordsIllinoisScraper
+from scraper_illinois_auto import find_pdf_href
+
+# IL-WSO-Records-20261004.pdf (revised October 4, 2026) as PyPDF2 extracts it.
+OCTOBER_2026 = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "fixtures", "illinois_records_20261004.txt"
+)
 
 
 class IllinoisParserTests(unittest.TestCase):
@@ -97,6 +100,140 @@ class IllinoisParserTests(unittest.TestCase):
             self.scraper.parse_pdf_text(
                 "U13 F 30 Snatch 0 STANDARD 2026-08-01"
             )
+
+
+class IllinoisOctober2026Tests(unittest.TestCase):
+    def setUp(self):
+        self.scraper = WSORecordsIllinoisScraper(
+            "Illinois", "https://example.com/illinois.pdf"
+        )
+        with open(OCTOBER_2026, encoding="utf-8") as file:
+            self.records = self.scraper.parse_pdf_text(file.read())
+        self.by_class = {
+            (r["age_category"], r["gender"], r["weight_class"]): r for r in self.records
+        }
+
+    def test_reads_exactly_the_256_classes_u11_added_u13_u15_gone(self):
+        self.assertEqual(len(self.records), 256)
+        groups = Counter((r["gender"], r["age_category"]) for r in self.records)
+        self.assertEqual(len(groups), 32)
+        self.assertEqual(set(groups.values()), {8})
+        self.assertEqual(groups[("Women", "U11")], 8)
+        self.assertEqual(groups[("Men", "U11")], 8)
+        for age in ("U13", "U15"):
+            self.assertNotIn(("Women", age), groups)
+            self.assertNotIn(("Men", age), groups)
+        self.assertNotIn(("U17", "Women", "37"), self.by_class)
+        self.assertNotIn(("U17", "Men", "32"), self.by_class)
+        for record in self.records:
+            for field in ("snatch_record", "cj_record", "total_record"):
+                self.assertIn(field, record)
+
+    def test_reads_kg_values_month_dates_places_and_a_name_run_into_its_date(self):
+        self.assertEqual(
+            self.by_class[("Junior", "Women", "61")],
+            {
+                "wso": "Illinois",
+                "age_category": "Junior",
+                "gender": "Women",
+                "weight_class": "61",
+                "snatch_record": 42,
+                "cj_record": 54,
+                "total_record": 96,
+            },
+        )
+        # "LLOP KASSINGER, Carmen Oct 3, 2026 ..." (no space in the other extraction)
+        self.assertEqual(self.by_class[("Masters 55", "Women", "61")]["total_record"], 94)
+        self.assertEqual(self.by_class[("Junior", "Women", "86+")]["total_record"], 189)
+        self.assertEqual(self.by_class[("U11", "Men", "65+")]["snatch_record"], 0)
+        records = self.scraper.parse_pdf_text(
+            "W55 F 61 Snatch 42 kg LLOP KASSINGER, CarmenOct 3, 2026 2026 Mid American CHampionships\n"
+            "U11 F 41 Total 0 kg STANDARD Aug 1, 2026ILLINOIS UASW RECORDS",
+            validate=False,
+        )
+        self.assertEqual(records[0]["snatch_record"], 42)
+        self.assertEqual(records[1]["total_record"], 0)
+
+    def test_stores_a_stray_digit_total_as_the_lift_sum_and_logs_any_other_excess(self):
+        # Written 1580; she made 66 + 84 = 150 at the 2026 Mid American Championships.
+        rosario = self.by_class[("Masters 40", "Women", "69")]
+        self.assertEqual((rosario["snatch_record"], rosario["cj_record"], rosario["total_record"]), (66, 84, 150))
+        # Kept: the PDF doesn't say whether the total or a lift is the slip.
+        self.assertEqual(self.by_class[("Masters 50", "Men", "110+")]["total_record"], 147)
+        self.assertEqual(self.by_class[("U17", "Women", "61")]["total_record"], 104)
+        self.assertEqual(
+            self.scraper.parse_warnings,
+            [
+                "Source total (104) is above snatch + clean & jerk (86); kept as written: U17 Women 61",
+                "Source total (1580) is snatch + clean & jerk with a stray digit; stored 150: Masters 40 Women 69",
+                "Source total (147) is above snatch + clean & jerk (146); kept as written: Masters 50 Men 110+",
+            ],
+        )
+
+    def lines_with(self, old: str, new: str) -> str:
+        with open(OCTOBER_2026, encoding="utf-8") as file:
+            text = file.read()
+        self.assertIn(old, text)
+        return text.replace(old, new)
+
+    def test_keeps_a_right_total_when_a_lift_lost_a_digit(self):
+        records = self.scraper.parse_pdf_text(
+            self.lines_with("M50 M >110 Clean & Jerk 84 kg", "M50 M >110 Clean & Jerk 8 kg")
+        )
+        lund = next(
+            r for r in records
+            if (r["age_category"], r["gender"], r["weight_class"]) == ("Masters 50", "Men", "110+")
+        )
+        self.assertEqual((lund["cj_record"], lund["total_record"]), (8, 147))
+
+    def test_month_like_first_name_run_into_the_date(self):
+        records = self.scraper.parse_pdf_text(
+            self.lines_with("BINDER, Mark Oct 4, 2026", "BINDER, MarkOct 4, 2026")
+        )
+        self.assertEqual(len(records), 256)
+        match = self.scraper.ROW_PATTERN.match(
+            "M50 M 85 Snatch 79 kg BINDER, MarkOct 4, 2026 2026 Mid American Championships"
+        )
+        self.assertEqual((match.group("holder"), match.group("date")), ("BINDER, Mark", "Oct 4, 2026"))
+
+    def test_rejects_a_missing_adult_age_group_as_a_lost_page_reads(self):
+        with open(OCTOBER_2026, encoding="utf-8") as file:
+            text = "\n".join(line for line in file if not line.startswith("W55 F "))
+        with self.assertRaisesRegex(ValueError, "missing Women age groups: Masters 55"):
+            self.scraper.parse_pdf_text(text)
+
+    def test_rejects_one_genders_worth_of_classes(self):
+        with open(OCTOBER_2026, encoding="utf-8") as file:
+            women = "\n".join(line for line in file if " M " not in line[:8])
+        with self.assertRaisesRegex(ValueError, "yielded only 128 record rows"):
+            self.scraper.parse_pdf_text(women)
+
+
+class IllinoisPdfLinkTests(unittest.TestCase):
+    def page(self, href: str) -> str:
+        # The page since October 2026: a banner at the top, the section ~60 KB further down.
+        return (
+            "<p>Illinois State Records are updated! Scroll down to see where you stand!</p>"
+            + "<div>".ljust(60_000, ".")
+            + '<h2>Illinois State Records</h2><a href="/s/guide.pdf">USAW Guide</a>'
+            + f'<a href="{href}" class="sqs-block-button-element" target="_blank" > View the Records </a>'
+        )
+
+    def test_finds_the_link_past_the_banner(self):
+        self.assertEqual(
+            find_pdf_href(self.page("/s/IL-WSO-Records-20261004.pdf")),
+            "/s/IL-WSO-Records-20261004.pdf",
+        )
+        self.assertEqual(find_pdf_href(self.page("/s/records-oct.pdf")), "/s/records-oct.pdf")
+
+    def test_prefers_the_records_file_and_fails_without_one(self):
+        html = (
+            '<a href="/other.pdf">View Records</a> Illinois State Records <p>..</p>'
+            '<a class="b" href="/s/IL-WSO-Records-20260913.pdf">View the Records</a>'
+        )
+        self.assertEqual(find_pdf_href(html), "/s/IL-WSO-Records-20260913.pdf")
+        with self.assertRaisesRegex(ValueError, "Could not find"):
+            find_pdf_href("<p>nothing</p>")
 
 
 if __name__ == "__main__":

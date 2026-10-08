@@ -116,6 +116,11 @@ jobs:
       - name: WSO records writer unit tests
         run: PYTHONPATH=. python -m unittest common.test_postgres_writer
 
+      - name: Illinois WSO records parser tests
+        run: |
+          pip install -r usaw/wso_sheets_scraper/requirements.txt
+          PYTHONPATH=. python -m unittest usaw/wso_sheets_scraper/test_files/test_illinois.py
+
   dependency-audit:
     name: Rust dependency audit
     runs-on: ubuntu-latest
