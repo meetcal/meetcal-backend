@@ -38,6 +38,7 @@ Package manager for JS helpers is **bun**. Do not use npm. Rust uses cargo. Pyth
 | Meet automation tests | `cd scrapers && PYTHONPATH=. python -m unittest discover -s usaw/meet_automation/tests -p 'test_*.py'` |
 | Postgres ingest tests | `cd scrapers && PYTHONPATH=. python -m unittest discover -s common/tests -p 'test_*.py'` (includes `test_normalize`, `test_dedupe_idless_athletes`, `test_complete_ended_meets`) |
 | WSO writer tests | `cd scrapers && PYTHONPATH=. python -m unittest common.test_postgres_writer` |
+| Illinois WSO parser tests | `cd scrapers && PYTHONPATH=. python -m unittest usaw/wso_sheets_scraper/test_files/test_illinois.py` (needs `usaw/wso_sheets_scraper/requirements.txt`) |
 | Coverage gaps | `bun .codex/skills/review-code-performance-tests/scripts/report-coverage-gaps.ts` |
 | Shellcheck | `shellcheck -x -P app/scripts app/deploy/*.sh app/scripts/*.sh` |
 
@@ -56,7 +57,7 @@ Run this table before opening or updating a PR. Do not push to `master`. Merge o
 | Ingest / writer | `cd scrapers && PYTHONPATH=. python -m unittest discover -s common/tests -p 'test_*.py' && PYTHONPATH=. python -m unittest common.test_postgres_writer` | Exit 0 |
 | Coverage inventory | `bun .codex/skills/review-code-performance-tests/scripts/report-coverage-gaps.ts` | Report written; no new untested auth, Slack, dispatch, writer, or prune holes in files you touched |
 
-CI (`.github/workflows/ci.yml`) runs the Rust job (fmt, clippy, `cargo test --locked`, shellcheck, docker build), the Python job (compileall + the three unittest invocations), and `cargo audit`.
+CI (`.github/workflows/ci.yml`) runs the Rust job (fmt, clippy, `cargo test --locked`, shellcheck, docker build), the Python job (compileall, the three unittest invocations, and the Illinois WSO parser tests), and `cargo audit`.
 
 ## Code Quality
 

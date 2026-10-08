@@ -23,6 +23,49 @@ sys.path.insert(
 from scraper_pdf_illinois import WSORecordsIllinoisScraper
 
 
+VIEW_RECORDS_LINK = re.compile(
+    r'<a[^>]+href="([^"]+\.pdf)"[^>]*>\s*View(?:\s+the)?\s+Records\s*</a>', re.IGNORECASE
+)
+RECORDS_HEADING = re.compile(
+    r"<h[1-6][^>]*>\s*Illinois State Records\s*</h[1-6]>", re.IGNORECASE
+)
+FILE_DATE = re.compile(r"(20\d{6})[^/]*\.pdf$", re.IGNORECASE)
+
+
+def find_pdf_href(page_html: str) -> str:
+    """The records PDF: the "View (the) Records" button in the page section
+    (the <section>, or the rest of the page after the heading if there is
+    none) that holds the "Illinois State Records" heading; the newest by the
+    date in its file name if there are several. The same words open a banner
+    in another section ("Illinois State Records are updated!"), so the heading
+    is the heading element, or else the words' last mention. No button there
+    fails rather than guessing at the page's other PDFs. Same rule as
+    meetcal-app's convex/scrapers/parse/wso/illinois.ts.
+    """
+    heading_match = RECORDS_HEADING.search(page_html)
+    heading = heading_match.start() if heading_match else page_html.rfind("Illinois State Records")
+    if heading == -1:
+        raise ValueError("Could not find the Illinois State Records section on the page")
+    opening = page_html.rfind("<section", 0, heading)
+    closing = page_html.find("</section>", heading)
+    section = page_html[
+        heading if opening == -1 else opening : None if closing == -1 else closing
+    ]
+    hrefs = [match.group(1) for match in VIEW_RECORDS_LINK.finditer(section)]
+    if not hrefs:
+        raise ValueError("Could not find the Illinois records PDF URL on the page")
+
+    def date_of(href: str) -> str:
+        match = FILE_DATE.search(href)
+        return match.group(1) if match else ""
+
+    newest = hrefs[0]
+    for href in hrefs[1:]:
+        if date_of(href) > date_of(newest):
+            newest = href
+    return newest
+
+
 class IllinoisAutoScraper:
     def __init__(self, dry_run: bool = False):
         self.records_page_url = "https://www.illinoisweightlifting.com/"
@@ -40,23 +83,9 @@ class IllinoisAutoScraper:
         )
         response.raise_for_status()
 
-        page_html = html.unescape(response.text)
-        section_start = page_html.find("Illinois State Records")
-        section = page_html[section_start : section_start + 25000] if section_start != -1 else page_html
-
-        patterns = [
-            r'<a[^>]+href="([^"]+\.pdf)"[^>]*>\s*View(?:\s+the)?\s+Records\s*</a>',
-            r'href="([^"]*Illinois_State_Records[^"]+\.pdf)"',
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, section, re.IGNORECASE)
-            if match:
-                pdf_url = urljoin(self.records_page_url, match.group(1))
-                print(f"Found Illinois records PDF: {pdf_url}")
-                return pdf_url
-
-        raise ValueError("Could not find the Illinois records PDF URL on the page")
+        pdf_url = urljoin(self.records_page_url, find_pdf_href(html.unescape(response.text)))
+        print(f"Found Illinois records PDF: {pdf_url}")
+        return pdf_url
 
     def run(self):
         print("=" * 80)

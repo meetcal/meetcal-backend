@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 """
 PDF scraper for Illinois WSO records.
+
+One line per lift. Since October 2026 a line reads "JR F 61 Snatch 42 kg
+BAKER, Sophie Oct 3, 2026 2026 Mid American Championships" (record in kg,
+holder or STANDARD, date, and the meet as the place, blank for older
+records); the earlier PDFs read "U13 F 37 Snatch 10 STANDARD 2026-08-01".
+Both are read.
+
+The Postgres set is synced exactly, and the PDF decides which youth groups
+exist (the October 2026 one added U11 and dropped U13 and U15), so an age
+group gone from both genders is taken as the source's choice. What fails
+instead, as a parse that lost part of the PDF: too few classes or lifts, an
+adult group missing (Junior, Senior, Masters 35-90), a gap in the pages'
+footers ("4 of 15"), or an age group with a different number of classes for
+women than for men. Same checks as meetcal-app's
+convex/scrapers/parse/wso/illinois.ts.
 """
 
 import argparse
@@ -16,21 +31,49 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+# Totals the PDF has wrong, each checked against the athlete's meet results:
+# (age category, gender, weight class, total as written, total). One applies
+# only while the PDF still says what it was checked against, so a corrected
+# (or changed) PDF wins.
+TOTAL_CORRECTIONS = (
+    # Stephanie Rosario, 2026 Mid American Championships: 66 + 84 = 150.
+    ("Masters 40", "Women", "69", 1580, 150),
+)
+
+
 class WSORecordsIllinoisScraper:
+    # A holder's name can run into the date ("LLOP KASSINGER, CarmenOct 3,
+    # 2026"), so months are whole words only ("MarkOct 4" isn't March), and
+    # PyPDF2 runs a page's last line into the next page's title.
     ROW_PATTERN = re.compile(
         r"^(?P<age>U\d+|JR|Open|[WM]\d{2})\s+"
         r"(?P<gender>[FM])\s+"
         r"(?P<weight>(?:>\s*)?\d+\+?)\s+"
         r"(?P<lift>Snatch|Clean\s*&\s*Jerk|Total)\s+"
-        r"(?P<record>\d+(?:\.\d+)?)\s+"
-        r".+?\b\d{4}-\d{2}-\d{2}(?!\d)",
+        r"(?P<record>\d+(?:\.\d+)?)(?:\s*kg)?\s+"
+        r"(?P<holder>.+?)\s*"
+        r"(?P<date>\d{4}-\d{2}-\d{2}"
+        r"|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?"
+        r"|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{1,2},?\s+\d{4})"
+        r"(?!\d)",
         re.IGNORECASE,
     )
     RECORD_ROW_PREFIX = re.compile(
         r"^(?:U\d+|JR|Open|[WM]\d{2})\s+[FM]\s+", re.IGNORECASE
     )
-    MIN_RECORD_ROWS = 250
-    MIN_LIFT_VALUES = 750
+    # The October 2026 PDF has 256 classes (768 lifts), 128 a gender; the
+    # September one had 282. Low enough that Illinois can drop more youth
+    # groups; a partial parse is caught by the checks in _validate_records,
+    # not by this floor.
+    MIN_RECORD_ROWS = 150
+    MIN_LIFT_VALUES = 3 * MIN_RECORD_ROWS
+    ADULT_AGE_GROUPS = ("Junior", "Senior", *(f"Masters {age}" for age in range(35, 91, 5)))
+    # Each page's footer: "1 of 15 IL WSO Records 20261004.xlsx" since October
+    # 2026, "Page 1 of 27" before. The notes pages at the end have none.
+    PAGE_FOOTER = re.compile(r"^(?:Page\s+)?(\d{1,3})\s+of\s+\d{1,3}(?:\s|$)", re.IGNORECASE)
+    STANDARD_HOLDER = re.compile(
+        r"(?:(?:world|record|wso|state|american|national)\s+)?standard|", re.IGNORECASE
+    )
 
     def __init__(self, wso_name: str, pdf_url: str):
         self.wso_name = wso_name
@@ -39,6 +82,8 @@ class WSORecordsIllinoisScraper:
         self.slack_webhook_url: Optional[str] = None
         self.pdf_path = "temp_illinois_wso_records.pdf"
         self.parse_warnings: List[str] = []
+        # Who holds each kept lift value, by (class key, field), for the total check.
+        self._holders: Dict[Tuple[Tuple[str, str, str], str], str] = {}
 
     def setup_ingest_client(self):
         from common.postgres_ingest import IngestClient
@@ -112,10 +157,13 @@ class WSORecordsIllinoisScraper:
         record: Dict[str, Any],
         field: str,
         value: Any,
+        holder: str,
         source_line: str,
     ) -> None:
+        key = (record["age_category"], record["gender"], record["weight_class"])
         if field not in record:
             record[field] = value
+            self._holders[(key, field)] = holder
             return
 
         existing = record[field]
@@ -123,6 +171,7 @@ class WSORecordsIllinoisScraper:
             return
         if existing == 0 and value > 0:
             record[field] = value
+            self._holders[(key, field)] = holder
             self.parse_warnings.append(
                 f"Preferred non-zero duplicate ({value}) over zero: {source_line}"
             )
@@ -138,7 +187,16 @@ class WSORecordsIllinoisScraper:
             f"{source_line}"
         )
 
-    def _validate_records(self, records: List[Dict[str, Any]]) -> None:
+    def _validate_records(
+        self, records: List[Dict[str, Any]], pages: List[int]
+    ) -> None:
+        # A page the extraction lost leaves a gap in the footers' page numbers.
+        gaps = [page for page in range(1, max(pages, default=0) + 1) if page not in pages]
+        if gaps:
+            raise ValueError(
+                f"Illinois PDF is missing pages {', '.join(map(str, gaps))} "
+                "(by its page footers)"
+            )
         if len(records) < self.MIN_RECORD_ROWS:
             raise ValueError(
                 f"Illinois PDF yielded only {len(records)} record rows; "
@@ -155,25 +213,29 @@ class WSORecordsIllinoisScraper:
                 f"expected at least {self.MIN_LIFT_VALUES}"
             )
 
-        expected_age_categories = {
-            "U13",
-            "U15",
-            "U17",
-            "Junior",
-            "Senior",
-            *(f"Masters {age}" for age in range(35, 91, 5)),
-        }
         for gender in ("Men", "Women"):
             actual = {
                 record["age_category"]
                 for record in records
                 if record["gender"] == gender
             }
-            missing = expected_age_categories - actual
+            missing = [age for age in self.ADULT_AGE_GROUPS if age not in actual]
             if missing:
                 raise ValueError(
-                    f"Illinois PDF is missing {gender} age groups: "
-                    f"{', '.join(sorted(missing))}"
+                    f"Illinois PDF is missing {gender} age groups: {', '.join(missing)}"
+                )
+
+        # Illinois lists as many classes for women as for men in every age
+        # group (both PDFs so far), so a group short for one gender lost rows.
+        classes: Dict[str, Dict[str, int]] = {}
+        for record in records:
+            counts = classes.setdefault(record["age_category"], {"Women": 0, "Men": 0})
+            counts[record["gender"]] += 1
+        for age, counts in classes.items():
+            if counts["Women"] != counts["Men"]:
+                raise ValueError(
+                    f"Illinois PDF has {counts['Women']} Women and {counts['Men']} Men "
+                    f"{age} classes (part of the PDF not read?)"
                 )
 
         lift_labels = {
@@ -204,13 +266,49 @@ class WSORecordsIllinoisScraper:
                     f"Source total ({total}) is below an individual lift "
                     f"({max(positive_lifts)}): {identity}"
                 )
+            self._check_total(record, identity)
+
+    def _check_total(self, record: Dict[str, Any], identity: str) -> None:
+        """A total above snatch + clean & jerk can't be right, but the three
+        numbers don't say which one is wrong: William Lund's M50 >110 total of
+        147 (October 2026) is his meet total, and the 84 kg clean & jerk
+        beside it is the slip (he made 85). A rule that guessed would
+        overwrite a right total whenever a lift was the typo, so such a total
+        is kept as written and logged, and corrected only once checked
+        (TOTAL_CORRECTIONS). Standards over their lifts' sum are not logged:
+        the conversion rules set a standard total apart from its lifts (see
+        the PDF's last page). Same rule as meetcal-app's
+        convex/scrapers/parse/wso/illinois.ts.
+        """
+        key = (record["age_category"], record["gender"], record["weight_class"])
+        total = record.get("total_record")
+        for *correction_key, written, corrected in TOTAL_CORRECTIONS:
+            if tuple(correction_key) == key and total == written:
+                self.parse_warnings.append(
+                    f"Corrected source total {written} to {corrected} "
+                    f"(checked against results): {identity}"
+                )
+                record["total_record"] = corrected
+                return
+        snatch = record.get("snatch_record")
+        cj = record.get("cj_record")
+        if not snatch or not cj or not total or total <= snatch + cj:
+            return
+        holder = re.sub(r"\s+", " ", self._holders.get((key, "total_record"), "")).strip()
+        if not self.STANDARD_HOLDER.fullmatch(holder):
+            self.parse_warnings.append(
+                f"Source total ({total}) is above snatch + clean & jerk ({snatch + cj}); "
+                f"kept as written: {identity}"
+            )
 
     def parse_pdf_text(
         self, text: str, *, validate: bool = True
     ) -> List[Dict[str, Any]]:
         self.parse_warnings = []
+        self._holders = {}
         grouped: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
         unparsed_record_lines: List[str] = []
+        pages: List[int] = []
         lift_fields = {
             "snatch": "snatch_record",
             "clean&jerk": "cj_record",
@@ -219,6 +317,10 @@ class WSORecordsIllinoisScraper:
 
         for raw_line in text.splitlines():
             line = raw_line.strip()
+            footer = self.PAGE_FOOTER.match(line)
+            if footer:
+                pages.append(int(footer.group(1)))
+                continue
             match = self.ROW_PATTERN.match(line)
             if not match:
                 if self.RECORD_ROW_PREFIX.match(line):
@@ -242,7 +344,7 @@ class WSORecordsIllinoisScraper:
             normalized_lift = re.sub(r"\s+", "", match.group("lift").lower())
             field = lift_fields[normalized_lift]
             value = self._parse_record_value(match.group("record"))
-            self._set_lift_value(record, field, value, line)
+            self._set_lift_value(record, field, value, match.group("holder"), line)
 
         if unparsed_record_lines:
             examples = "\n".join(f"  {line}" for line in unparsed_record_lines[:5])
@@ -253,7 +355,7 @@ class WSORecordsIllinoisScraper:
 
         records = list(grouped.values())
         if validate:
-            self._validate_records(records)
+            self._validate_records(records, pages)
         return records
 
     def scrape_pdf(self) -> List[Dict[str, Any]]:
